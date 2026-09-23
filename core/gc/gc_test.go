@@ -486,6 +486,44 @@ func TestADeletedTagsHistoryIsCollected(t *testing.T) {
 	}
 }
 
+// Once a merge is abandoned, what only it held (here the object its
+// conflict was resolved with) is collected a grace window later (issue #5).
+func TestAnAbandonedMergeIsCollected(t *testing.T) {
+	w := newWorld(t)
+	main := vcs.MainBranch
+	w.put(main, "notes/base", w.note(7, "a note main keeps"))
+	w.commit(main, "base")
+	if err := w.r.CreateBranch(ctx, alice, "dev", w.commitOf(main)); err != nil {
+		t.Fatal(err)
+	}
+	w.put("dev", "notes/both", w.note(7, "added on dev"))
+	theirs := w.commit("dev", "dev work")
+	w.put(main, "notes/both", w.note(7, "added on main"))
+	w.commit(main, "main work")
+	if res, err := w.r.Merge(ctx, alice, main, theirs.Hash); err != nil || len(res.Conflicts) != 1 {
+		t.Fatalf("fixture: the merge found %d conflicts (%v), want 1", len(res.Conflicts), err)
+	}
+	resolution := w.note(7, "a resolution only the merge holds")
+	if err := w.r.ResolveConflict(ctx, alice, main, "notes/both", &resolution); err != nil {
+		t.Fatal(err)
+	}
+	if err := w.r.AbortMerge(ctx, alice, main); err != nil {
+		t.Fatalf("AbortMerge = %v", err)
+	}
+	for _, jump := range []time.Duration{0, grace + time.Minute} {
+		w.jump = jump
+		if _, err := w.gc(); err != nil {
+			t.Fatalf("GC: %v", err)
+		}
+	}
+	if _, err := w.store().Get(ctx, resolution.Root.Hash); !errors.Is(err, chunk.ErrNotFound) {
+		t.Fatalf("a grace window after the merge was abandoned, the object only it held reads as %v, want ErrNotFound", err)
+	}
+	if got := w.readable(); !got["a note main keeps"] || !got["added on main"] {
+		t.Fatal("collecting the abandoned merge lost what main keeps")
+	}
+}
+
 func (w *world) commitOf(branch string) hash.Hash {
 	w.t.Helper()
 	c, err := w.r.Head(ctx, alice, branch)

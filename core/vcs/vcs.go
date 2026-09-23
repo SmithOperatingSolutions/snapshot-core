@@ -49,6 +49,7 @@ var (
 	ErrInvalidLimit        = errors.New("vcs: log limit must be 1 to 10,000")
 	ErrUnresolvedConflicts = errors.New("vcs: unresolved merge conflicts")
 	ErrMergeState          = errors.New("vcs: only merging, resolving and committing change a merge in progress")
+	ErrNoMerge             = errors.New("vcs: no merge in progress")
 )
 
 // Options configures a repository.
@@ -85,6 +86,9 @@ type Tag struct {
 type MergeState struct {
 	Base, Theirs hash.Hash
 	Conflicts    hash.Hash
+	// PreWorking and PreStaged are the namespaces the merge started from,
+	// which AbortMerge puts back.
+	PreWorking, PreStaged hash.Hash
 }
 
 // WorkingSet is a branch's uncommitted state. Hash is its chunk's hash.
@@ -862,6 +866,9 @@ func (r *Repo) Merge(ctx context.Context, p auth.Principal, branch string, their
 	}
 	return res, nil
 }
+
+// AbortMerge abandons a branch's merge in progress.
+func (r *Repo) AbortMerge(ctx context.Context, p auth.Principal, branch string) error { return nil }
 
 // Conflicts lists a branch's unresolved merge conflicts.
 func (r *Repo) Conflicts(ctx context.Context, p auth.Principal, branch string) ([]merge.Conflict, error) {

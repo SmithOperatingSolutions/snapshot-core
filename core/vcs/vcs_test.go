@@ -537,6 +537,7 @@ func TestEveryCallIsAuthorized(t *testing.T) {
 		{"user:bob 2 branch:main", func(r *vcs.Repo) error { _, err := r.Merge(ctx, bob, "main", theirs); return err }},
 		{"user:bob 1 branch:main", func(r *vcs.Repo) error { _, err := r.Conflicts(ctx, bob, "main"); return err }},
 		{"user:bob 2 branch:main", func(r *vcs.Repo) error { return r.ResolveConflict(ctx, bob, "main", "doc", &resolved) }},
+		{"user:bob 2 branch:main", func(r *vcs.Repo) error { return r.AbortMerge(ctx, bob, "main") }},
 	}
 	for _, c := range calls {
 		rec.calls = nil
@@ -584,6 +585,32 @@ func TestTheAuthorIsThePrincipal(t *testing.T) {
 	}
 	if _, err := f.r.CommitWorkingSet(ctx, auth.Principal{ID: ""}, vcs.MainBranch, "anonymous"); !errors.Is(err, auth.ErrInvalidPrincipal) {
 		t.Fatalf("a commit by an invalid principal = %v, want ErrInvalidPrincipal", err)
+	}
+}
+
+// putWorking puts ref at path in branch's working namespace only, leaving
+// what is staged as it was.
+func (f *fixture) putWorking(branch, path string, ref object.Ref) {
+	f.t.Helper()
+	ws, err := f.r.WorkingSet(ctx, alice, branch)
+	if err != nil {
+		f.t.Fatal(err)
+	}
+	n, err := f.r.Namespace(ctx, ws.Working)
+	if err != nil {
+		f.t.Fatal(err)
+	}
+	e := n.Editor()
+	if err := e.Put(path, ref); err != nil {
+		f.t.Fatal(err)
+	}
+	if n, err = e.Flush(ctx); err != nil {
+		f.t.Fatal(err)
+	}
+	next := ws
+	next.Working = n.Root()
+	if _, err := f.r.UpdateWorkingSet(ctx, alice, branch, ws, next); err != nil {
+		f.t.Fatal(err)
 	}
 }
 
@@ -811,6 +838,85 @@ func TestTagsNameCommits(t *testing.T) {
 	}
 	if _, err := f.r.CreateTag(ctx, alice, "bad..name", head.Hash, "x"); !errors.Is(err, vcs.ErrInvalidName) {
 		t.Fatalf("an invalid tag name = %v, want ErrInvalidName", err)
+	}
+}
+
+// Abandoning a merge puts back what the branch had before it began: the
+// uncommitted edits made before the merge stay, staged or not, and what the
+// merge brought in, its resolution and an edit made during it are gone. The branch then
+// commits with one parent, and can merge again (issue #5).
+func TestAnAbandonedMergeLeavesTheBranchAsItWas(t *testing.T) {
+	f := newFixture(t)
+	main := vcs.MainBranch
+	f.put(main, "doc", f.obj(8, "base"))
+	f.commit(main, "base")
+	f.branchFrom("dev")
+	f.put("dev", "doc", f.obj(8, "dev"))
+	f.put("dev", "from-dev", f.obj(7, "brought in by the merge"))
+	theirs := f.commit("dev", "dev work")
+	f.put(main, "doc", f.obj(8, "main"))
+	head := f.commit(main, "main work")
+	f.put(main, "draft", f.obj(7, "an edit made before the merge"))
+	f.putWorking(main, "unstaged", f.obj(7, "an edit not staged before the merge"))
+	before, err := f.r.WorkingSet(ctx, alice, main)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res, err := f.r.Merge(ctx, alice, main, theirs.Hash); err != nil || len(res.Conflicts) != 1 {
+		t.Fatalf("fixture: the merge found %d conflicts (%v), want 1 at doc", len(res.Conflicts), err)
+	}
+	f.put(main, "during", f.obj(7, "an edit made during the merge"))
+	resolved := f.obj(8, "resolved")
+	if err := f.r.ResolveConflict(ctx, alice, main, "doc", &resolved); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := f.r.AbortMerge(ctx, alice, main); err != nil {
+		t.Fatalf("AbortMerge = %v", err)
+	}
+	ws, err := f.r.WorkingSet(ctx, alice, main)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ws.Merge != nil || ws.Working != before.Working || ws.Staged != before.Staged {
+		t.Fatalf("after the abort the working set holds working %s, staged %s, merge %+v; want working %s and staged %s from before the merge, and no merge",
+			ws.Working.Short(), ws.Staged.Short(), ws.Merge, before.Working.Short(), before.Staged.Short())
+	}
+	if cs, err := f.r.Conflicts(ctx, alice, main); err != nil || len(cs) != 0 {
+		t.Fatalf("after the abort the branch lists conflicts %v (%v)", cs, err)
+	}
+	c := f.commit(main, "after the abort")
+	if len(c.Parents) != 1 || c.Parents[0] != head.Hash || c.Namespace != before.Staged {
+		t.Fatalf("the commit after the abort has parents %v and namespace %s; want the head %s alone and what was staged before the merge",
+			c.Parents, c.Namespace.Short(), head.Hash.Short())
+	}
+	if res, err := f.r.Merge(ctx, alice, main, theirs.Hash); err != nil || len(res.Conflicts) != 1 {
+		t.Fatalf("merging again after the abort found %d conflicts (%v), want the same one", len(res.Conflicts), err)
+	}
+}
+
+// Only a merge in progress can be abandoned: on a branch with none it is
+// ErrNoMerge and changes nothing, on a branch that is not there
+// ErrBranchNotFound, and on an invalid name ErrInvalidName (issue #5).
+func TestOnlyAMergeInProgressCanBeAbandoned(t *testing.T) {
+	f := newFixture(t)
+	main := vcs.MainBranch
+	f.put(main, "draft", f.obj(7, "uncommitted"))
+	before, err := f.r.WorkingSet(ctx, alice, main)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := f.r.AbortMerge(ctx, alice, main); !errors.Is(err, vcs.ErrNoMerge) {
+		t.Fatalf("abandoning a merge on a branch with none = %v, want ErrNoMerge", err)
+	}
+	if now, _ := f.r.WorkingSet(ctx, alice, main); now.Hash != before.Hash {
+		t.Fatal("a refused abort changed the working set")
+	}
+	if err := f.r.AbortMerge(ctx, alice, "nope"); !errors.Is(err, vcs.ErrBranchNotFound) {
+		t.Fatalf("abandoning a merge on a missing branch = %v, want ErrBranchNotFound", err)
+	}
+	if err := f.r.AbortMerge(ctx, alice, "bad..name"); !errors.Is(err, vcs.ErrInvalidName) {
+		t.Fatalf("abandoning a merge on an invalid branch name = %v, want ErrInvalidName", err)
 	}
 }
 

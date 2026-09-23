@@ -122,6 +122,8 @@ func readEverything(t *testing.T, s chunk.Store, o vcs.Options, tags []vcs.Tag) 
 		}
 		history("branch "+b+" merge base", ws.Merge.Base)
 		history("branch "+b+" merging", ws.Merge.Theirs)
+		namespace("branch "+b+" working before the merge", ws.Merge.PreWorking)
+		namespace("branch "+b+" staged before the merge", ws.Merge.PreStaged)
 		cs, err := r.Conflicts(ctx, alice, b)
 		if err != nil {
 			t.Fatalf("branch %s's conflicts: %v", b, err)
@@ -161,8 +163,9 @@ func objectDiff(from, to *object.Namespace) ([]object.Change, error) {
 // all a repository holds: kept alone, those chunks read back as the whole
 // repository, every branch's history, working sets, a merge in progress
 // (whose theirs only the merge holds, its branch deleted, and whose ours
-// only the conflict holds, rewritten since) with an edit made during it,
-// and a tag of an old commit. And it must not name what nothing holds any
+// only the conflict holds, rewritten since) with an edit made during it
+// and the namespaces it started from (working and staged apart, which only
+// the merge holds once the edit replaces them), and a tag of an old commit. And it must not name what nothing holds any
 // longer: a working set replaced, a deleted branch's commit and object, an
 // old refs root.
 func TestAWalkNamesAllTheRepositoryHolds(t *testing.T) {
@@ -189,6 +192,7 @@ func TestAWalkNamesAllTheRepositoryHolds(t *testing.T) {
 	f.put(main, "doc", f.obj(8, "main"))
 	f.commit(main, "main work")
 	f.put(main, "doc", f.obj(8, "main, not committed")) // the merge's ours
+	f.putWorking(main, "unstaged", f.obj(7, "not staged when the merge began"))
 	if r, err := f.r.Merge(ctx, alice, main, theirs.Hash); err != nil || len(r.Conflicts) != 1 {
 		t.Fatalf("fixture: the merge found %d conflicts (%v), want 1", len(r.Conflicts), err)
 	}
