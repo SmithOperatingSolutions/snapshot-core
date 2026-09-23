@@ -1784,3 +1784,59 @@ find: if err := object.ValidPath(string(key)); err != nil {
 replace: if err := object.ValidPath(string(key)); err != nil && false {
 pkg: ./model/tree
 run: ^TestPathsAreCheckedOnReadAndMerge$
+
+id: merge-fast-forwards
+file: core/merge/merge.go
+find: case base.Root() == ours.Root():\n\t\treturn Result{Merged: theirs}, nil
+replace: case base.Root() == ours.Root() && false:\n\t\treturn Result{Merged: theirs}, nil
+pkg: ./core/merge
+run: ^TestFastForwardDoesNoWork$
+
+id: merge-takes-theirs
+file: core/merge/merge.go
+find: if err = z.take(ct); err == nil {
+replace: if err = error(nil); err == nil {
+pkg: ./core/merge
+run: ^TestEveryRuleOfTheTable$
+
+id: merge-delete-edit-conflicts
+file: core/merge/merge.go
+find: case oGone || tGone:\n\t\treturn z.conflict(DeleteEdit, ours, theirs, nil)
+replace: case oGone || tGone:\n\t\treturn nil
+pkg: ./core/merge
+run: ^TestEveryRuleOfTheTable$
+
+id: merge-add-add-conflicts
+file: core/merge/merge.go
+find: case ours.Kind == prolly.Added:\n\t\treturn z.conflict(AddAdd, ours, theirs, nil)
+replace: case ours.Kind == prolly.Added:\n\t\treturn nil
+pkg: ./core/merge
+run: ^TestEveryRuleOfTheTable$
+
+id: merge-model-change-conflicts
+file: core/merge/merge.go
+find: case ours.From.Model != ours.To.Model || theirs.To.Model != ours.To.Model:
+replace: case (ours.From.Model != ours.To.Model || theirs.To.Model != ours.To.Model) && false:
+pkg: ./core/merge
+run: ^TestEveryRuleOfTheTable$
+
+id: merge-model-conflicts-recorded
+file: core/merge/merge.go
+find: if len(r.Conflicts) > 0 {\n\t\treturn z.conflict(BothChanged, ours, theirs, r.Conflicts)
+replace: if len(r.Conflicts) > 0 && false {\n\t\treturn z.conflict(BothChanged, ours, theirs, r.Conflicts)
+pkg: ./core/merge
+run: ^TestEveryRuleOfTheTable$
+
+id: merge-model-error-aborts
+file: core/merge/merge.go
+find: return fmt.Errorf("merge %s: model %d: %w", ours.Path, m.ID(), err)
+replace: return nil
+pkg: ./core/merge
+run: ^TestAModelErrorAbortsTheMerge$
+
+id: merge-conflict-limit
+file: core/merge/merge.go
+find: err = z.both(co, ct); err == nil && len(z.res.Conflicts) > o.MaxConflicts {
+replace: err = z.both(co, ct); err == nil && len(z.res.Conflicts) > o.MaxConflicts && false {
+pkg: ./core/merge
+run: ^TestTooManyConflictsAbort$
