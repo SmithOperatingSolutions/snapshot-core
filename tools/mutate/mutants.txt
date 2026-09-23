@@ -1041,3 +1041,10 @@ find: if err := s.reload(); err != nil {
 replace: if err := error(nil); err != nil {
 pkg: ./core/blob/cache
 run: ^TestDeleteEvictsAndRestartsReuseTheCache$
+
+id: cache-evicts-least-recent
+file: core/blob/cache/cache.go
+find: s.lru.MoveToFront(el)
+replace: _ = el
+pkg: ./core/blob/cache
+run: ^TestHitsRefreshRecency$

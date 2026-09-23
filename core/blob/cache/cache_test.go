@@ -150,6 +150,33 @@ func TestSizeCapEvictsLeastRecentlyUsed(t *testing.T) {
 }
 
 // A damaged cache file is refetched, never served.
+// A hit makes an entry recent: with room for two, caching A and B, reading
+// A, then caching C must evict B, not A. (Nothing here re-reads a victim, so
+// a refetch cannot mask a wrong eviction.)
+func TestHitsRefreshRecency(t *testing.T) {
+	inner := &counting{BlobStore: mem.New()}
+	c, _ := newCache(t, inner, 45000) // room for two 20 KB entries
+	for _, n := range []string{"packs/ee/a", "packs/ee/b", "packs/ee/c"} {
+		d := payload(n, 20000)
+		if err := c.Put(ctx, n, bytes.NewReader(d), int64(len(d))); err != nil {
+			t.Fatal(err)
+		}
+	}
+	read(t, c, "packs/ee/a", 0, -1)
+	read(t, c, "packs/ee/b", 0, -1)
+	read(t, c, "packs/ee/a", 0, -1) // a hit: a is now the most recent
+	read(t, c, "packs/ee/c", 0, -1) // over the cap: the least recent (b) goes
+	before := inner.gets.Load()
+	read(t, c, "packs/ee/a", 0, -1)
+	if inner.gets.Load() != before {
+		t.Fatal("the entry read most recently was evicted: hits do not refresh recency")
+	}
+	read(t, c, "packs/ee/b", 0, -1)
+	if inner.gets.Load() != before+1 {
+		t.Fatal("the least recently used entry survived the eviction")
+	}
+}
+
 func TestDamagedEntryIsRefetched(t *testing.T) {
 	inner := &counting{BlobStore: mem.New()}
 	c, dir := newCache(t, inner, 64<<20)
