@@ -2960,3 +2960,10 @@ find: for _, name := range append(out.Expired, stale...) {
 replace: for _, name := range stale {
 pkg: ./core/gc
 run: ^TestOrphanAgesAreTheBackendsClock$
+
+id: gc-orphan-ages-by-the-backend
+file: core/gc/gc.go
+find: now, err := backendNow(ctx, o.Blobs)
+replace: now, err := clock(), error(nil)
+pkg: ./core/gc
+run: ^TestOrphanAgesAreTheBackendsClock$

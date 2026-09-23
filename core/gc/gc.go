@@ -8,7 +8,10 @@
 package gc
 
 import (
+	"bytes"
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"time"
@@ -93,7 +96,11 @@ func Run(ctx context.Context, o Options) (Report, error) {
 			return rep, err
 		}
 		rep.Live, rep.Condemned, rep.Reprieved = len(live), out.Condemned, out.Reprieved
-		stale, err := orphans(ctx, o.Blobs, out.Named, clock(), grace)
+		now, err := backendNow(ctx, o.Blobs)
+		if err != nil {
+			return rep, err
+		}
+		stale, err := orphans(ctx, o.Blobs, out.Named, now, grace)
 		if err != nil {
 			return rep, err
 		}
@@ -127,12 +134,33 @@ func mark(ctx context.Context, rd chunk.Reader, o Options, root hash.Hash) (map[
 	return live, err
 }
 
+// backendNow reads the backend's clock, the one its objects are stamped by:
+// the stamp a probe put now gets. An object's age is only read against it.
+func backendNow(ctx context.Context, bs blob.BlobStore) (time.Time, error) {
+	var b [8]byte
+	if _, err := rand.Read(b[:]); err != nil {
+		return time.Time{}, err
+	}
+	name := probePrefix + hex.EncodeToString(b[:])
+	if err := bs.Put(ctx, name, bytes.NewReader(nil), 0); err != nil {
+		return time.Time{}, err
+	}
+	info, err := bs.Stat(ctx, name)
+	if derr := bs.Delete(ctx, name); err == nil {
+		err = derr
+	}
+	return info.ModTime, err
+}
+
+const probePrefix = "gc/clock-"
+
 // orphans lists the packs and index objects the manifest does not name that
-// are older than the grace window: left by writers that never published, or
-// by a run that stopped between its swap and its deletions.
+// are older than the grace window by the backend's clock: left by writers
+// that never published, or by a run that stopped between its swap and its
+// deletions; and probes a stopped run left behind.
 func orphans(ctx context.Context, bs blob.BlobStore, named map[string]bool, now time.Time, grace time.Duration) ([]string, error) {
 	var out []string
-	for _, prefix := range []string{"packs/", "index/"} {
+	for _, prefix := range []string{"packs/", "index/", probePrefix} {
 		after := ""
 		for {
 			page, err := bs.List(ctx, prefix, after, blob.MaxListPage)
