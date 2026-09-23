@@ -52,7 +52,9 @@ branch and `main`: it checks the commit out in a scratch worktree, runs only
 the tests that commit added or changed, and requires each of them to FAIL on
 an assertion. A build failure, a panic, a skip, or a pass blocks the PR. Every
 `feat:`/`fix:` needs a `test:` commit since the previous one. CI runs the same
-tool on every pull request.
+tool on every pull request. A change to a port's contract suite
+(`<pkg>/contract`) counts as a change to every Test function that calls it,
+so a contract that grows is red on each implementation it catches out.
 
 **Backfills.** A test for behavior that already exists (a guard someone argued
 for but never tested, `docs/TESTING.md` §11) cannot fail against its parent.

@@ -470,8 +470,8 @@ run: ^TestInterleavedPairsAreMatchedByScope$
 
 id: redcheck-skips-testmain
 file: tools/redcheck/redcheck.go
-find:  || fd.Name.Name == "TestMain" {
-replace:  {
+find: return fd.Recv == nil && testFunc.MatchString(fd.Name.Name) && fd.Name.Name != "TestMain"
+replace: return fd.Recv == nil && testFunc.MatchString(fd.Name.Name)
 pkg: ./tools/redcheck
 run: ^TestTestMainIsNotJudged$
 
@@ -1048,3 +1048,24 @@ find: s.lru.MoveToFront(el)
 replace: _ = el
 pkg: ./core/blob/cache
 run: ^TestHitsRefreshRecency$
+
+id: redcheck-judges-contract-callers
+file: tools/redcheck/redcheck.go
+find: if len(contracts) > 0 {
+replace: if len(contracts) > 0 && false {
+pkg: ./tools/redcheck
+run: ^TestContractChangeIsJudgedOnTheTestsThatRunIt$
+
+id: redcheck-contract-alias
+file: tools/redcheck/redcheck.go
+find: locals[imp.Name.Name] = true
+replace: locals[path.Base(p)] = true
+pkg: ./tools/redcheck
+run: ^TestPassingContractChangeIsBlocked$
+
+id: redcheck-contract-callers-only
+file: tools/redcheck/redcheck.go
+find: if uses {
+replace: if uses || true {
+pkg: ./tools/redcheck
+run: ^TestContractChangeIsJudgedOnTheTestsThatRunIt$

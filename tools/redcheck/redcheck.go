@@ -3,7 +3,9 @@
 // commit added or changed, and requires every one of them to FAIL on an
 // assertion. A test that passes against the old code is not testing the
 // change; a build failure, a panic or a skip is the wrong red
-// (CONTRIBUTING.md, Engine Spec "fail-first TDD").
+// (CONTRIBUTING.md, Engine Spec "fail-first TDD"). A port's contract suite
+// (a package named contract, Engine Spec boundary rule 4) is test code in a
+// non-test file: changing it changes every Test function that calls it.
 //
 // It also requires every `feat:`/`fix:` commit to be preceded by at least one
 // `test:` commit since the previous `feat:`/`fix:` — behavior arrives behind a
@@ -28,6 +30,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 
 	"github.com/SmithOperatingSolutions/snapshot-core/tools/internal/mutation"
@@ -68,6 +71,7 @@ var (
 	featSubject = regexp.MustCompile(`^(?:feat|fix)(?:\(([^)]*)\))?!?:`)
 	testFunc    = regexp.MustCompile(`^Test([^a-z].*)?$`)
 	redTrailer  = regexp.MustCompile(`(?m)^Red-Check:\s*mutants\s+(.+)$`)
+	modulePath  = regexp.MustCompile(`(?m)^module\s+"?([^"\s]+)"?`)
 )
 
 // Check runs the red-check over base..head.
@@ -148,8 +152,9 @@ func (c checker) git(args ...string) (string, error) {
 }
 
 // changedTests returns, per package directory, the Test functions that exist
-// at commit and either did not exist at its parent or have a different body,
-// and the build tags those tests' files require.
+// at commit and either did not exist at its parent, have a different body, or
+// call a contract package the commit changed, and the build tags those tests'
+// files require.
 func (c checker) changedTests(commit string) (map[string][]string, map[string][]string, error) {
 	parent := commit + "^"
 	if _, err := c.git("rev-parse", "--verify", "--quiet", parent); err != nil {
@@ -167,6 +172,21 @@ func (c checker) changedTests(commit string) (map[string][]string, map[string][]
 	}
 	changed := map[string][]string{}
 	tagSets := map[string]map[string]bool{}
+	seen := map[string]bool{}
+	add := func(file, name, src string) {
+		dir := path.Dir(file)
+		if seen[dir+"\x00"+name] {
+			return
+		}
+		seen[dir+"\x00"+name] = true
+		changed[dir] = append(changed[dir], name)
+		if tagSets[dir] == nil {
+			tagSets[dir] = map[string]bool{}
+		}
+		for _, tag := range buildTags(src) {
+			tagSets[dir][tag] = true
+		}
+	}
 	for _, f := range strings.Fields(files) {
 		if !strings.HasSuffix(f, "_test.go") {
 			continue
@@ -186,14 +206,30 @@ func (c checker) changedTests(commit string) (map[string][]string, map[string][]
 		beforeFns, _ := testBodies(f, before) // an unparsable parent just means "all new"
 		for name, body := range nowFns {
 			if prev, ok := beforeFns[name]; !ok || prev != body {
-				dir := path.Dir(f)
-				changed[dir] = append(changed[dir], name)
-				if tagSets[dir] == nil {
-					tagSets[dir] = map[string]bool{}
-				}
-				for _, tag := range buildTags(now) {
-					tagSets[dir][tag] = true
-				}
+				add(f, name, now)
+			}
+		}
+	}
+	contracts, err := c.changedContracts(commit, strings.Fields(files))
+	if err != nil {
+		return nil, nil, err
+	}
+	if len(contracts) > 0 {
+		users, err := c.filesImporting(commit, contracts)
+		if err != nil {
+			return nil, nil, err
+		}
+		for _, f := range users {
+			src, err := c.git("show", commit+":"+f)
+			if err != nil {
+				return nil, nil, err
+			}
+			names, err := contractCallers(f, src, contracts)
+			if err != nil {
+				return nil, nil, err
+			}
+			for _, name := range names {
+				add(f, name, src)
 			}
 		}
 	}
@@ -266,13 +302,110 @@ func testBodies(name, src string) (map[string]string, error) {
 		return nil, fmt.Errorf("parsing %s: %w", name, err)
 	}
 	for _, d := range f.Decls {
-		fd, ok := d.(*ast.FuncDecl)
-		if !ok || fd.Recv != nil || !testFunc.MatchString(fd.Name.Name) || fd.Name.Name == "TestMain" {
-			continue
+		if fd, ok := d.(*ast.FuncDecl); ok && isTest(fd) {
+			fns[fd.Name.Name] = src[fset.Position(fd.Pos()).Offset:fset.Position(fd.End()).Offset]
 		}
-		fns[fd.Name.Name] = src[fset.Position(fd.Pos()).Offset:fset.Position(fd.End()).Offset]
 	}
 	return fns, nil
+}
+
+// isTest reports whether fd is a top-level Test function; TestMain is the
+// test binary's entry point, not a test.
+func isTest(fd *ast.FuncDecl) bool {
+	return fd.Recv == nil && testFunc.MatchString(fd.Name.Name) && fd.Name.Name != "TestMain"
+}
+
+// changedContracts returns the import paths of the contract packages whose
+// non-test files are among the commit's changed files.
+func (c checker) changedContracts(commit string, files []string) (map[string]bool, error) {
+	dirs := map[string]bool{}
+	for _, f := range files {
+		if strings.HasSuffix(f, ".go") && !strings.HasSuffix(f, "_test.go") && path.Base(path.Dir(f)) == "contract" {
+			dirs[path.Dir(f)] = true
+		}
+	}
+	if len(dirs) == 0 {
+		return nil, nil
+	}
+	gomod, err := c.git("show", commit+":go.mod")
+	if err != nil {
+		return nil, err
+	}
+	m := modulePath.FindStringSubmatch(gomod)
+	if m == nil {
+		return nil, fmt.Errorf("go.mod at %.9s names no module", commit)
+	}
+	paths := make(map[string]bool, len(dirs))
+	for d := range dirs {
+		paths[m[1]+"/"+d] = true
+	}
+	return paths, nil
+}
+
+// filesImporting returns the test files at commit that mention any of the
+// import paths; contractCallers then decides from the parsed imports.
+func (c checker) filesImporting(commit string, paths map[string]bool) ([]string, error) {
+	args := []string{"grep", "-l", "-F"}
+	for p := range paths {
+		args = append(args, "-e", p)
+	}
+	out, err := c.git(append(args, commit, "--", "*_test.go")...)
+	var exitErr *exec.ExitError
+	if errors.As(err, &exitErr) && exitErr.ExitCode() == 1 {
+		return nil, nil // no file mentions them
+	}
+	if err != nil {
+		return nil, err
+	}
+	var files []string
+	for _, line := range strings.Split(strings.TrimSpace(out), "\n") {
+		if f := strings.TrimPrefix(line, commit+":"); f != "" {
+			files = append(files, f)
+		}
+	}
+	sort.Strings(files)
+	return files, nil
+}
+
+// contractCallers returns the Test functions in src that use one of the
+// contract packages at paths, by the name the file imports it under.
+func contractCallers(name, src string, paths map[string]bool) ([]string, error) {
+	fset := token.NewFileSet()
+	f, err := parser.ParseFile(fset, name, src, parser.SkipObjectResolution)
+	if err != nil {
+		return nil, fmt.Errorf("parsing %s: %w", name, err)
+	}
+	locals := map[string]bool{}
+	for _, imp := range f.Imports {
+		p, err := strconv.Unquote(imp.Path.Value)
+		switch {
+		case err != nil || !paths[p]:
+		case imp.Name == nil:
+			locals[path.Base(p)] = true
+		case imp.Name.Name != "_" && imp.Name.Name != ".":
+			locals[imp.Name.Name] = true
+		}
+	}
+	var names []string
+	for _, d := range f.Decls {
+		fd, ok := d.(*ast.FuncDecl)
+		if !ok || !isTest(fd) || fd.Body == nil || len(locals) == 0 {
+			continue
+		}
+		uses := false
+		ast.Inspect(fd.Body, func(n ast.Node) bool {
+			if sel, ok := n.(*ast.SelectorExpr); ok {
+				if id, ok := sel.X.(*ast.Ident); ok && locals[id.Name] {
+					uses = true
+				}
+			}
+			return !uses
+		})
+		if uses {
+			names = append(names, fd.Name.Name)
+		}
+	}
+	return names, nil
 }
 
 // backfillMutants returns the mutant IDs a "Red-Check: mutants a, b" trailer
