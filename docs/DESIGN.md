@@ -467,7 +467,10 @@ unreachable. One run:
    that never published) that are older than the grace window. GC lists
    them before its swap and records each in it as deleted, at its own
    clock, and deletes only once the swap has landed; the record stays for a
-   grace window and an hour.
+   grace window and an hour. An object under `packs/` or `index/` whose
+   name no pack or index object could have is deleted unrecorded, since no
+   writer uploaded it; so is every orphan of a store with no manifest yet,
+   where there is nothing to record in and no manifest to publish against.
 
 **Writers.** Put never deduplicates against a chunk whose only copy is in a
 condemned pack; it stores it again. A writer remembers the chunks it did
@@ -491,7 +494,11 @@ is partly gone, and it cannot know which roots in flight reach it: a chunk
 written into a deleted pack was promised to a put as surely as one found
 stored. So the publish fails with `chunk.ErrSessionLost` (the version
 graph's `ErrSessionLost`), and from then on the store refuses every write;
-reads go on. The host reopens the repository, which starts a fresh
+reads go on. A read that finds such a chunk gone ends the session the same
+way, since a host reads what it has just written before it publishes: a
+chunk a put counted on, or one in a pack of the store's own it has not
+published, is `ErrSessionLost` when it cannot be read, never a plain miss
+or corruption. The host reopens the repository, which starts a fresh
 session, and writes again. Only a host that broke the grace window gets
 here.
 
