@@ -39,7 +39,7 @@ import (
 // Options configures a check.
 type Options struct {
 	Dir   string    // repository root
-	Base  string    // the branch point, e.g. "main" or "origin/main"
+	Base  string    // the branch point, e.g. "origin/main"; "": main, else the root commit
 	Head  string    // defaults to HEAD
 	GoCmd string    // defaults to "go"
 	Log   io.Writer // progress; nil discards
@@ -90,12 +90,19 @@ func Check(ctx context.Context, o Options) (Report, error) {
 		o.MutantsFile = "tools/mutate/mutants.txt"
 	}
 	c := checker{ctx: ctx, o: o}
+	if o.Base == "" {
+		base, err := c.defaultBase()
+		if err != nil {
+			return Report{}, err
+		}
+		o.Base, c.o.Base = base, base
+	}
 
 	out, err := c.git("rev-list", "--reverse", o.Base+".."+o.Head)
 	if err != nil {
 		return Report{}, err
 	}
-	var rep Report
+	rep := Report{Base: o.Base}
 	// pending[scope] is true once a test(scope) commit has been seen since
 	// the last feat(scope)/fix(scope); "" is the unscoped pool.
 	pending := map[string]bool{}
@@ -138,6 +145,23 @@ func Check(ctx context.Context, o Options) (Report, error) {
 type checker struct {
 	ctx context.Context
 	o   Options
+}
+
+// defaultBase is main, or else the root commit of head: a new repository
+// whose first branch is the work branch has no main to start from.
+func (c checker) defaultBase() (string, error) {
+	if _, err := c.git("rev-parse", "--verify", "--quiet", "main^{commit}"); err == nil {
+		return "main", nil
+	}
+	out, err := c.git("rev-list", "--max-parents=0", c.o.Head)
+	if err != nil {
+		return "", err
+	}
+	roots := strings.Fields(out)
+	if len(roots) != 1 {
+		return "", fmt.Errorf("there is no main and %s has %d root commits: name a base", c.o.Head, len(roots))
+	}
+	return roots[0], nil
 }
 
 func (c checker) git(args ...string) (string, error) {

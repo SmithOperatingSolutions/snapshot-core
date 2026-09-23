@@ -12,7 +12,7 @@ func main() { os.Exit(run()) }
 
 func run() int {
 	var o Options
-	flag.StringVar(&o.Base, "base", "main", "branch point: commits in base..head are checked")
+	flag.StringVar(&o.Base, "base", "", "branch point: commits in base..head are checked (default: main, else the root commit)")
 	flag.StringVar(&o.Head, "head", "HEAD", "last commit to check")
 	flag.StringVar(&o.Dir, "C", ".", "repository root")
 	flag.Parse()
@@ -25,8 +25,8 @@ func run() int {
 		fmt.Fprintln(os.Stderr, "redcheck:", err)
 		return 2
 	}
-	fmt.Printf("redcheck: %d commits, %d test: commits checked, %d added tests run\n",
-		rep.Commits, rep.Checked, rep.TestsRun)
+	fmt.Printf("redcheck: %s..%s: %d commits, %d test: commits checked, %d added tests run\n",
+		rep.Base, o.Head, rep.Commits, rep.Checked, rep.TestsRun)
 	for _, v := range rep.Violations {
 		if v.Test != "" {
 			fmt.Printf("  BLOCKED %s %q: %s: %s\n", v.Commit, v.Subject, v.Test, v.Reason)

@@ -1237,3 +1237,17 @@ find: if c == nil || len(data) > c.max {
 replace: if c == nil {
 pkg: ./core/chunk/packstore
 run: ^TestTheChunkCacheIsByteBounded$
+
+id: redcheck-default-base-prefers-main
+file: tools/redcheck/redcheck.go
+find: if _, err := c.git("rev-parse", "--verify", "--quiet", "main^{commit}"); err == nil {
+replace: if _, err := c.git("rev-parse", "--verify", "--quiet", "main^{commit}"); err == nil && false {
+pkg: ./tools/redcheck
+run: ^TestBaseDefaultsToMainThenTheRootCommit$
+
+id: redcheck-default-base-falls-back
+file: tools/redcheck/redcheck.go
+find: if _, err := c.git("rev-parse", "--verify", "--quiet", "main^{commit}"); err == nil {
+replace: if _, err := c.git("rev-parse", "--verify", "--quiet", "main^{commit}"); err == nil || true {
+pkg: ./tools/redcheck
+run: ^TestBaseDefaultsToMainThenTheRootCommit$
