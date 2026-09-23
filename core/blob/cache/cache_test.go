@@ -14,6 +14,7 @@ import (
 
 	"github.com/SmithOperatingSolutions/snapshot-core/core/blob"
 	"github.com/SmithOperatingSolutions/snapshot-core/core/blob/cache"
+	"github.com/SmithOperatingSolutions/snapshot-core/core/blob/contract"
 	"github.com/SmithOperatingSolutions/snapshot-core/core/blob/mem"
 )
 
@@ -61,6 +62,14 @@ func read(t *testing.T, s blob.BlobStore, name string, off, n int64) []byte {
 		t.Fatal(err)
 	}
 	return b
+}
+
+// The cache is transparent: it passes the whole blob contract.
+func TestContractThroughTheCache(t *testing.T) {
+	contract.Run(t, func(t *testing.T) blob.BlobStore {
+		c, _ := newCache(t, mem.New(), 64<<20)
+		return c
+	}, contract.Options{})
 }
 
 func TestRepeatedRangeReadsHitTheCache(t *testing.T) {

@@ -999,3 +999,45 @@ find: if err != nil && first == nil {\n\t\t\tfirst = fmt.Errorf("packstore: uplo
 replace: if err != nil {\n\t\t\treturn fmt.Errorf("packstore: uploading %s: %w", b.Name, err)\n\t\t}
 pkg: ./core/chunk/packstore
 run: ^TestFailedUploadStaysReadableAndIsRetried$
+
+id: cache-serves-hits
+file: core/blob/cache/cache.go
+find: el, hit := s.items[key]
+replace: el, hit := s.items[key+"-never"]
+pkg: ./core/blob/cache
+run: ^TestRepeatedRangeReadsHitTheCache$
+
+id: cache-only-immutable
+file: core/blob/cache/cache.go
+find: return strings.HasPrefix(name, "packs/") || strings.HasPrefix(name, "index/")
+replace: return true
+pkg: ./core/blob/cache
+run: ^TestOnlyImmutableObjectsAreCached$
+
+id: cache-respects-its-cap
+file: core/blob/cache/cache.go
+find: for s.used > s.max && s.lru.Len() > 0 {
+replace: for false && s.used > s.max && s.lru.Len() > 0 {
+pkg: ./core/blob/cache
+run: ^TestSizeCapEvictsLeastRecentlyUsed$
+
+id: cache-verifies-entries
+file: core/blob/cache/cache.go
+find: if got := sha256.Sum256(content); !bytes.Equal(got[:], sum) {
+replace: if got := sha256.Sum256(content); !bytes.Equal(got[:], sum) && false {
+pkg: ./core/blob/cache
+run: ^TestDamagedEntryIsRefetched$
+
+id: cache-delete-evicts
+file: core/blob/cache/cache.go
+find: for key := range s.byName[name] {
+replace: for key := range s.byName[name+"-never"] {
+pkg: ./core/blob/cache
+run: ^TestDeleteEvictsAndRestartsReuseTheCache$
+
+id: cache-reloads-after-restart
+file: core/blob/cache/cache.go
+find: if err := s.reload(); err != nil {
+replace: if err := error(nil); err != nil {
+pkg: ./core/blob/cache
+run: ^TestDeleteEvictsAndRestartsReuseTheCache$
