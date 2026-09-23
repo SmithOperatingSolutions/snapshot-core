@@ -36,6 +36,10 @@ type Options struct {
 	Head  string    // defaults to HEAD
 	GoCmd string    // defaults to "go"
 	Log   io.Writer // progress; nil discards
+
+	// MutantsFile is where a backfill commit's mutants are defined, relative
+	// to the repository root at that commit. Defaults to tools/mutate/mutants.txt.
+	MutantsFile string
 }
 
 // Violation is one broken rule.

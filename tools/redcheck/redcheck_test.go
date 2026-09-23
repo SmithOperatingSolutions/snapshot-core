@@ -211,6 +211,90 @@ func TestDocsAndChoresNeedNoRed(t *testing.T) {
 	}
 }
 
+func (f *fixture) commitBody(subject, body string) {
+	f.t.Helper()
+	f.git("add", "-A")
+	f.git("commit", "-q", "-m", subject, "-m", body)
+}
+
+const addMutants = `id: add-sign
+file: calc/calc.go
+find: return a + b
+replace: return a - b
+pkg: ./calc
+run: ^TestAdd$
+
+id: add-commutes
+file: calc/calc.go
+find: return a + b
+replace: return b + a
+pkg: ./calc
+run: ^TestAdd$
+`
+
+// A test for behavior that already exists cannot be red against its parent;
+// its red is a mutant the test kills (docs/TESTING.md §5, §11).
+func TestBackfillProvenByMutantPasses(t *testing.T) {
+	f := newFixture(t)
+	f.write("calc/calc.go", addImpl)
+	f.commit("feat(calc): Add adds") // blocked on its own (no red), which is not what this test judges
+	f.write("calc/calc_test.go", addTest)
+	f.write("tools/mutate/mutants.txt", addMutants)
+	f.commitBody("test(calc): pin Add's sign", "Red-Check: mutants add-sign")
+
+	rep := f.check()
+	var others []Violation
+	for _, v := range rep.Violations {
+		if !strings.HasPrefix(v.Subject, "feat(calc)") {
+			others = append(others, v)
+		}
+	}
+	if len(others) != 0 {
+		t.Fatalf("a backfill whose mutant is killed was blocked:\n%s", reasons(Report{Violations: others}))
+	}
+	if rep.TestsRun != 1 {
+		t.Fatalf("ran %d tests for the backfill commit, want 1", rep.TestsRun)
+	}
+}
+
+func backfillViolations(t *testing.T, trailer string) []Violation {
+	t.Helper()
+	f := newFixture(t)
+	f.write("calc/calc.go", addImpl)
+	f.commit("chore: implementation predates its test")
+	f.write("calc/calc_test.go", addTest)
+	f.write("tools/mutate/mutants.txt", addMutants)
+	f.commitBody("test(calc): pin Add", trailer)
+	return f.check().Violations
+}
+
+func TestBackfillWhoseMutantSurvivesIsBlocked(t *testing.T) {
+	vs := backfillViolations(t, "Red-Check: mutants add-sign, add-commutes")
+	if len(vs) != 1 || !strings.Contains(vs[0].Reason, "add-commutes") || !strings.Contains(vs[0].Reason, "survived") {
+		t.Fatalf("a backfill naming a mutant its test cannot kill was accepted:\n%s", reasons(Report{Violations: vs}))
+	}
+}
+
+func TestBackfillNamingAnUnknownMutantIsBlocked(t *testing.T) {
+	vs := backfillViolations(t, "Red-Check: mutants add-sing")
+	if len(vs) != 1 || !strings.Contains(vs[0].Reason, "add-sing") {
+		t.Fatalf("a backfill naming a mutant that does not exist was accepted:\n%s", reasons(Report{Violations: vs}))
+	}
+}
+
+// A backfill guards behavior that exists, so its test must pass at its own commit.
+func TestBackfillThatFailsIsBlocked(t *testing.T) {
+	f := newFixture(t) // Add is still the stub
+	f.write("calc/calc_test.go", addTest)
+	f.write("tools/mutate/mutants.txt", "id: add-sign\nfile: calc/calc.go\nfind: return 0\nreplace: return 1\npkg: ./calc\nrun: ^TestAdd$\n")
+	f.commitBody("test(calc): pin Add", "Red-Check: mutants add-sign")
+
+	vs := f.check().Violations
+	if len(vs) == 0 || !strings.Contains(vs[0].Reason, "fails at its own commit") {
+		t.Fatalf("a backfill test that fails at its own commit was accepted:\n%s", reasons(Report{Violations: vs}))
+	}
+}
+
 // A test: commit that strengthens an EXISTING test is judged on that test.
 func TestChangedTestIsJudged(t *testing.T) {
 	f := newFixture(t)
