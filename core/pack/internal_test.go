@@ -93,13 +93,19 @@ func FuzzDecodeIndex(f *testing.F) {
 // validation can refuse it.
 func reseal(t *testing.T, kr *seal.Keyring, repo seal.RepoID, b Built, entries []Entry) []byte {
 	t.Helper()
+	return resealPlain(t, kr, repo, b, encodeIndex(entries))
+}
+
+// resealPlain is reseal with any index plaintext, well-formed or not.
+func resealPlain(t *testing.T, kr *seal.Keyring, repo seal.RepoID, b Built, plain []byte) []byte {
+	t.Helper()
 	keys, err := DeriveKeys(kr, repo, b.Info.Salt)
 	if err != nil {
 		t.Fatal(err)
 	}
 	indexOffset := binary.LittleEndian.Uint64(b.Bytes[len(b.Bytes)-TrailerSize:])
 	out := bytes.Clone(b.Bytes[:indexOffset])
-	sealed, err := keys.index.Seal(out[:HeaderSize], encodeIndex(entries))
+	sealed, err := keys.index.Seal(out[:HeaderSize], plain)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -175,6 +181,44 @@ func TestForgedIndexesAreRefused(t *testing.T) {
 	} {
 		if _, err := ReadInfo(Name(bad), bad, kr, repo); !errors.Is(err, ErrCorrupt) {
 			t.Errorf("%s: ReadInfo accepted a forged index (err=%v)", name, err)
+		}
+	}
+}
+
+// The index plaintext is exactly its entries: a truncated last entry or a
+// byte past it is corruption, not something to read around. (Sealed under
+// the pack's own key, so only the decoder can refuse them.)
+func TestIndexPlaintextMustBeWhole(t *testing.T) {
+	kr, _ := seal.NewKeyring()
+	c, _ := NewCodec()
+	defer c.Close()
+	repo := seal.RepoID{4}
+	w, err := NewWriter(kr, repo, c, 1<<20)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, d := range [][]byte{[]byte("first"), []byte("second")} {
+		if err := w.Add(hash.Sum(d), d); err != nil {
+			t.Fatal(err)
+		}
+	}
+	b, err := w.Finish()
+	if err != nil {
+		t.Fatal(err)
+	}
+	plain := encodeIndex(b.Info.Entries)
+	if again := resealPlain(t, kr, repo, b, plain); true {
+		if _, err := ReadInfo(Name(again), again, kr, repo); err != nil {
+			t.Fatalf("positive control: the honest plaintext resealed is refused: %v", err)
+		}
+	}
+	for name, p := range map[string][]byte{
+		"truncated last entry": plain[:len(plain)-1],
+		"a byte past the end":  append(bytes.Clone(plain), 0),
+	} {
+		bad := resealPlain(t, kr, repo, b, p)
+		if _, err := ReadInfo(Name(bad), bad, kr, repo); !errors.Is(err, ErrCorrupt) {
+			t.Errorf("%s: ReadInfo = %v, want ErrCorrupt", name, err)
 		}
 	}
 }

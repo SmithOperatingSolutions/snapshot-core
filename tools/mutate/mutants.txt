@@ -1083,3 +1083,10 @@ find: if w.finished {\n\t\treturn Built{}, errors.New("pack: writer is finished"
 replace: if w.finished && false {\n\t\treturn Built{}, errors.New("pack: writer is finished")\n\t}
 pkg: ./core/pack
 run: ^TestAFinishedWriterRefusesMore$
+
+id: pack-index-must-end
+file: core/pack/pack.go
+find: if err := r.Done(); err != nil {\n\t\treturn nil, fmt.Errorf("%w: index: %w", ErrCorrupt, err)
+replace: if err := r.Err(); err != nil {\n\t\treturn nil, fmt.Errorf("%w: index: %w", ErrCorrupt, err)
+pkg: ./core/pack
+run: ^TestIndexPlaintextMustBeWhole$
