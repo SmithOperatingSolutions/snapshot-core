@@ -959,8 +959,8 @@ run: ^TestPublishedChunksAreDurableBeforeTheRoot$
 
 id: packstore-root-must-be-stored
 file: core/chunk/packstore/packstore.go
-find: if next.IsZero() || (!s.index.Has(next) && (s.pending == nil || !s.pending.Has(next))) {
-replace: if next.IsZero() {
+find: if !stored {\n\t\ts.mu.Unlock()\n\t\treturn fmt.Errorf("%w: %s", chunk.ErrRootMissing, next.Short())
+replace: if next.IsZero() {\n\t\ts.mu.Unlock()\n\t\treturn fmt.Errorf("%w: %s", chunk.ErrRootMissing, next.Short())
 pkg: ./core/chunk/packstore
 run: ^TestContractOverEveryBackend$/^mem$/^RootMustBeStored$
 
@@ -1197,7 +1197,7 @@ run: ^TestForgedManifestsAreRefused$
 
 id: manifest-condemned-kind
 file: core/chunk/packstore/manifest.go
-find: if r.Err() != nil || e.kind < condemnedPack || e.kind > deletedIndex {
+find: if r.Err() != nil || e.kind < condemnedPack || e.kind > repackedPack {
 replace: if r.Err() != nil {
 pkg: ./core/chunk/packstore
 run: ^TestForgedManifestsAreRefused$
@@ -2832,8 +2832,8 @@ run: ^TestARoundCondemnsWaitsThenExpires$
 
 id: packstore-round-reprieves
 file: core/chunk/packstore/gc.go
-find: case isLive(p, live):
-replace: case isLive(p, live) && !was:
+find: case liveCount[i] > 0:
+replace: case liveCount[i] > 0 && !was:
 pkg: ./core/chunk/packstore
 run: ^TestAReachedPackIsReprieved$
 
@@ -2860,15 +2860,15 @@ run: ^TestARoundLosesToAWriterThatPublished$
 
 id: packstore-round-refuses-a-rootless-live-set
 file: core/chunk/packstore/gc.go
-find: if !live(r.man.root) {
-replace: if !live(r.man.root) && false {
+find: } else if !ok {\n\t\treturn Outcome{}, fmt.Errorf("packstore: the root %s is not in the live set", r.man.root.Short())
+replace: } else if !ok && false {\n\t\treturn Outcome{}, fmt.Errorf("packstore: the root %s is not in the live set", r.man.root.Short())
 pkg: ./core/chunk/packstore
 run: ^TestARoundRefusesALiveSetWithoutTheRoot$
 
 id: packstore-put-skips-condemned-packs
 file: core/chunk/packstore/packstore.go
-find: if loc, ok := s.index.Lookup(h); ok && !s.condemned[loc.Pack.Name] {
-replace: if loc, ok := s.index.Lookup(h); ok && !(s.condemned[loc.Pack.Name] && false) {
+find: if ok && !s.condemned[loc.Pack.Name] {
+replace: if ok && !(s.condemned[loc.Pack.Name] && false) {
 pkg: ./core/chunk/packstore
 run: ^TestWritersDoNotDeduplicateAgainstCondemnedPacks$
 
@@ -2930,8 +2930,8 @@ run: ^TestGCTakesAnotherRoundWhenAWriterPublishes$
 
 id: gc-refuses-what-it-cannot-walk
 file: core/gc/gc.go
-find: live, err := mark(ctx, rd, o, r.Root())\n\t\tif err != nil {
-replace: live, err := mark(ctx, rd, o, r.Root())\n\t\tif err != nil && false {
+find: live, err := mark(ctx, rd, o, r.Root())\n\tif err != nil {
+replace: live, err := mark(ctx, rd, o, r.Root())\n\tif err != nil && false {
 pkg: ./core/gc
 run: ^TestGCRefusesWhatItCannotWalk$
 
@@ -2951,24 +2951,17 @@ run: ^TestGCKeepsWhatTheRefsReachAndDeletesTheRest$
 
 id: gc-deletes-what-expired
 file: core/gc/gc.go
-find: append(append(out.Expired, out.Orphans...), probes...)
-replace: append(out.Orphans, probes...)
+find: for _, name := range append(out.Expired, out.Orphans...) {
+replace: for _, name := range out.Orphans {
 pkg: ./core/gc
 run: ^TestOrphanAgesAreTheBackendsClock$
 
 id: gc-orphan-ages-by-the-backend
 file: core/gc/gc.go
-find: now, err := backendNow(ctx, o.Blobs)
-replace: now, err := clock(), error(nil)
+find: backend, err := backendNow(ctx, o.Blobs)
+replace: backend, err := now, error(nil)
 pkg: ./core/gc
 run: ^TestOrphanAgesAreTheBackendsClock$
-
-id: gc-prunes-only-what-it-went-into
-file: core/gc/gc.go
-find: live[h] = true\n\t\tif leaf || gone[h] {
-replace: seen := live[h]\n\t\tlive[h] = true\n\t\tif leaf || seen {
-pkg: ./core/gc
-run: ^TestGCIsNotSteeredByAFileThatIsANode$
 
 id: gc-removes-its-probe
 file: core/gc/gc.go
@@ -3119,8 +3112,8 @@ run: ^TestGCGivesUpWhenWritersNeverStop$
 
 id: gc-nothing-live-without-a-root
 file: core/gc/gc.go
-find: if root.IsZero() {\n\t\treturn live, nil\n\t}
-replace: if root.IsZero() && false {\n\t\treturn live, nil\n\t}
+find: if !root.IsZero() {\n\t\tseen := map[hash.Hash]struct{}{}
+replace: if true {\n\t\tseen := map[hash.Hash]struct{}{}
 pkg: ./core/gc
 run: ^TestGCOnAStoreWithNoRepository$
 
@@ -3140,8 +3133,8 @@ run: ^TestEveryStoreFailureIsGCsError$
 
 id: gc-surfaces-a-failed-probe
 file: core/gc/gc.go
-find: now, err := backendNow(ctx, o.Blobs)\n\t\tif err != nil {
-replace: now, err := backendNow(ctx, o.Blobs)\n\t\tif err != nil && false {
+find: backend, err := backendNow(ctx, o.Blobs)\n\tif err != nil {
+replace: backend, err := backendNow(ctx, o.Blobs)\n\tif err != nil && false {
 pkg: ./core/gc
 run: ^TestEveryStoreFailureIsGCsError$
 
@@ -3392,8 +3385,8 @@ run: ^TestAPublishFailsOnAnOldUploadThatIsGone$
 
 id: packstore-index-objects-are-dated
 file: core/chunk/packstore/packstore.go
-find: s.uploaded[name] = s.o.Clock()
-replace: _ = name
+find: s.uploaded[indexName(obj.sum)] = s.o.Clock()
+replace: _ = obj
 pkg: ./core/chunk/packstore
 run: ^TestAPublishFailsOnAnOldIndexObjectThatIsGone$
 
@@ -3448,15 +3441,15 @@ run: ^TestARoundRecordsTheOrphansItDeletes$
 
 id: packstore-lapsed-records-are-swapped-out
 file: core/chunk/packstore/gc.go
-find: && added == 0 && lapsed == 0 {
-replace: && added == 0 {
+find: && added == 0 && lapsed == 0 && out.Repacked == 0 {
+replace: && added == 0 && out.Repacked == 0 {
 pkg: ./core/chunk/packstore
 run: ^TestARoundRecordsTheOrphansItDeletes$
 
 id: packstore-new-records-are-swapped-in
 file: core/chunk/packstore/gc.go
-find: && added == 0 && lapsed == 0 {
-replace: && lapsed == 0 {
+find: && added == 0 && lapsed == 0 && out.Repacked == 0 {
+replace: && lapsed == 0 && out.Repacked == 0 {
 pkg: ./core/chunk/packstore
 run: ^TestAPublishFailsOnAPackRecordedAsADeletedOrphan$
 
@@ -3476,8 +3469,8 @@ run: ^TestGCKeepsWhatTheRefsReachAndDeletesTheRest$
 
 id: gc-deletes-the-orphans-the-round-recorded
 file: core/gc/gc.go
-find: append(append(out.Expired, out.Orphans...), probes...)
-replace: append(out.Expired, probes...)
+find: for _, name := range append(out.Expired, out.Orphans...) {
+replace: for _, name := range out.Expired {
 pkg: ./core/gc
 run: ^TestGCKeepsWhatTheRefsReachAndDeletesTheRest$
 
