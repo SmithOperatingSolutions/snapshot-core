@@ -346,7 +346,7 @@ func stepMinio(ctx context.Context, _ *config) error {
 	if err != nil {
 		return err
 	}
-	var s3pkgs []string
+	s3pkgs := []string{"./e2e"} // the repository on an S3 endpoint, objects only, with the root on disk
 	for _, p := range pkgs {
 		if strings.HasPrefix(p, "./core/blob/s3") || strings.HasPrefix(p, "./core/chunk") {
 			s3pkgs = append(s3pkgs, p)
