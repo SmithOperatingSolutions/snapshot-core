@@ -1069,3 +1069,17 @@ find: if uses {
 replace: if uses || true {
 pkg: ./tools/redcheck
 run: ^TestContractChangeIsJudgedOnTheTestsThatRunIt$
+
+id: pack-writer-add-after-finish
+file: core/pack/pack.go
+find: case w.finished:\n\t\treturn errors.New("pack: writer is finished")
+replace: case w.finished && false:\n\t\treturn errors.New("pack: writer is finished")
+pkg: ./core/pack
+run: ^TestAFinishedWriterRefusesMore$
+
+id: pack-writer-finishes-once
+file: core/pack/pack.go
+find: if w.finished {\n\t\treturn Built{}, errors.New("pack: writer is finished")\n\t}
+replace: if w.finished && false {\n\t\treturn Built{}, errors.New("pack: writer is finished")\n\t}
+pkg: ./core/pack
+run: ^TestAFinishedWriterRefusesMore$

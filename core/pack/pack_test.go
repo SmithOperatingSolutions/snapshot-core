@@ -282,6 +282,31 @@ func TestWriterLimits(t *testing.T) {
 	}
 }
 
+// A finished writer takes nothing more: its chunks are in the pack it
+// returned, and a second Finish would be a second pack under the first one's
+// salt, and so under the same keys.
+func TestAFinishedWriterRefusesMore(t *testing.T) {
+	kr, c := fixture(t)
+	w, err := pack.NewWriter(kr, repo, c, 1<<20)
+	if err != nil {
+		t.Fatal(err)
+	}
+	d := []byte("in the pack")
+	if err := w.Add(hash.Sum(d), d); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := w.Finish(); err != nil {
+		t.Fatalf("positive control: %v", err)
+	}
+	late := []byte("after Finish")
+	if err := w.Add(hash.Sum(late), late); err == nil {
+		t.Error("a finished writer accepted another chunk, which no pack holds")
+	}
+	if b, err := w.Finish(); err == nil {
+		t.Errorf("a finished writer finished again, a second pack (%s) under the first one's salt", b.Name)
+	}
+}
+
 func TestSaltsAreFreshPerPack(t *testing.T) {
 	kr, c := fixture(t)
 	a := build(t, kr, c, chunks()[:1])
