@@ -10,6 +10,8 @@ package model
 import (
 	"context"
 	"errors"
+	"fmt"
+	"sort"
 
 	"github.com/SmithOperatingSolutions/snapshot-core/core/chunk"
 	"github.com/SmithOperatingSolutions/snapshot-core/core/hash"
@@ -77,14 +79,44 @@ var ErrUnknownModel = errors.New("model: unknown model or format")
 
 // Registry is the set of models a repository is opened with. It cannot
 // change once built.
-type Registry struct{}
+type Registry struct {
+	models map[ID]Model
+	ids    []ID
+}
 
 // NewRegistry builds a registry. Two models with one id, a nil model or
 // model id 0 is an error, and no registry.
-func NewRegistry(models ...Model) (*Registry, error) { return &Registry{}, nil }
+func NewRegistry(models ...Model) (*Registry, error) {
+	r := &Registry{models: make(map[ID]Model, len(models))}
+	for i, m := range models {
+		if m == nil {
+			return nil, fmt.Errorf("model: model %d of %d is nil", i+1, len(models))
+		}
+		id := m.ID()
+		if id == 0 {
+			return nil, errors.New("model: model id 0 is reserved")
+		}
+		if _, dup := r.models[id]; dup {
+			return nil, fmt.Errorf("model: two models share id %d", id)
+		}
+		r.models[id] = m
+		r.ids = append(r.ids, id)
+	}
+	sort.Slice(r.ids, func(i, j int) bool { return r.ids[i] < r.ids[j] })
+	return r, nil
+}
 
 // Resolve returns the model for an object of model id written in format.
-func (r *Registry) Resolve(id ID, format uint16) (Model, error) { return nil, nil }
+func (r *Registry) Resolve(id ID, format uint16) (Model, error) {
+	m, ok := r.models[id]
+	switch {
+	case !ok:
+		return nil, fmt.Errorf("%w: model %d is not registered", ErrUnknownModel, id)
+	case format == 0 || format > m.FormatVersion():
+		return nil, fmt.Errorf("%w: model %d writes format %d, the object is format %d", ErrUnknownModel, id, m.FormatVersion(), format)
+	}
+	return m, nil
+}
 
 // IDs lists the registered ids in order.
-func (r *Registry) IDs() []ID { return nil }
+func (r *Registry) IDs() []ID { return append([]ID(nil), r.ids...) }

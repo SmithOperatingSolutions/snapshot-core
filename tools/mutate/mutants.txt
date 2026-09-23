@@ -1623,3 +1623,24 @@ find: if r < 0x20 || r == 0x7f {
 replace: if r < 0x20 && r == 0x7f {
 pkg: ./core/auth
 run: ^TestPrincipalsAreValidated$
+
+id: model-registry-refuses-duplicates
+file: core/model/port.go
+find: if _, dup := r.models[id]; dup {
+replace: if _, dup := r.models[id]; dup && false {
+pkg: ./core/model
+run: ^TestNewRegistryRefusesTwoModelsWithOneID$
+
+id: model-refuses-newer-formats
+file: core/model/port.go
+find: case format == 0 || format > m.FormatVersion():
+replace: case format == 0:
+pkg: ./core/model
+run: ^TestResolveKnowsOnlyItsModelsAndFormats$
+
+id: model-ids-are-copied
+file: core/model/port.go
+find: func (r *Registry) IDs() []ID { return append([]ID(nil), r.ids...) }
+replace: func (r *Registry) IDs() []ID { return r.ids }
+pkg: ./core/model
+run: ^TestARegistryCannotChange$
