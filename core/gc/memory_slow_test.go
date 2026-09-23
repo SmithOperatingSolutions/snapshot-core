@@ -8,13 +8,14 @@ import (
 	"errors"
 	"math/rand/v2"
 	"os"
+	"path/filepath"
 	"runtime"
 	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/SmithOperatingSolutions/snapshot-core/core/auth"
-	"github.com/SmithOperatingSolutions/snapshot-core/core/blob/mem"
+	"github.com/SmithOperatingSolutions/snapshot-core/core/blob/local"
 	"github.com/SmithOperatingSolutions/snapshot-core/core/chunk"
 	"github.com/SmithOperatingSolutions/snapshot-core/core/chunk/packstore"
 	"github.com/SmithOperatingSolutions/snapshot-core/core/gc"
@@ -119,13 +120,17 @@ func TestSlowMemoryPerChunkOn1MChunks(t *testing.T) {
 }
 
 // measureMemory writes a repository of n chunks and returns what a fresh
-// store costs to open and the live heap's peak over a collection, both
-// over the heap holding the repository itself, in bytes.
+// store costs to open and the live heap's peak over a collection, in
+// bytes. The repository is on disk (blob/local), so what is stored, and
+// what a collection stores, is not on the heap.
 func measureMemory(t *testing.T, n int, inMemory int) (open, peak uint64) {
 	t.Helper()
 	const perGroup = 1000
 	dir := t.TempDir()
-	bs := mem.New()
+	bs, err := local.Create(filepath.Join(t.TempDir(), "repo"), local.Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
 	keys, err := seal.NewKeyring()
 	if err != nil {
 		t.Fatal(err)

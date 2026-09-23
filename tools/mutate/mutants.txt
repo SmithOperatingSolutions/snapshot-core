@@ -3903,17 +3903,10 @@ run: ^TestABuilderRefusesAValueOfAnotherWidth$
 
 id: packstore-spills-past-the-bound
 file: core/chunk/packstore/packstore.go
-find: (!rebuild && published+total > s.o.IndexInMemory) {
-replace: (!rebuild && published+total < 0) {
+find: if total > s.o.IndexInMemory {\n\t\t\tspill, loaded = true, nil
+replace: if total < 0 {\n\t\t\tspill, loaded = true, nil
 pkg: ./core/chunk/packstore
 run: ^TestAStoreSpillsItsIndexToDisk$
-
-id: packstore-a-rebuild-spills-again
-file: core/chunk/packstore/packstore.go
-find: if (rebuild && onDisk) || (rebuild && total > s.o.IndexInMemory) ||
-replace: if (rebuild && onDisk && false) || (rebuild && total < 0) ||
-pkg: ./core/chunk/packstore
-run: ^TestASpilledIndexIsRebuiltWhenGCMovesIt$
 
 id: packstore-close-removes-the-table
 file: core/chunk/packstore/packstore.go

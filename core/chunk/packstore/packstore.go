@@ -189,19 +189,35 @@ func (s *Store) refresh(ctx context.Context) error {
 	}
 	published, onDisk := s.published, s.disk != nil
 	s.mu.Unlock()
-	loaded := make(map[[32]byte][]pack.Info, len(toLoad))
-	total := 0
+	// Whether this refresh spills is known at once for a rebuild of a store
+	// already on disk, and otherwise once the chunks about to sit in memory
+	// pass the bound: the objects loaded so far are dropped then, and the
+	// build streams every object through, so no more than the bound's worth
+	// of decoded index is ever in memory.
+	spill := rebuild && onDisk
+	loaded := map[[32]byte][]pack.Info{}
+	total := published
+	if rebuild {
+		total = 0
+	}
 	for _, sum := range toLoad {
+		if spill {
+			break
+		}
 		infos, err := s.loadIndex(ctx, sum)
 		if err != nil {
 			return err
 		}
-		loaded[sum] = infos
 		total += entries(infos)
+		if total > s.o.IndexInMemory {
+			spill, loaded = true, nil
+			break
+		}
+		loaded[sum] = infos
 	}
 	cond := condemnedPacks(m)
 	var sp *spilled
-	if (rebuild && onDisk) || (rebuild && total > s.o.IndexInMemory) || (!rebuild && published+total > s.o.IndexInMemory) {
+	if spill {
 		if sp, err = s.buildSpilled(ctx, m, loaded, cond); err != nil {
 			return err
 		}
@@ -239,7 +255,7 @@ func (s *Store) refresh(ctx context.Context) error {
 		for _, info := range s.unpublished {
 			x.Add(info)
 		}
-		s.mem, s.published = x, total
+		s.mem, s.published = x, entries(infos)
 	case !rebuild:
 		var infos []pack.Info
 		for sum, packs := range loaded {

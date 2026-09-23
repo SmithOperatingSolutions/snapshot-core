@@ -190,10 +190,12 @@ can refuse them) and a fuzz target.
   writers publish until the bound is passed again, stay in memory. GC
   moving gcGen rebuilds the table; Close removes it. Index objects are
   written in batches of at most 8 MiB (estimated), since an object is
-  decoded whole. Measured on a million 64-byte chunks with 64 Ki in memory
-  (`TestSlowMemoryPerChunkOn1MChunks`, the slow tier): opening costs 16 KiB
-  where it cost 117 MiB in memory, and a collection peaks at 76 MiB where it
-  peaked at 371 (§9).
+  decoded whole; a refresh keeps at most the bound's worth of decoded
+  objects before it switches to streaming them into the table. Measured on
+  64-byte chunks with 64 Ki in memory, the repository on disk
+  (`TestSlowMemoryPerChunkOn1MChunks`, the slow tier): a million chunks open
+  in 16 KiB where they took 117 MiB, and collect in a peak of 31 MiB where
+  they took 371; two million open in 20 KiB and collect in 34 MiB (§9).
 - The manifest lists every index object until GC compacts them (§9).
 
 *(The prolly tree, the version graph and merge are §7–8; GC is §9.)*
