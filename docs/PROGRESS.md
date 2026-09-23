@@ -350,5 +350,7 @@ them, each tracked as an issue:
    `TestWritesAreAuthorizedPerPath`; GC keeps the starting namespaces,
    `TestAWalkNamesAllTheRepositoryHolds`, and collects an abandoned merge,
    `TestAnAbandonedMergeIsCollected`).
-6. **The index in memory** (#6): about 70 to 80 bytes per chunk to open a
-   repository, and a map of every live chunk to collect one.
+6. **The index in memory** (#6): measured on a million chunks
+   (`TestSlowMemoryPerChunkOn1MChunks`, the slow tier): 117 bytes per
+   chunk to open a repository, a peak of 371 per live chunk to collect one.
+   A bound independent of the repository's size is the work.

@@ -176,8 +176,11 @@ can refuse them) and a fuzz target.
   backend by one range read (the index object carries each pack's salt, so no
   header fetch). A hash the index does not know triggers one manifest refresh.
   Every path re-hashes what it returns.
-- Scale limit (v1): the whole index lives in memory (~70–80 bytes per chunk),
-  and the manifest lists every index object until GC compacts them (§9).
+- Scale limit (v1): the whole index lives in memory, measured at 117 bytes
+  per chunk to open a repository and a peak of 371 per live chunk to
+  collect one (the collector's own index, the packs' entries, the mark;
+  `TestSlowMemoryPerChunkOn1MChunks`, #6), and the manifest lists every
+  index object until GC compacts them (§9).
 
 *(The prolly tree, the version graph and merge are §7–8; GC is §9.)*
 
