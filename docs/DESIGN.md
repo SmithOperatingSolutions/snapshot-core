@@ -341,6 +341,12 @@ working set  0x05 · working [32] · staged [32] · merging u8 (0 or 1) ·
 - **Branch and tag names**: `^[a-zA-Z0-9][a-zA-Z0-9._/-]{0,127}$`, with no
   `..`, no `//`, and no trailing `/` or `.lock`; anything else is refused.
 - `Log` takes a limit, capped at 10,000.
+- **Tags** are read back by name (`Tag`, read on `tag:<name>`), listed
+  (`Tags`, read on the repository) and deleted (`DeleteTag`, manage on
+  `tag:<name>`); a name the refs map does not hold is `ErrTagNotFound`. A
+  tag does not move: deleting it and creating it again names another
+  commit. What only a deleted tag reached is unreachable, and GC collects
+  it.
 - A working set names stored namespaces, and a branch or tag a stored
   commit. `UpdateWorkingSet` changes the namespaces only: the merge state
   it is handed must be the stored one (`ErrMergeState`), since only
@@ -352,8 +358,8 @@ working set  0x05 · working [32] · staged [32] · merging u8 (0 or 1) ·
   root. A store error anywhere is the call's error, and leaves the refs as
   they were.
 - Every call takes a `Principal` and asks the `Authorizer` about exactly
-  what it does (read, write or manage a branch, manage a tag, admin the
-  repository), except `Namespace`: it opens what a hash names, and a host
+  what it does (read, write or manage a branch, read or manage a tag, admin
+  the repository), except `Namespace`: it opens what a hash names, and a host
   that has the hash has the chunk store it came from. Writes are also
   authorized per path (the spec's "per path prefix"): every write asks for
   write on each path it changes, `path:<branch>:<path>`. `UpdateWorkingSet`
