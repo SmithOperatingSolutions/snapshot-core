@@ -1337,8 +1337,8 @@ run: ^TestForgeriesThatWouldReadCleanly$
 
 id: mutate-timeout-applied
 file: tools/internal/mutation/mutation.go
-find: "test", "-count=1", "-timeout", o.Timeout.String(), "-run", m.Run, m.Pkg
-replace: "test", "-count=1", "-run", m.Run, m.Pkg
+find: tags...), "-timeout", o.Timeout.String(), "-run", m.Run, m.Pkg)...)
+replace: tags...), "-run", m.Run, m.Pkg)...)
 pkg: ./tools/internal/mutation
 run: ^TestAHangingMutantIsKilledAtTheTimeout$
 
