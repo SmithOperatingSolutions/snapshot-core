@@ -187,23 +187,20 @@ func (s *Store) refresh(ctx context.Context) error {
 			toLoad = append(toLoad, sum)
 		}
 	}
-	published, onDisk := s.published, s.disk != nil
+	published := s.published
 	s.mu.Unlock()
-	// Whether this refresh spills is known at once for a rebuild of a store
-	// already on disk, and otherwise once the chunks about to sit in memory
-	// pass the bound: the objects loaded so far are dropped then, and the
-	// build streams every object through, so no more than the bound's worth
-	// of decoded index is ever in memory.
-	spill := rebuild && onDisk
+	// This refresh spills once the chunks about to sit in memory pass the
+	// bound: the objects loaded so far are dropped then, and the build
+	// streams every object through, so no more than the bound's worth of
+	// decoded index is ever in memory. A rebuild counts from nothing: a
+	// repository GC shrank under the bound returns to memory.
+	spill := false
 	loaded := map[[32]byte][]pack.Info{}
 	total := published
 	if rebuild {
 		total = 0
 	}
 	for _, sum := range toLoad {
-		if spill {
-			break
-		}
 		infos, err := s.loadIndex(ctx, sum)
 		if err != nil {
 			return err
@@ -244,6 +241,10 @@ func (s *Store) refresh(ctx context.Context) error {
 			s.mem.Add(info)
 		}
 	case rebuild && newer:
+		if s.disk != nil { // the repository shrank under the bound
+			_ = s.disk.close()
+			s.disk = nil
+		}
 		x := dedup.New()
 		s.loaded = map[[32]byte]bool{}
 		var infos []pack.Info

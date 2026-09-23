@@ -3977,3 +3977,10 @@ find: w.size+estimate(info) > maxIndexObject) {
 replace: false) {
 pkg: ./core/chunk/packstore
 run: ^TestALargeSessionPublishesSeveralIndexObjects$
+
+id: packstore-a-rebuild-under-the-bound-drops-the-table
+file: core/chunk/packstore/packstore.go
+find: if s.disk != nil { // the repository shrank under the bound\n\t\t\t_ = s.disk.close()\n\t\t\ts.disk = nil\n\t\t}
+replace: if false { // the repository shrank under the bound\n\t\t\t_ = s.disk.close()\n\t\t\ts.disk = nil\n\t\t}
+pkg: ./core/chunk/packstore
+run: ^TestASpilledIndexReturnsToMemoryWhenTheRepositoryShrinks$
