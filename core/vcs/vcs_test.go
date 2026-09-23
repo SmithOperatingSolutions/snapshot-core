@@ -137,8 +137,14 @@ func (fakeModel) Merge(context.Context, model.Root, model.Root, model.Root, chun
 
 func newFixture(t *testing.T) *fixture {
 	t.Helper()
+	return newFixtureOn(t, memstore.New())
+}
+
+// newFixtureOn makes a repository on s, with an authorizer that allows all.
+func newFixtureOn(t *testing.T, s chunk.Store) *fixture {
+	t.Helper()
 	clk := &clock{}
-	f := &fixture{t: t, s: memstore.New(), clk: clk}
+	f := &fixture{t: t, s: s, clk: clk}
 	f.o = options(t, auth.AllowAll{}, clk)
 	r, err := vcs.Init(ctx, f.s, alice, f.o)
 	if err != nil {

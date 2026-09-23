@@ -2078,3 +2078,45 @@ find: if err := s.writeSessionIndex(ctx); err != nil {
 replace: if err := error(nil); err != nil {
 pkg: ./e2e
 run: ^TestAFolderBranchesDiffsAndMerges$
+
+id: vcs-refs-surface-root-errors
+file: core/vcs/vcs.go
+find: root, err := r.s.Root(ctx)\n\tif err != nil {\n\t\treturn nil, err\n\t}\n\tif root.IsZero() {\n\t\treturn nil, ErrNoRepo
+replace: root, err := r.s.Root(ctx)\n\tif err != nil && false {\n\t\treturn nil, err\n\t}\n\tif root.IsZero() {\n\t\treturn nil, ErrNoRepo
+pkg: ./core/vcs
+run: ^TestStoreErrorsSurfaceAndLeaveTheRefs$
+
+id: vcs-init-surfaces-root-errors
+file: core/vcs/vcs.go
+find: if root, err := s.Root(ctx); err != nil {
+replace: if root, err := s.Root(ctx); err != nil && false {
+pkg: ./core/vcs
+run: ^TestStoreErrorsSurfaceAndLeaveTheRefs$
+
+id: vcs-update-surfaces-swap-errors
+file: core/vcs/vcs.go
+find: if !errors.Is(err, chunk.ErrRootConflict) {\n\t\t\treturn err
+replace: if err == nil {\n\t\t\treturn err
+pkg: ./core/vcs
+run: ^TestStoreErrorsSurfaceAndLeaveTheRefs$
+
+id: vcs-read-commit-surfaces-read-errors
+file: core/vcs/vcs.go
+find: b, err := r.s.Get(ctx, h)\n\tif err != nil {\n\t\treturn Commit{}, err
+replace: b, err := r.s.Get(ctx, h)\n\tif err != nil && false {\n\t\treturn Commit{}, err
+pkg: ./core/vcs
+run: ^TestStoreErrorsSurfaceAndLeaveTheRefs$
+
+id: vcs-working-set-surfaces-has-errors
+file: core/vcs/vcs.go
+find: have, err := r.s.Has(ctx, []hash.Hash{next.Working, next.Staged})\n\tif err != nil {
+replace: have, err := r.s.Has(ctx, []hash.Hash{next.Working, next.Staged})\n\tif err != nil && false {
+pkg: ./core/vcs
+run: ^TestStoreErrorsSurfaceAndLeaveTheRefs$
+
+id: vcs-conflicts-surface-iteration-errors
+file: core/vcs/vcs.go
+find: k, v, ok, err := it.Next()\n\t\tif err != nil || !ok {\n\t\t\treturn out, err
+replace: k, v, ok, err := it.Next()\n\t\tif err != nil || !ok {\n\t\t\treturn out, nil
+pkg: ./core/vcs
+run: ^TestStoreErrorsSurfaceAndLeaveTheRefs$
