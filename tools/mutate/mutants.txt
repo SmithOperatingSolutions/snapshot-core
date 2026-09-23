@@ -1265,3 +1265,10 @@ find: if ran == 0 && skipped > 0 {
 replace: if ran == 0 && skipped > 0 && false {
 pkg: ./tools/redcheck
 run: ^TestAContractCallerThatSkipsIsNotJudged$
+
+id: redcheck-written-test-beats-caller
+file: tools/redcheck/redcheck.go
+find: if seen[dir+"\x00"+name] {\n\t\t\treturn // changed in its own right beats calling a contract
+replace: if seen[dir+"\x00"+name] && false {\n\t\t\treturn // changed in its own right beats calling a contract
+pkg: ./tools/redcheck
+run: ^TestAWrittenTestThatCallsTheContractIsJudgedStrictly$

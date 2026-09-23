@@ -504,3 +504,19 @@ func TestAContractCallerThatSkipsIsNotJudged(t *testing.T) {
 		t.Fatalf("a contract change whose every caller skipped was accepted (ran %d):\n%s", rep.TestsRun, reasons(rep))
 	}
 }
+
+// A test the commit wrote is judged strictly even when it also calls the
+// changed contract: a new test that only skips is still a deleted test.
+func TestAWrittenTestThatCallsTheContractIsJudgedStrictly(t *testing.T) {
+	f := contractFixture(t, "")
+	f.write("calc/contract/contract.go", contractV1)
+	f.write("calc/remote_test.go", remoteContractTest)
+	f.commit("test(calc): the contract requires Add to add, remotely too")
+
+	rep := f.check()
+	if len(rep.Violations) != 1 || rep.Violations[0].Test != "TestContractRemote" ||
+		!strings.Contains(rep.Violations[0].Reason, "skip") || rep.TestsRun != 2 {
+		t.Fatalf("a skipping test the commit wrote escaped judgment by calling the contract (ran %d):\n%s",
+			rep.TestsRun, reasons(rep))
+	}
+}
