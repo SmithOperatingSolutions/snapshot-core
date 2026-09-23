@@ -223,3 +223,49 @@ func TestALargeSessionPublishesSeveralIndexObjects(t *testing.T) {
 		}
 	}
 }
+
+// A spilled store whose repository shrinks under the bound (GC expired its
+// packs) returns to memory at the rebuild: the table is removed, and an
+// expired chunk is not located through a stale one.
+func TestASpilledIndexReturnsToMemoryWhenTheRepositoryShrinks(t *testing.T) {
+	bs, kr := mem.New(), keyring(t)
+	dir := t.TempDir()
+	o := packstore.Options{Blobs: bs, Keys: kr, Repo: repo, IndexDir: dir, IndexInMemory: 4}
+	w, err := packstore.Open(ctx, packstore.WithBackoff(o, time.Millisecond))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = w.Close() })
+	live := packed(t, w, hash.Hash{}, []byte("the root"), payload("kept one", 200), payload("kept two", 200))
+	dead := packed(t, w, live[0], []byte("the root"), payload("dead one", 200), payload("dead two", 200), payload("dead three", 200))
+	reader, err := packstore.Open(ctx, packstore.WithBackoff(o, time.Millisecond))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = reader.Close() })
+	if got := tables(t, dir); len(got) != 1 {
+		t.Fatalf("positive control: over %d published chunks and a bound of 4 the reader keeps %d tables, want one", 6, len(got))
+	}
+	if out := round(t, bs, kr, liveSet(live...), t0); out.Condemned != 1 {
+		t.Fatalf("fixture: condemned %d packs, want the dead one", out.Condemned)
+	}
+	out := round(t, bs, kr, liveSet(live...), t0.Add(time.Hour))
+	if len(packsOf(out.Expired)) != 1 {
+		t.Fatalf("fixture: expired %v, want the dead pack", out.Expired)
+	}
+	remove(t, bs, out.Expired)
+	if _, err := reader.Root(ctx); err != nil { // gcGen moved: a rebuild, of 3 chunks under a bound of 4
+		t.Fatal(err)
+	}
+	if got := tables(t, dir); len(got) != 0 {
+		t.Fatalf("after the repository shrank to 3 chunks under a bound of 4 the reader still keeps %d tables in %s, want its index back in memory", len(got), dir)
+	}
+	if name, _, _, ok := reader.Location(dead[1]); ok {
+		t.Fatalf("an expired chunk is still located in %s", name)
+	}
+	for _, h := range live {
+		if _, _, _, ok := reader.Location(h); !ok {
+			t.Fatalf("a live chunk %s is not located after the rebuild", h.Short())
+		}
+	}
+}
