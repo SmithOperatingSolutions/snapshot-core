@@ -1,6 +1,7 @@
 package vcs
 
 import (
+	"errors"
 	"fmt"
 	"time"
 	"unicode/utf8"
@@ -91,6 +92,11 @@ func (t Tag) encode() []byte {
 	w.LenBytes([]byte(t.Tagger))
 	w.LenBytes([]byte(t.Message))
 	return w.Bytes()
+}
+
+// decodeTag parses a tag chunk (chunk.ErrCorrupt when malformed).
+func decodeTag(b []byte) (Tag, error) {
+	return Tag{}, errors.New("vcs: decodeTag is not written yet")
 }
 
 // Working set chunk: 0x05 · working [32] · staged [32] · merging u8 ·

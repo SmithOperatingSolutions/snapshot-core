@@ -38,6 +38,12 @@ func (lines) Diff(context.Context, model.Root, model.Root, chunk.Reader) (model.
 	return nil, errors.New("unused")
 }
 
+// Walk implements model.Walker: an object of lines is one chunk.
+func (lines) Walk(_ context.Context, root model.Root, _ chunk.Reader, visit func(hash.Hash, bool) (bool, error)) error {
+	_, err := visit(root.Hash, true)
+	return err
+}
+
 func (lines) Merge(ctx context.Context, b, o, t model.Root, rw chunk.ReadWriter) (model.MergeResult, error) {
 	var sets [3]map[string]bool
 	for i, r := range []model.Root{b, o, t} {

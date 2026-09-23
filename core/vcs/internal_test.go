@@ -122,3 +122,43 @@ func FuzzDecodeConflict(f *testing.F) {
 		}
 	})
 }
+
+// Every rule the tag decoder enforces, one forgery each; the round trip is
+// the positive control.
+func TestForgedTagsAreCorrupt(t *testing.T) {
+	good := Tag{Target: hash.Sum([]byte("c")), Time: time.Unix(0, 1_700_000_000_000_000_000).UTC(), Tagger: "user:alice", Message: "v1"}
+	back, err := decodeTag(good.encode())
+	if err != nil || back.Target != good.Target || !back.Time.Equal(good.Time) || back.Tagger != good.Tagger || back.Message != good.Message {
+		t.Fatalf("positive control: a tag decodes as %+v (%v), want %+v", back, err, good)
+	}
+	b := good.encode()
+	badUTF8 := good
+	badUTF8.Message = "caf\xe9"
+	for name, forged := range map[string][]byte{
+		"another chunk's kind": append([]byte{kindCommit}, b[1:]...),
+		"empty":                nil,
+		"a byte past the end":  append(bytes.Clone(b), 0),
+		"truncated":            b[:len(b)-1],
+		"a message not UTF-8":  badUTF8.encode(),
+	} {
+		if _, err := decodeTag(forged); !errors.Is(err, chunk.ErrCorrupt) {
+			t.Errorf("%s: decodeTag = %v, want ErrCorrupt", name, err)
+		}
+	}
+}
+
+// Whatever decodes as a tag re-encodes to the same bytes, and hostile bytes
+// never panic.
+func FuzzDecodeTag(f *testing.F) {
+	f.Add(Tag{Target: hash.Sum([]byte("c")), Time: time.Unix(0, 1).UTC(), Tagger: "user:a", Message: "m"}.encode())
+	f.Add([]byte{kindTag})
+	f.Fuzz(func(t *testing.T, b []byte) {
+		tag, err := decodeTag(b)
+		if err != nil {
+			return
+		}
+		if !bytes.Equal(tag.encode(), b) {
+			t.Fatal("a tag decoded that does not re-encode to itself")
+		}
+	})
+}
