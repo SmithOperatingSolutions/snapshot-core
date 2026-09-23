@@ -10,7 +10,11 @@
 // so every swap has a fresh ETag even when the value repeats (no ABA), and a
 // swap whose response was lost can recognize its own write. At Open a probe
 // refuses any endpoint that ignores If-None-Match or If-Match: without them
-// the store cannot be safe.
+// the store cannot be safe. Opened objects only (Options.ObjectsOnly, for
+// blob/split, DESIGN §4), the store holds objects and no root on such an
+// endpoint: a put is a HEAD and then an unconditional PUT, and Root and
+// SwapRoot are blob.ErrNoRoot. Either way it keeps the root's copy a split
+// store writes at <prefix>mirror, replaced in place.
 package s3
 
 import (
@@ -64,12 +68,6 @@ type Options struct {
 	ObjectsOnly bool
 }
 
-// WriteMirror replaces the root's copy a split store keeps here.
-func (s *Store) WriteMirror(ctx context.Context, value []byte) error { return nil }
-
-// ReadMirror returns the root's copy, or nothing when there is none.
-func (s *Store) ReadMirror(ctx context.Context) ([]byte, error) { return nil, nil }
-
 // NewClient builds a path-style client for an endpoint with static
 // credentials, for tests and MinIO. Checksums are computed only when S3
 // requires them: SigV4's signed payload hash already protects every PUT.
@@ -93,10 +91,11 @@ const (
 
 // Store is an S3 BlobStore.
 type Store struct {
-	c      *awss3.Client
-	bucket string
-	prefix string
-	sseKMS string
+	c           *awss3.Client
+	bucket      string
+	prefix      string
+	sseKMS      string
+	objectsOnly bool
 }
 
 var _ blob.BlobStore = (*Store)(nil)
@@ -114,8 +113,14 @@ func Open(ctx context.Context, o Options) (*Store, error) {
 	if ep := o.Client.Options().BaseEndpoint; ep != nil && strings.HasPrefix(strings.ToLower(*ep), "http://") && !o.AllowHTTP {
 		return nil, fmt.Errorf("%w: %s (set AllowHTTP only for test servers)", ErrInsecureEndpoint, *ep)
 	}
-	s := &Store{c: o.Client, bucket: o.Bucket, prefix: o.Prefix, sseKMS: o.SSEKMSKeyID}
-	if err := s.probe(ctx); err != nil {
+	s := &Store{c: o.Client, bucket: o.Bucket, prefix: o.Prefix, sseKMS: o.SSEKMSKeyID, objectsOnly: o.ObjectsOnly}
+	var err error
+	if s.objectsOnly {
+		err = s.probeObjects(ctx)
+	} else {
+		err = s.probe(ctx)
+	}
+	if err != nil {
 		return nil, err
 	}
 	return s, nil
@@ -127,6 +132,7 @@ const keySuffix = "!"
 func (s *Store) objectBase() string           { return s.prefix + "objects/" }
 func (s *Store) objectKey(name string) string { return s.objectBase() + name + keySuffix }
 func (s *Store) rootKey() string              { return s.prefix + "root" }
+func (s *Store) mirrorKey() string            { return s.prefix + "mirror" }
 
 func statusOf(err error) int {
 	var re *awshttp.ResponseError
@@ -211,6 +217,27 @@ func (s *Store) probe(ctx context.Context) error {
 	return nil
 }
 
+// probeObjects proves the endpoint takes, returns and deletes an object,
+// which is all an objects-only store asks of it.
+func (s *Store) probeObjects(ctx context.Context) error {
+	id, err := random(8)
+	if err != nil {
+		return err
+	}
+	key := s.prefix + "probe/" + hex.EncodeToString(id)
+	body := bytes.NewReader([]byte("snapshot-core objects probe"))
+	if _, err := s.put(ctx, key, body, body.Size(), "", ""); err != nil {
+		return fmt.Errorf("s3: probe write: %w", err)
+	}
+	if _, err := s.c.HeadObject(ctx, &awss3.HeadObjectInput{Bucket: aws.String(s.bucket), Key: aws.String(key)}); err != nil {
+		return fmt.Errorf("s3: probe read: %w", err)
+	}
+	if _, err := s.c.DeleteObject(ctx, &awss3.DeleteObjectInput{Bucket: aws.String(s.bucket), Key: aws.String(key)}); err != nil {
+		return fmt.Errorf("s3: probe delete: %w", err)
+	}
+	return nil
+}
+
 func unsafe(what string, err error) error {
 	if err != nil {
 		return fmt.Errorf("%w: %s: %w", ErrUnsafeEndpoint, what, err)
@@ -244,11 +271,52 @@ func (s *Store) Put(ctx context.Context, name string, r io.Reader, size int64) e
 		}
 		body = bytes.NewReader(buf.Bytes())
 	}
+	if s.objectsOnly {
+		// Best effort: the endpoint ignores If-None-Match, so ask first.
+		// Every name a repository writes is unique, so two writers racing
+		// on one name write the same bytes.
+		if _, err := s.Stat(ctx, name); err == nil {
+			return blob.ErrExists
+		} else if !errors.Is(err, blob.ErrNotFound) {
+			return err
+		}
+		_, err := s.put(ctx, s.objectKey(name), body, size, "", "")
+		return err
+	}
 	_, err := s.put(ctx, s.objectKey(name), body, size, "*", "")
 	if statusOf(err) == http.StatusPreconditionFailed {
 		return blob.ErrExists
 	}
 	return err
+}
+
+// WriteMirror replaces the root's copy a split store keeps here, in place.
+func (s *Store) WriteMirror(ctx context.Context, value []byte) error {
+	if err := blob.CheckRootValue(value); err != nil {
+		return err
+	}
+	_, err := s.put(ctx, s.mirrorKey(), bytes.NewReader(value), int64(len(value)), "", "")
+	return err
+}
+
+// ReadMirror returns the root's copy, or nothing when there is none.
+func (s *Store) ReadMirror(ctx context.Context) ([]byte, error) {
+	out, err := s.c.GetObject(ctx, &awss3.GetObjectInput{Bucket: aws.String(s.bucket), Key: aws.String(s.mirrorKey())})
+	if err != nil {
+		if isNotFound(err) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	defer out.Body.Close()
+	b, err := io.ReadAll(io.LimitReader(out.Body, blob.MaxRootSize+1))
+	if err != nil {
+		return nil, err
+	}
+	if len(b) > blob.MaxRootSize {
+		return nil, fmt.Errorf("%w: %d bytes", ErrCorrupt, len(b))
+	}
+	return b, nil
 }
 
 // readerAt adapts an io.ReadSeeker to io.ReaderAt for io.SectionReader.
@@ -416,6 +484,9 @@ func (s *Store) readRoot(ctx context.Context) ([]byte, blob.Version, error) {
 
 // Root implements blob.BlobStore.
 func (s *Store) Root(ctx context.Context) (blob.Root, error) {
+	if s.objectsOnly {
+		return blob.Root{}, fmt.Errorf("%w: this S3 store holds objects only", blob.ErrNoRoot)
+	}
 	body, v, err := s.readRoot(ctx)
 	if err != nil || v == blob.NoVersion {
 		return blob.Root{}, err
@@ -425,6 +496,9 @@ func (s *Store) Root(ctx context.Context) (blob.Root, error) {
 
 // SwapRoot implements blob.BlobStore.
 func (s *Store) SwapRoot(ctx context.Context, expected blob.Version, next []byte) (blob.Version, error) {
+	if s.objectsOnly {
+		return blob.NoVersion, fmt.Errorf("%w: this S3 store holds objects only", blob.ErrNoRoot)
+	}
 	if err := blob.CheckRootValue(next); err != nil {
 		return blob.NoVersion, err
 	}

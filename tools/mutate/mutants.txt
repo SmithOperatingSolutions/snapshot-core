@@ -3557,3 +3557,52 @@ find: if len(page) < blob.MaxListPage {\n\t\t\treturn ours, others, nil
 replace: if len(page) <= blob.MaxListPage {\n\t\t\treturn ours, others, nil
 pkg: ./core/repo
 run: ^TestOpenTakesTheConfigThatAuthenticatesTheRoot$
+
+id: s3-objects-only-skips-the-conditional-probe
+file: core/blob/s3/s3.go
+find: if s.objectsOnly {\n\t\terr = s.probeObjects(ctx)
+replace: if s.objectsOnly && false {\n\t\terr = s.probeObjects(ctx)
+pkg: ./core/blob/s3
+run: ^TestObjectsOnlyRunsWhereConditionalWritesAreIgnored$
+
+id: s3-objects-only-put-asks-first
+file: core/blob/s3/s3.go
+find: if _, err := s.Stat(ctx, name); err == nil {\n\t\t\treturn blob.ErrExists
+replace: if _, err := s.Stat(ctx, name); err == nil && false {\n\t\t\treturn blob.ErrExists
+pkg: ./core/blob/s3
+run: ^TestObjectsOnlyPutIsAHeadThenAPut$
+
+id: s3-objects-only-has-no-root
+file: core/blob/s3/s3.go
+find: if s.objectsOnly {\n\t\treturn blob.Root{}, fmt.Errorf("%w: this S3 store holds objects only", blob.ErrNoRoot)
+replace: if s.objectsOnly && false {\n\t\treturn blob.Root{}, fmt.Errorf("%w: this S3 store holds objects only", blob.ErrNoRoot)
+pkg: ./core/blob/s3
+run: ^TestObjectsOnlyRunsWhereConditionalWritesAreIgnored$
+
+id: s3-objects-only-swaps-no-root
+file: core/blob/s3/s3.go
+find: if s.objectsOnly {\n\t\treturn blob.NoVersion, fmt.Errorf("%w: this S3 store holds objects only", blob.ErrNoRoot)
+replace: if s.objectsOnly && false {\n\t\treturn blob.NoVersion, fmt.Errorf("%w: this S3 store holds objects only", blob.ErrNoRoot)
+pkg: ./core/blob/s3
+run: ^TestObjectsOnlyRunsWhereConditionalWritesAreIgnored$
+
+id: s3-mirror-is-replaced-in-place
+file: core/blob/s3/s3.go
+find: _, err := s.put(ctx, s.mirrorKey(), bytes.NewReader(value), int64(len(value)), "", "")
+replace: _, err := s.put(ctx, s.mirrorKey(), bytes.NewReader(value), int64(len(value)), "*", "")
+pkg: ./core/blob/s3
+run: ^TestTheMirrorIsReplacedInPlace$
+
+id: s3-mirror-reads-nothing-when-none
+file: core/blob/s3/s3.go
+find: if isNotFound(err) {\n\t\t\treturn nil, nil\n\t\t}\n\t\treturn nil, err\n\t}\n\tdefer out.Body.Close()\n\tb, err := io.ReadAll(io.LimitReader(out.Body, blob.MaxRootSize+1))
+replace: if isNotFound(err) && false {\n\t\t\treturn nil, nil\n\t\t}\n\t\treturn nil, err\n\t}\n\tdefer out.Body.Close()\n\tb, err := io.ReadAll(io.LimitReader(out.Body, blob.MaxRootSize+1))
+pkg: ./core/blob/s3
+run: ^TestTheMirrorIsReplacedInPlace$
+
+id: s3-mirror-is-no-object
+file: core/blob/s3/s3.go
+find: func (s *Store) mirrorKey() string            { return s.prefix + "mirror" }
+replace: func (s *Store) mirrorKey() string            { return s.objectKey("mirror") }
+pkg: ./core/blob/s3
+run: ^TestTheMirrorIsReplacedInPlace$
