@@ -367,3 +367,74 @@ func TestTestMainIsNotJudged(t *testing.T) {
 		t.Fatalf("TestMain was judged as a test (ran %d):\n%s", rep.TestsRun, reasons(rep))
 	}
 }
+
+// A port's contract suite lives in a non-test file (<pkg>/contract), so a
+// change to it touches no Test function, yet it changes every test that runs
+// it (Engine Spec: "contract tests updated if a port changed").
+const contractV0 = `// Package contract is the suite every Add must pass.
+package contract
+
+import "testing"
+
+// Run runs the suite.
+func Run(t *testing.T, add func(a, b int) int) { _ = add(1, 2) }
+`
+
+const contractV1 = `// Package contract is the suite every Add must pass.
+package contract
+
+import "testing"
+
+// Run runs the suite.
+func Run(t *testing.T, add func(a, b int) int) {
+	if got := add(1, 2); got != 3 {
+		t.Fatalf("add(1, 2) = %d, want 3", got)
+	}
+}
+`
+
+// contractFixture commits a contract that asserts nothing yet and a test
+// file that runs it (importing it as alias, when one is given) beside a test
+// that does not.
+func contractFixture(t *testing.T, alias string) *fixture {
+	t.Helper()
+	f := newFixture(t)
+	name, spec := "contract", `"example.com/fx/calc/contract"`
+	if alias != "" {
+		name, spec = alias, alias+" "+spec
+	}
+	f.write("calc/contract/contract.go", contractV0)
+	f.write("calc/calc_test.go", "package calc\n\nimport (\n\t\"testing\"\n\n\t"+spec+"\n)\n\n"+
+		"func TestContract(t *testing.T) { "+name+".Run(t, Add) }\n\nfunc TestOther(t *testing.T) {}\n")
+	f.commit("chore: the implementation runs a contract that asserts nothing yet")
+	return f
+}
+
+func TestContractChangeIsJudgedOnTheTestsThatRunIt(t *testing.T) {
+	f := contractFixture(t, "")
+	f.write("calc/contract/contract.go", contractV1)
+	f.commit("test(calc): the contract requires Add to add")
+	f.write("calc/calc.go", addImpl)
+	f.commit("feat(calc): Add adds")
+
+	rep := f.check()
+	if len(rep.Violations) != 0 || rep.Checked != 1 || rep.TestsRun != 1 {
+		t.Fatalf("a red contract change was not judged on the one test that runs the contract "+
+			"(checked %d, ran %d):\n%s", rep.Checked, rep.TestsRun, reasons(rep))
+	}
+}
+
+func TestPassingContractChangeIsBlocked(t *testing.T) {
+	f := contractFixture(t, "ctr")
+	f.write("calc/calc.go", addImpl)
+	f.commit("chore: the implementation lands first")
+	f.write("calc/contract/contract.go", contractV1)
+	f.commit("test(calc): the contract requires Add to add")
+
+	rep := f.check()
+	if len(rep.Violations) != 1 || rep.Violations[0].Test != "TestContract" ||
+		!strings.Contains(rep.Violations[0].Reason, "passed") {
+		t.Fatalf("a contract change the implementation already passes was not blocked as passing "+
+			"on the (alias-importing) test that runs it:\n%s", reasons(rep))
+	}
+}
