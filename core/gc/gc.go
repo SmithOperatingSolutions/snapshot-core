@@ -10,12 +10,17 @@ package gc
 import (
 	"context"
 	"errors"
+	"fmt"
 	"time"
 
 	"github.com/SmithOperatingSolutions/snapshot-core/core/blob"
+	"github.com/SmithOperatingSolutions/snapshot-core/core/chunk"
+	"github.com/SmithOperatingSolutions/snapshot-core/core/chunk/packstore"
+	"github.com/SmithOperatingSolutions/snapshot-core/core/hash"
 	"github.com/SmithOperatingSolutions/snapshot-core/core/model"
 	"github.com/SmithOperatingSolutions/snapshot-core/core/prolly"
 	"github.com/SmithOperatingSolutions/snapshot-core/core/seal"
+	"github.com/SmithOperatingSolutions/snapshot-core/core/vcs"
 )
 
 // DefaultGrace is the Storage Core Spec's default grace window.
@@ -40,7 +45,110 @@ type Report struct {
 	Deleted              []string // expired packs and index objects, then orphans
 }
 
-// Run collects the repository once.
+// maxRounds bounds the rounds one Run takes while writers keep publishing.
+const maxRounds = 10
+
+// Run collects the repository once: it takes a round against the manifest,
+// marks from its root, and applies the round, starting over when a writer
+// published meanwhile; then it deletes what expired, and the packs and
+// index objects no manifest names that are older than the grace window.
+// A repository it cannot walk whole (an object whose model is unknown or
+// cannot walk, a forged chunk) is refused before anything is decided.
 func Run(ctx context.Context, o Options) (Report, error) {
-	return Report{}, errors.New("gc: Run is not written yet")
+	if o.Blobs == nil || o.Keys == nil || o.Registry == nil {
+		return Report{}, errors.New("gc: a store, a key and a model registry are required")
+	}
+	grace, clock := o.Grace, o.Clock
+	if grace == 0 {
+		grace = DefaultGrace
+	}
+	if grace < 0 {
+		return Report{}, fmt.Errorf("gc: a grace window of %v", grace)
+	}
+	if clock == nil {
+		clock = time.Now
+	}
+	po := packstore.Options{Blobs: o.Blobs, Keys: o.Keys, Repo: o.Repo}
+	rd, err := packstore.Open(ctx, po)
+	if err != nil {
+		return Report{}, err
+	}
+	defer rd.Close()
+	var rep Report
+	for rep.Rounds < maxRounds {
+		rep.Rounds++
+		r, err := packstore.Begin(ctx, po)
+		if err != nil {
+			return rep, err
+		}
+		live, err := mark(ctx, rd, o, r.Root())
+		if err != nil {
+			return rep, err
+		}
+		out, err := r.Apply(ctx, func(h hash.Hash) bool { return live[h] }, clock(), grace)
+		if errors.Is(err, packstore.ErrMoved) {
+			continue
+		}
+		if err != nil {
+			return rep, err
+		}
+		rep.Live, rep.Condemned, rep.Reprieved = len(live), out.Condemned, out.Reprieved
+		stale, err := orphans(ctx, o.Blobs, out.Named, clock(), grace)
+		if err != nil {
+			return rep, err
+		}
+		for _, name := range append(out.Expired, stale...) {
+			if err := o.Blobs.Delete(ctx, name); err != nil {
+				return rep, err
+			}
+			rep.Deleted = append(rep.Deleted, name)
+		}
+		return rep, nil
+	}
+	return rep, fmt.Errorf("gc: the repository changed during %d rounds in a row", maxRounds)
+}
+
+// mark returns every chunk the repository at root reaches. A chunk seen so
+// far only as a leaf is still gone into when it turns up as a node.
+func mark(ctx context.Context, rd chunk.Reader, o Options, root hash.Hash) (map[hash.Hash]bool, error) {
+	live := map[hash.Hash]bool{}
+	if root.IsZero() {
+		return live, nil
+	}
+	gone := map[hash.Hash]bool{}
+	err := vcs.Walk(ctx, rd, vcs.Options{Config: o.Config, Registry: o.Registry}, root, func(h hash.Hash, leaf bool) (bool, error) {
+		live[h] = true
+		if leaf || gone[h] {
+			return false, nil
+		}
+		gone[h] = true
+		return true, nil
+	})
+	return live, err
+}
+
+// orphans lists the packs and index objects the manifest does not name that
+// are older than the grace window: left by writers that never published, or
+// by a run that stopped between its swap and its deletions.
+func orphans(ctx context.Context, bs blob.BlobStore, named map[string]bool, now time.Time, grace time.Duration) ([]string, error) {
+	var out []string
+	for _, prefix := range []string{"packs/", "index/"} {
+		after := ""
+		for {
+			page, err := bs.List(ctx, prefix, after, blob.MaxListPage)
+			if err != nil {
+				return nil, err
+			}
+			for _, info := range page {
+				if !named[info.Name] && now.Sub(info.ModTime) >= grace {
+					out = append(out, info.Name)
+				}
+			}
+			if len(page) < blob.MaxListPage {
+				break
+			}
+			after = page[len(page)-1].Name
+		}
+	}
+	return out, nil
 }

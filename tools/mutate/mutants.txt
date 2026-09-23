@@ -2925,3 +2925,31 @@ find: delete(s.unpublished, name)
 replace: _ = name
 pkg: ./core/chunk/packstore
 run: ^TestAStoresOwnPacksAcrossARebuild$
+
+id: gc-takes-another-round
+file: core/gc/gc.go
+find: if errors.Is(err, packstore.ErrMoved) {\n\t\t\tcontinue
+replace: if errors.Is(err, packstore.ErrMoved) && false {\n\t\t\tcontinue
+pkg: ./core/gc
+run: ^TestGCTakesAnotherRoundWhenAWriterPublishes$
+
+id: gc-refuses-what-it-cannot-walk
+file: core/gc/gc.go
+find: live, err := mark(ctx, rd, o, r.Root())\n\t\tif err != nil {
+replace: live, err := mark(ctx, rd, o, r.Root())\n\t\tif err != nil && false {
+pkg: ./core/gc
+run: ^TestGCRefusesWhatItCannotWalk$
+
+id: gc-orphans-wait-the-grace-window
+file: core/gc/gc.go
+find: if !named[info.Name] && now.Sub(info.ModTime) >= grace {
+replace: if !named[info.Name] {
+pkg: ./core/gc
+run: ^TestGCKeepsWhatTheRefsReachAndDeletesTheRest$
+
+id: gc-orphans-are-unnamed
+file: core/gc/gc.go
+find: if !named[info.Name] && now.Sub(info.ModTime) >= grace {
+replace: if now.Sub(info.ModTime) >= grace {
+pkg: ./core/gc
+run: ^TestGCKeepsWhatTheRefsReachAndDeletesTheRest$
