@@ -992,3 +992,10 @@ find: local := s.inflight[loc.Pack.Name]
 replace: local := []byte(nil)
 pkg: ./core/chunk/packstore
 run: ^TestFailedUploadStaysReadableAndIsRetried$
+
+id: packstore-uploads-every-pack-in-a-batch
+file: core/chunk/packstore/packstore.go
+find: if err != nil && first == nil {\n\t\t\tfirst = fmt.Errorf("packstore: uploading %s: %w", b.Name, err)\n\t\t}
+replace: if err != nil {\n\t\t\treturn fmt.Errorf("packstore: uploading %s: %w", b.Name, err)\n\t\t}
+pkg: ./core/chunk/packstore
+run: ^TestFailedUploadStaysReadableAndIsRetried$

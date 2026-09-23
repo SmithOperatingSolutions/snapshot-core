@@ -213,24 +213,29 @@ func (s *Store) finishPendingLocked() (*pack.Built, error) {
 }
 
 // upload stores packs; an object that already exists under a pack's name is
-// the same bytes (packs are named by their hash).
+// the same bytes (packs are named by their hash). Every pack is attempted and
+// every failure kept for the next CAS: a pack dropped here would be a chunk
+// the next root reaches that nothing durable holds.
 func (s *Store) upload(ctx context.Context, packs []pack.Built) error {
+	var first error
 	for _, b := range packs {
 		err := s.o.Blobs.Put(ctx, b.Name, bytes.NewReader(b.Bytes), int64(len(b.Bytes)))
+		if errors.Is(err, blob.ErrExists) {
+			err = nil
+		}
 		s.mu.Lock()
-		switch {
-		case err == nil || errors.Is(err, blob.ErrExists):
+		if err == nil {
 			delete(s.inflight, b.Name)
 			s.session = append(s.session, b.Info)
-		default:
+		} else {
 			s.unuploaded = append(s.unuploaded, b)
 		}
 		s.mu.Unlock()
-		if err != nil && !errors.Is(err, blob.ErrExists) {
-			return fmt.Errorf("packstore: uploading %s: %w", b.Name, err)
+		if err != nil && first == nil {
+			first = fmt.Errorf("packstore: uploading %s: %w", b.Name, err)
 		}
 	}
-	return nil
+	return first
 }
 
 // Put implements chunk.Store.
