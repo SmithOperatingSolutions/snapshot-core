@@ -474,3 +474,31 @@ find:  || fd.Name.Name == "TestMain" {
 replace:  {
 pkg: ./tools/redcheck
 run: ^TestTestMainIsNotJudged$
+
+id: fsutil-lock-is-exclusive
+file: core/blob/internal/fsutil/fsutil_unix.go
+find: if err := unix.Flock(int(f.Fd()), unix.LOCK_EX); err != nil {
+replace: if err := unix.Flock(int(f.Fd()), unix.LOCK_SH); err != nil {
+pkg: ./core/blob/internal/fsutil
+run: ^TestLockIsExclusiveUntilReleased$
+
+id: fsutil-unlock-releases
+file: core/blob/internal/fsutil/fsutil_unix.go
+find: _ = unix.Flock(int(f.Fd()), unix.LOCK_UN)\n\t\t_ = f.Close()
+replace: _ = unix.LOCK_UN
+pkg: ./core/blob/internal/fsutil
+run: ^TestLockIsExclusiveUntilReleased$
+
+id: fsutil-identity-includes-inode
+file: core/blob/internal/fsutil/fsutil_unix.go
+find: return uint64(st.Dev), st.Ino, nil
+replace: return uint64(st.Dev), 0, nil
+pkg: ./core/blob/internal/fsutil
+run: ^TestIdentityTellsDirectoriesApart$
+
+id: fsutil-atomic-write-cleans-temp
+file: core/blob/internal/fsutil/fsutil.go
+find: defer os.Remove(name) // no-op after the rename
+replace: _ = name
+pkg: ./core/blob/internal/fsutil
+run: ^TestWriteFileAtomicFailureAfterTempCleansUp$
