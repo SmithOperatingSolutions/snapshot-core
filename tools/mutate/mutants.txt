@@ -2141,3 +2141,38 @@ find: if baseHash == theirs { // the branch holds theirs already: nothing to mer
 replace: if baseHash == theirs && false { // the branch holds theirs already: nothing to merge
 pkg: ./core/vcs
 run: ^TestMergingWhatIsAlreadyMergedChangesNothing$
+
+id: vcs-working-set-names-stored-namespaces
+file: core/vcs/vcs.go
+find: if !have[next.Working] || !have[next.Staged] {
+replace: if (!have[next.Working] || !have[next.Staged]) && false {
+pkg: ./core/vcs
+run: ^TestRefsNameOnlyStoredObjects$
+
+id: vcs-branch-names-a-commit
+file: core/vcs/vcs.go
+find: c, err := r.readCommit(ctx, at)\n\tif err != nil {\n\t\treturn err
+replace: c, err := r.readCommit(ctx, at)\n\tif err != nil && false {\n\t\treturn err
+pkg: ./core/vcs
+run: ^TestRefsNameOnlyStoredObjects$
+
+id: vcs-tag-names-a-commit
+file: core/vcs/vcs.go
+find: if _, err := r.readCommit(ctx, target); err != nil {
+replace: if _, err := r.readCommit(ctx, target); err != nil && false {
+pkg: ./core/vcs
+run: ^TestRefsNameOnlyStoredObjects$
+
+id: vcs-commit-message-bounded
+file: core/vcs/vcs.go
+find: if len(message) > MaxMessageLen || !utf8.ValidString(message) {\n\t\treturn Commit{}
+replace: if (len(message) > MaxMessageLen || !utf8.ValidString(message)) && false {\n\t\treturn Commit{}
+pkg: ./core/vcs
+run: ^TestMessagesAreBoundedUTF8$
+
+id: vcs-tag-message-bounded
+file: core/vcs/vcs.go
+find: if len(message) > MaxMessageLen || !utf8.ValidString(message) {\n\t\treturn Tag{}
+replace: if (len(message) > MaxMessageLen || !utf8.ValidString(message)) && false {\n\t\treturn Tag{}
+pkg: ./core/vcs
+run: ^TestMessagesAreBoundedUTF8$
