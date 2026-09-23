@@ -300,13 +300,30 @@ func (s *Store) Delete(ctx context.Context, name string) error {
 	return nil
 }
 
+// errNoMirror: the store behind the cache keeps no copy of the root.
+var errNoMirror = errors.New("cache: the store behind the cache keeps no copy of the root")
+
+// mirrorer is what blob/split asks of an objects store for the root's copy.
+type mirrorer interface {
+	WriteMirror(ctx context.Context, value []byte) error
+	ReadMirror(ctx context.Context) ([]byte, error)
+}
+
 // WriteMirror passes the root's copy through to the store behind the cache
 // (blob/split): the copy is never cached.
 func (s *Store) WriteMirror(ctx context.Context, value []byte) error {
-	return errors.New("cache: not implemented")
+	m, ok := s.BlobStore.(mirrorer)
+	if !ok {
+		return errNoMirror
+	}
+	return m.WriteMirror(ctx, value)
 }
 
 // ReadMirror reads the root's copy from the store behind the cache.
 func (s *Store) ReadMirror(ctx context.Context) ([]byte, error) {
-	return nil, errors.New("cache: not implemented")
+	m, ok := s.BlobStore.(mirrorer)
+	if !ok {
+		return nil, errNoMirror
+	}
+	return m.ReadMirror(ctx)
 }

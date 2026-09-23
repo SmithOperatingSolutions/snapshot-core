@@ -25,6 +25,7 @@ type Store struct {
 	objects map[string]object
 	root    []byte
 	version blob.Version
+	mirror  []byte // the root's copy a split store keeps here
 }
 
 // New returns an empty store.
@@ -139,8 +140,20 @@ func (s *Store) SwapRoot(ctx context.Context, expected blob.Version, next []byte
 	return v, nil
 }
 
-// WriteMirror replaces the root's copy a split store keeps here.
-func (s *Store) WriteMirror(ctx context.Context, value []byte) error { return nil }
+// WriteMirror replaces the root's copy a split store keeps here (blob/split).
+func (s *Store) WriteMirror(ctx context.Context, value []byte) error {
+	if err := blob.CheckRootValue(value); err != nil {
+		return err
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.mirror = bytes.Clone(value)
+	return nil
+}
 
 // ReadMirror returns the root's copy, or nothing when there is none.
-func (s *Store) ReadMirror(ctx context.Context) ([]byte, error) { return nil, nil }
+func (s *Store) ReadMirror(ctx context.Context) ([]byte, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return bytes.Clone(s.mirror), nil
+}

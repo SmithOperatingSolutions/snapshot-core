@@ -3606,3 +3606,122 @@ find: func (s *Store) mirrorKey() string            { return s.prefix + "mirror"
 replace: func (s *Store) mirrorKey() string            { return s.objectKey("mirror") }
 pkg: ./core/blob/s3
 run: ^TestTheMirrorIsReplacedInPlace$
+
+id: split-root-lives-on-the-root-store
+file: core/blob/split/split.go
+find: func (s *Store) Root(ctx context.Context) (blob.Root, error) { return s.o.Roots.Root(ctx) }
+replace: func (s *Store) Root(ctx context.Context) (blob.Root, error) { return s.o.Objects.Root(ctx) }
+pkg: ./core/blob/split
+run: ^TestWaitMirrorsEachSwapBeforeReturning$
+
+id: split-wait-copies-each-swap
+file: core/blob/split/split.go
+find: case MirrorWait:\n\t\tfor attempt := 0; attempt < waitAttempts; attempt++ {
+replace: case MirrorOff:\n\t\tfor attempt := 0; attempt < waitAttempts; attempt++ {
+pkg: ./core/blob/split
+run: ^TestWaitMirrorsEachSwapBeforeReturning$
+
+id: split-wait-retries-a-failed-copy
+file: core/blob/split/split.go
+find: case MirrorWait:\n\t\tfor attempt := 0; attempt < waitAttempts; attempt++ {
+replace: case MirrorWait:\n\t\tfor attempt := 0; attempt < 1; attempt++ {
+pkg: ./core/blob/split
+run: ^TestWaitMirrorsEachSwapBeforeReturning$
+
+id: split-background-wakes-the-writer
+file: core/blob/split/split.go
+find: case s.wake <- struct{}{}:\n\t\tdefault:
+replace: case <-time.After(0):\n\t\tdefault:
+pkg: ./core/blob/split
+run: ^TestBackgroundCopiesEachSwap$
+
+id: split-a-copy-that-landed-is-recorded
+file: core/blob/split/split.go
+find: if bytes.Equal(s.pending, value) {\n\t\ts.pending, s.mirrored = nil, true
+replace: if bytes.Equal(s.pending, value) && false {\n\t\ts.pending, s.mirrored = nil, true
+pkg: ./core/blob/split
+run: ^TestWaitMirrorsEachSwapBeforeReturning$
+
+id: split-only-the-newest-copy-counts
+file: core/blob/split/split.go
+find: if bytes.Equal(s.pending, value) {\n\t\ts.pending, s.mirrored = nil, true
+replace: if bytes.Equal(s.pending, value) || true {\n\t\ts.pending, s.mirrored = nil, true
+pkg: ./core/blob/split
+run: ^TestBackgroundMirrorsTheNewestRootAndCloseFlushes$
+
+id: split-a-failed-copy-is-reported
+file: core/blob/split/split.go
+find: if err != nil {\n\t\ts.lastErr = err\n\t\treturn err
+replace: if err != nil {\n\t\treturn err
+pkg: ./core/blob/split
+run: ^TestWaitMirrorsEachSwapBeforeReturning$
+
+id: split-close-flushes-the-copy
+file: core/blob/split/split.go
+find: v := s.take()\n\t\t\tif v == nil {\n\t\t\t\treturn\n\t\t\t}
+replace: v := s.take()\n\t\t\tif v == nil || true {\n\t\t\t\treturn\n\t\t\t}
+pkg: ./core/blob/split
+run: ^TestBackgroundReportsAndRetriesAFailedCopy$
+
+id: split-new-needs-both-stores
+file: core/blob/split/split.go
+find: case o.Objects == nil || o.Roots == nil:
+replace: case o.Objects == nil && o.Roots == nil:
+pkg: ./core/blob/split
+run: ^TestNewRefusesBadOptions$
+
+id: split-new-checks-the-mode
+file: core/blob/split/split.go
+find: case o.Mirror.Mode < MirrorWait || o.Mirror.Mode > MirrorOff:
+replace: case o.Mirror.Mode < MirrorWait:
+pkg: ./core/blob/split
+run: ^TestNewRefusesBadOptions$
+
+id: split-periodic-needs-a-period
+file: core/blob/split/split.go
+find: case o.Mirror.Mode == MirrorPeriodic && o.Mirror.Every <= 0:
+replace: case o.Mirror.Mode == MirrorPeriodic && o.Mirror.Every < 0:
+pkg: ./core/blob/split
+run: ^TestNewRefusesBadOptions$
+
+id: split-a-copy-needs-a-mirrorer
+file: core/blob/split/split.go
+find: if !ok {\n\t\t\treturn nil, fmt.Errorf("%w: the objects store cannot hold a copy of the root", ErrOptions)
+replace: if !ok && false {\n\t\t\treturn nil, fmt.Errorf("%w: the objects store cannot hold a copy of the root", ErrOptions)
+pkg: ./core/blob/split
+run: ^TestNewRefusesBadOptions$
+
+id: split-recover-refuses-a-root
+file: core/blob/split/split.go
+find: if r.Version != blob.NoVersion {\n\t\treturn ErrRootPresent
+replace: if r.Version != blob.NoVersion && false {\n\t\treturn ErrRootPresent
+pkg: ./core/blob/split
+run: ^TestRecoverSeedsAnEmptyRootStoreFromTheCopy$
+
+id: split-recover-needs-a-copy
+file: core/blob/split/split.go
+find: if len(value) == 0 {\n\t\treturn ErrNoMirror
+replace: if len(value) == 0 && false {\n\t\treturn ErrNoMirror
+pkg: ./core/blob/split
+run: ^TestRecoverSeedsAnEmptyRootStoreFromTheCopy$
+
+id: mem-keeps-the-roots-copy
+file: core/blob/mem/mem.go
+find: s.mirror = bytes.Clone(value)
+replace: _ = value
+pkg: ./core/blob/split
+run: ^TestObjectsGoToOneStoreAndTheRootToTheOther$
+
+id: cache-passes-the-roots-copy-through
+file: core/blob/cache/cache.go
+find: return m.WriteMirror(ctx, value)
+replace: _ = m\n\treturn nil
+pkg: ./core/blob/cache
+run: ^TestTheRootsCopyPassesThroughTheCache$
+
+id: cache-refuses-a-copy-it-cannot-pass-through
+file: core/blob/cache/cache.go
+find: if !ok {\n\t\treturn errNoMirror\n\t}\n\treturn m.WriteMirror(ctx, value)
+replace: if !ok && false {\n\t\treturn errNoMirror\n\t}\n\treturn m.WriteMirror(ctx, value)
+pkg: ./core/blob/cache
+run: ^TestTheRootsCopyPassesThroughTheCache$
