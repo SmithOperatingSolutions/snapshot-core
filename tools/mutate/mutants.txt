@@ -3879,3 +3879,31 @@ find: removeAll(b.runs)\n\tb.runs = nil\n\tt, err := OpenTable(path)
 replace: b.runs = nil\n\tt, err := OpenTable(path)
 pkg: ./core/dedup
 run: ^TestATableAnswersEveryRecordItWasBuiltFrom$
+
+id: table-checks-the-version
+file: core/dedup/table.go
+find: case binary.LittleEndian.Uint16(hdr[4:]) != tableVersion:
+replace: case false && binary.LittleEndian.Uint16(hdr[4:]) != tableVersion:
+pkg: ./core/dedup
+run: ^TestATableThatDoesNotDecodeIsRefused$
+
+id: table-checks-the-reserved-bytes
+file: core/dedup/table.go
+find: case !bytes.Equal(hdr[20:], make([]byte, 12)):
+replace: case false && !bytes.Equal(hdr[20:], make([]byte, 12)):
+pkg: ./core/dedup
+run: ^TestATableThatDoesNotDecodeIsRefused$
+
+id: table-add-checks-the-value-width
+file: core/dedup/table.go
+find: if len(value) != b.valueLen {
+replace: if false {
+pkg: ./core/dedup
+run: ^TestABuilderRefusesAValueOfAnotherWidth$
+
+id: table-bounds-the-value-width
+file: core/dedup/table.go
+find: if valueLen < 0 || valueLen > MaxValueLen {
+replace: if valueLen < 0 {
+pkg: ./core/dedup
+run: ^TestABuilderRefusesAValueOfAnotherWidth$

@@ -214,6 +214,8 @@ func TestATableThatDoesNotDecodeIsRefused(t *testing.T) {
 		"empty":          nil,
 		"another value":  withValueLen(whole, 16),
 		"another period": withEvery(whole, 128),
+		"version 2":      withVersion(whole, 2),
+		"reserved set":   withReserved(whole),
 	}
 	for name, b := range forged {
 		tb, err := dedup.OpenTable(write(t, dir, name, b))
@@ -245,6 +247,37 @@ func withValueLen(b []byte, n uint16) []byte {
 	b = slices.Clone(b)
 	binary.LittleEndian.PutUint16(b[6:], n)
 	return b
+}
+
+func withVersion(b []byte, n uint16) []byte {
+	b = slices.Clone(b)
+	binary.LittleEndian.PutUint16(b[4:], n)
+	return b
+}
+
+func withReserved(b []byte) []byte {
+	b = slices.Clone(b)
+	b[31] = 1
+	return b
+}
+
+// A builder refuses a value of another width than the table's: a record
+// of the wrong size would put every later record out of step.
+func TestABuilderRefusesAValueOfAnotherWidth(t *testing.T) {
+	b, err := dedup.NewBuilder(t.TempDir(), 17)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := b.Add(hash.Hash{1}, make([]byte, 17)); err != nil {
+		t.Fatalf("positive control: a 17-byte value is refused: %v", err)
+	}
+	if err := b.Add(hash.Hash{2}, make([]byte, 16)); err == nil {
+		t.Fatal("a 16-byte value was added to a table of 17-byte values")
+	}
+	if _, err := dedup.NewBuilder(t.TempDir(), dedup.MaxValueLen+1); err == nil {
+		t.Fatalf("a table of %d-byte values was started, over the limit of %d", dedup.MaxValueLen+1, dedup.MaxValueLen)
+	}
+	b.Abort()
 }
 
 func withEvery(b []byte, n uint32) []byte {
