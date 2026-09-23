@@ -1216,3 +1216,10 @@ find: return nil, fmt.Errorf("%w: %w", chunk.ErrCorrupt, err)\n\t}\n\treturn inf
 replace: return nil, err\n\t}\n\treturn infos, nil
 pkg: ./core/chunk/packstore
 run: ^TestAMissingOrAlteredIndexObjectFailsOpen$
+
+id: packstore-missing-pack-is-corrupt
+file: core/chunk/packstore/packstore.go
+find: if errors.Is(err, blob.ErrNotFound) {\n\t\t\treturn nil, fmt.Errorf("%w: %s is in pack %s, which is missing"
+replace: if errors.Is(err, blob.ErrNotFound) && false {\n\t\t\treturn nil, fmt.Errorf("%w: %s is in pack %s, which is missing"
+pkg: ./core/chunk/packstore
+run: ^TestAChunkWhosePackIsGoneIsCorrupt$

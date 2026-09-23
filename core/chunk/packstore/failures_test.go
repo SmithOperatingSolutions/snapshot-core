@@ -86,3 +86,35 @@ func TestAMissingOrAlteredIndexObjectFailsOpen(t *testing.T) {
 		t.Errorf("Open with an altered index object = %v, want ErrCorrupt", err)
 	}
 }
+
+// A chunk the published index places in a pack that is gone is corruption,
+// not "never stored": ErrNotFound would tell a caller that published
+// history can be recomputed or re-put, when it has been lost.
+func TestAChunkWhosePackIsGoneIsCorrupt(t *testing.T) {
+	bs, kr := mem.New(), keyring(t)
+	s := open(t, bs, kr)
+	h, _ := s.Put(ctx, payload("its pack will vanish", 5000))
+	if err := s.CompareAndSetRoot(ctx, hash.Hash{}, h); err != nil {
+		t.Fatal(err)
+	}
+	name, _, _, ok := s.Location(h)
+	if !ok {
+		t.Fatal("fixture: the published chunk has no location")
+	}
+	uncached := packstore.Options{Blobs: bs, Keys: kr, Repo: repo, CacheBytes: -1}
+	fresh, err := packstore.Open(ctx, uncached)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer fresh.Close()
+	if _, err := fresh.Get(ctx, h); err != nil {
+		t.Fatalf("positive control: %v", err)
+	}
+	if err := bs.Delete(ctx, name); err != nil {
+		t.Fatal(err)
+	}
+	_, err = fresh.Get(ctx, h)
+	if !errors.Is(err, chunk.ErrCorrupt) || errors.Is(err, chunk.ErrNotFound) {
+		t.Fatalf("Get of a published chunk whose pack is gone = %v, want ErrCorrupt (and not ErrNotFound)", err)
+	}
+}
