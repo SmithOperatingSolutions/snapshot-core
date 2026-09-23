@@ -202,21 +202,36 @@ func stepCover(ctx context.Context, _ *config) error {
 	if len(pkgs) == 0 {
 		return errSkip{"no core/ or model/ packages yet"}
 	}
-	args := append([]string{"test", "-count=1", "-cover"}, pkgs...)
-	out, err := output(ctx, nil, "go", args...)
-	fmt.Print(out)
+	prof, err := os.CreateTemp("", "cover-*.out")
 	if err != nil {
+		return err
+	}
+	prof.Close()
+	defer os.Remove(prof.Name())
+	args := append([]string{"test", "-count=1", "-covermode=set",
+		"-coverpkg=" + strings.Join(pkgs, ","), "-coverprofile=" + prof.Name()}, pkgs...)
+	if err := stream(ctx, nil, "go", args...); err != nil {
 		return fmt.Errorf("tests failed under -cover: %w", err)
 	}
-	fs := GateCoverage(ParseCover(out))
+	b, err := os.ReadFile(prof.Name())
+	if err != nil {
+		return err
+	}
+	cs := CoverageFromProfile(string(b))
+	for _, c := range cs {
+		if th := Threshold(c.Pkg); th > 0 {
+			fmt.Printf("  %-40s %5.1f%%  (gate %.0f%%)\n", c.Pkg, c.Percent, th)
+		}
+	}
+	fs := GateCoverage(cs)
 	if len(fs) == 0 {
 		return nil
 	}
-	var b strings.Builder
+	var sb strings.Builder
 	for _, f := range fs {
-		fmt.Fprintf(&b, "%s %.1f%% < %.0f%%; ", f.Pkg, f.Percent, f.Threshold)
+		fmt.Fprintf(&sb, "%s %.1f%% < %.0f%%; ", f.Pkg, f.Percent, f.Threshold)
 	}
-	return fmt.Errorf("below the coverage gate: %s", strings.TrimSuffix(b.String(), "; "))
+	return fmt.Errorf("below the coverage gate: %s", strings.TrimSuffix(sb.String(), "; "))
 }
 
 func stepRedcheck(ctx context.Context, c *config) error {

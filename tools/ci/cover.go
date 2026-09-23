@@ -1,7 +1,6 @@
 package main
 
 import (
-	"regexp"
 	"strconv"
 	"strings"
 )
@@ -12,38 +11,10 @@ import (
 
 const modulePrefix = "github.com/SmithOperatingSolutions/snapshot-core/"
 
-// PackageCoverage is one package's statement coverage from `go test -cover`.
+// PackageCoverage is one package's statement coverage.
 type PackageCoverage struct {
 	Pkg     string
 	Percent float64
-	NoTests bool // "[no test files]"
-}
-
-var (
-	coverLine  = regexp.MustCompile(`^(?:ok\s+)?\s*(\S+)\s.*coverage: ([0-9.]+)% of statements`)
-	noTestLine = regexp.MustCompile(`^\?\s+(\S+)\s+\[no test files\]`)
-)
-
-// ParseCover extracts per-package coverage from `go test -cover` output.
-func ParseCover(out string) []PackageCoverage {
-	var cs []PackageCoverage
-	for _, line := range strings.Split(out, "\n") {
-		if m := noTestLine.FindStringSubmatch(line); m != nil {
-			cs = append(cs, PackageCoverage{Pkg: strings.TrimPrefix(m[1], modulePrefix), NoTests: true})
-			continue
-		}
-		if strings.HasPrefix(line, "FAIL") || strings.HasPrefix(line, "---") {
-			continue
-		}
-		if m := coverLine.FindStringSubmatch(line); m != nil {
-			p, err := strconv.ParseFloat(m[2], 64)
-			if err != nil {
-				continue
-			}
-			cs = append(cs, PackageCoverage{Pkg: strings.TrimPrefix(m[1], modulePrefix), Percent: p})
-		}
-	}
-	return cs
 }
 
 // Threshold is the minimum statement coverage a package must reach.
@@ -69,8 +40,8 @@ type CoverFailure struct {
 	Threshold float64
 }
 
-// GateCoverage returns the packages below their threshold. A core package with
-// no tests at all fails: zero coverage is not "not applicable".
+// GateCoverage returns the packages below their threshold. A package no test
+// reaches is in the profile at 0% and fails: zero is not "not applicable".
 func GateCoverage(cs []PackageCoverage) []CoverFailure {
 	var fs []CoverFailure
 	for _, c := range cs {
@@ -78,7 +49,7 @@ func GateCoverage(cs []PackageCoverage) []CoverFailure {
 		if th == 0 {
 			continue
 		}
-		if c.NoTests || c.Percent < th {
+		if c.Percent < th {
 			fs = append(fs, CoverFailure{Pkg: c.Pkg, Percent: c.Percent, Threshold: th})
 		}
 	}
@@ -90,5 +61,61 @@ func GateCoverage(cs []PackageCoverage) []CoverFailure {
 // it, so a package exercised only by another package's tests (core/dnx by its
 // compat suite, a contract suite by its backends) is measured as it is.
 func CoverageFromProfile(profile string) []PackageCoverage {
-	return nil // stub
+	type block struct {
+		pkg     string
+		stmts   int
+		covered bool
+	}
+	blocks := map[string]*block{} // file:range -> merged block
+	var order []string
+	for _, line := range strings.Split(profile, "\n") {
+		if line == "" || strings.HasPrefix(line, "mode:") {
+			continue
+		}
+		// github.com/.../core/dnx/dnx.go:10.1,12.2 2 1
+		fields := strings.Fields(line)
+		if len(fields) != 3 {
+			continue
+		}
+		stmts, err1 := strconv.Atoi(fields[1])
+		count, err2 := strconv.Atoi(fields[2])
+		file, _, ok := strings.Cut(fields[0], ":")
+		if err1 != nil || err2 != nil || !ok {
+			continue
+		}
+		b, seen := blocks[fields[0]]
+		if !seen {
+			dir := file[:max(strings.LastIndex(file, "/"), 0)]
+			b = &block{pkg: strings.TrimPrefix(dir, modulePrefix), stmts: stmts}
+			blocks[fields[0]] = b
+			order = append(order, fields[0])
+		}
+		b.covered = b.covered || count > 0
+	}
+	type tally struct{ total, covered int }
+	per := map[string]*tally{}
+	var pkgs []string
+	for _, k := range order {
+		b := blocks[k]
+		t, ok := per[b.pkg]
+		if !ok {
+			t = &tally{}
+			per[b.pkg] = t
+			pkgs = append(pkgs, b.pkg)
+		}
+		t.total += b.stmts
+		if b.covered {
+			t.covered += b.stmts
+		}
+	}
+	out := make([]PackageCoverage, 0, len(pkgs))
+	for _, p := range pkgs {
+		t := per[p]
+		pct := 100.0
+		if t.total > 0 {
+			pct = float64(t.covered) * 100 / float64(t.total)
+		}
+		out = append(out, PackageCoverage{Pkg: p, Percent: pct})
+	}
+	return out
 }
