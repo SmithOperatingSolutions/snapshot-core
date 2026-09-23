@@ -3065,3 +3065,17 @@ find: Depth: e.Content.Depth}, visit)
 replace: Depth: 0}, visit)
 pkg: ./e2e
 run: ^TestAFoldersHistoryComesThroughGC$
+
+id: object-ref-grammar-fuzzed
+file: core/object/object.go
+find: if r.Done() != nil || ref.Flags != 0 || ref.Model == 0 || ref.Root.Format == 0 {
+replace: if r.Done() != nil || ref.Flags != 0 {
+pkg: ./core/object
+run: ^FuzzDecodeRef$
+
+id: repo-config-short-fuzzed
+file: core/repo/repo.go
+find: if len(b) < headerLen {
+replace: if len(b) < headerLen && false {
+pkg: ./core/repo
+run: ^FuzzOpenConfig$
