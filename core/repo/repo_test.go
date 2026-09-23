@@ -927,3 +927,101 @@ func TestAnAdminCollectsTheRepositoryOnTheRawStore(t *testing.T) {
 		t.Fatalf("after GC main is %v (%v), want %v", got.Hash, err, head.Hash)
 	}
 }
+
+// beforeFirstSwap runs do once, before the store's first root swap: another
+// Init's whole run, while this one is about to claim.
+type beforeFirstSwap struct {
+	blob.BlobStore
+	do func()
+}
+
+func (s *beforeFirstSwap) SwapRoot(ctx context.Context, expected blob.Version, next []byte) (blob.Version, error) {
+	if do := s.do; do != nil {
+		s.do = nil
+		do()
+	}
+	return s.BlobStore.SwapRoot(ctx, expected, next)
+}
+
+// Two Inits with the same key finishing one stopped Init at once: both take
+// its config, the one whose swap lands owns the store, the other is
+// ErrExists, and the store still holds that one config; the key opens the
+// repository and reads main.
+func TestAStoppedInitFinishedTwiceAtOnceIsFinishedOnce(t *testing.T) {
+	bs := mem.New()
+	stopped := &failingSwap{BlobStore: bs, fail: true}
+	keys := keyring(t)
+	if _, err := repo.Init(ctx, alice, options(t, stopped, keys)); !errors.Is(err, errBackend) {
+		t.Fatalf("fixture: an Init whose root swap fails = %v, want the backend's error", err)
+	}
+	hooked := &beforeFirstSwap{BlobStore: bs}
+	other := options(t, bs, keys)
+	var landed *repo.Repo
+	hooked.do = func() { landed = initRepo(t, other) }
+	if _, err := repo.Init(ctx, alice, options(t, hooked, keys)); !errors.Is(err, repo.ErrExists) {
+		t.Fatalf("the finishing Init that lost the swap = %v, want ErrExists", err)
+	}
+	if landed == nil {
+		t.Fatal("fixture: the losing Init never swapped, so the other never ran")
+	}
+	head, err := landed.Head(ctx, alice, vcs.MainBranch)
+	if err != nil {
+		t.Fatal(err)
+	}
+	landed.Close()
+	if n := countConfigs(t, bs); n != 1 {
+		t.Fatalf("the store holds %d configs, want the stopped Init's one", n)
+	}
+	re, err := repo.Open(ctx, other)
+	if err != nil {
+		t.Fatalf("the finished repository does not open: %v", err)
+	}
+	defer re.Close()
+	if got, err := re.Head(ctx, alice, vcs.MainBranch); err != nil || got.Hash != head.Hash {
+		t.Fatalf("main is %v (%v), want %s", got.Hash, err, head.Hash.Short())
+	}
+}
+
+// Among configs that open under the key, Open takes the one whose repo id
+// authenticates the root: here a config of the same key that sorts first
+// (a race lost long ago) and a page of another key's, with the real one
+// last on the second page. GC finds the repository the same way.
+func TestOpenTakesTheConfigThatAuthenticatesTheRoot(t *testing.T) {
+	bs := mem.New()
+	keys := keyring(t)
+	o := options(t, bs, keys)
+	r := initRepo(t, o)
+	real := r.Config
+	head, err := r.Head(ctx, alice, vcs.MainBranch)
+	if err != nil {
+		t.Fatal(err)
+	}
+	r.Close()
+	stray := forgeConfig(t, keys, seal.RepoID{}, "SCRC", 1, plaintext("SCRP", 1, repo.DefaultGeometry()))
+	if err := bs.Put(ctx, "config/"+fmt.Sprintf("%032x", 0), bytes.NewReader(stray), int64(len(stray))); err != nil { // sorts first
+		t.Fatal(err)
+	}
+	foreign := keyring(t)
+	for i := 0; i < blob.MaxListPage; i++ {
+		var id seal.RepoID
+		binary.BigEndian.PutUint32(id[:4], uint32(i+1))
+		b := forgeConfig(t, foreign, id, "SCRC", 1, plaintext("SCRP", 1, repo.DefaultGeometry()))
+		if err := bs.Put(ctx, "config/"+fmt.Sprintf("%x", id[:]), bytes.NewReader(b), int64(len(b))); err != nil {
+			t.Fatal(err)
+		}
+	}
+	re, err := repo.Open(ctx, o)
+	if err != nil {
+		t.Fatalf("Open among %d other configs: %v", blob.MaxListPage+1, err)
+	}
+	defer re.Close()
+	if re.Config != real {
+		t.Fatalf("Open took config %x, want the root's %x", re.Config.RepoID, real.RepoID)
+	}
+	if got, err := re.Head(ctx, alice, vcs.MainBranch); err != nil || got.Hash != head.Hash {
+		t.Fatalf("main is %v (%v), want %s", got.Hash, err, head.Hash.Short())
+	}
+	if _, err := repo.GC(ctx, alice, o, time.Hour); err != nil {
+		t.Fatalf("GC among the other configs: %v", err)
+	}
+}

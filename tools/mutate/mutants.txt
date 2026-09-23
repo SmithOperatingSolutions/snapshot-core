@@ -3536,3 +3536,24 @@ find: default:\n\t\t\t\treturn nil, nil, err
 replace: default:
 pkg: ./core/repo
 run: ^TestEveryStoreFailureIsSurvivable$
+
+id: repo-init-that-loses-the-swap-is-exists
+file: core/repo/repo.go
+find: if errors.Is(err, vcs.ErrExists) {\n\t\t\treturn nil, ErrExists
+replace: if errors.Is(err, vcs.ErrExists) && false {\n\t\t\treturn nil, ErrExists
+pkg: ./core/repo
+run: ^TestAStoppedInitFinishedTwiceAtOnceIsFinishedOnce$
+
+id: repo-open-takes-the-config-that-authenticates-the-root
+file: core/repo/repo.go
+find: if errors.Is(err, packstore.ErrManifest) {\n\t\t\tcontinue // the root is not this config's
+replace: if errors.Is(err, packstore.ErrManifest) {\n\t\t\treturn c, nil // the root is not this config's
+pkg: ./core/repo
+run: ^TestOpenTakesTheConfigThatAuthenticatesTheRoot$
+
+id: repo-configs-read-every-page
+file: core/repo/repo.go
+find: if len(page) < blob.MaxListPage {\n\t\t\treturn ours, others, nil
+replace: if len(page) <= blob.MaxListPage {\n\t\t\treturn ours, others, nil
+pkg: ./core/repo
+run: ^TestOpenTakesTheConfigThatAuthenticatesTheRoot$
