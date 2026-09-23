@@ -84,6 +84,7 @@ func orphanRound(t *testing.T, bs blob.BlobStore, kr *seal.Keyring, live func(ha
 		t.Fatalf("Begin: %v", err)
 	}
 	r.Orphans(candidates)
+	r.Repack(packstore.Repack{Off: true}) // condemnation alone; repacking has tests of its own
 	out, err := r.Apply(ctx, live, now, time.Hour)
 	if err != nil {
 		t.Fatalf("Apply at %v: %v", now.Sub(t0), err)

@@ -3320,10 +3320,10 @@ replace: for _, ns := range []hash.Hash{ws.Merge.PreStaged} {
 pkg: ./core/vcs
 run: ^TestAWalkNamesAllTheRepositoryHolds$
 
-id: manifest-condemned-kinds-end-at-four
+id: manifest-condemned-kinds-end-at-five
 file: core/chunk/packstore/manifest.go
-find: e.kind > deletedIndex {
-replace: e.kind > deletedIndex+1 {
+find: e.kind > repackedPack {
+replace: e.kind > repackedPack+1 {
 pkg: ./core/chunk/packstore
 run: ^TestForgedManifestsAreRefused$
 
@@ -3725,3 +3725,94 @@ find: if !ok {\n\t\treturn errNoMirror\n\t}\n\treturn m.WriteMirror(ctx, value)
 replace: if !ok && false {\n\t\treturn errNoMirror\n\t}\n\treturn m.WriteMirror(ctx, value)
 pkg: ./core/blob/cache
 run: ^TestTheRootsCopyPassesThroughTheCache$
+
+id: repack-only-a-pack-with-a-dead-frame
+file: core/chunk/packstore/gc.go
+find: dead && share < policy.MaxLive {
+replace: (dead || true) && share < policy.MaxLive {
+pkg: ./core/chunk/packstore
+run: ^TestRepackingSpendsItsBudgetOnTheEmptiestPacksFirst$
+
+id: repack-honors-the-threshold
+file: core/chunk/packstore/gc.go
+find: dead && share < policy.MaxLive {
+replace: dead && share <= 1 {
+pkg: ./core/chunk/packstore
+run: ^TestAPackAboveTheThresholdIsKeptWhole$
+
+id: repack-can-be-turned-off
+file: core/chunk/packstore/gc.go
+find: if !policy.Off { // a reprieved pack too
+replace: if true { // a reprieved pack too
+pkg: ./core/chunk/packstore
+run: ^TestAPackAboveTheThresholdIsKeptWhole$
+
+id: repack-stops-at-the-budget
+file: core/chunk/packstore/gc.go
+find: if out.Copied >= budget {
+replace: if false {
+pkg: ./core/chunk/packstore
+run: ^TestRepackingSpendsItsBudgetOnTheEmptiestPacksFirst$
+
+id: repack-emptiest-first
+file: core/chunk/packstore/gc.go
+find: return candidates[i].share < candidates[j].share
+replace: return candidates[i].share > candidates[j].share
+pkg: ./core/chunk/packstore
+run: ^TestRepackingSpendsItsBudgetOnTheEmptiestPacksFirst$
+
+id: repack-never-reprieves-a-repacked-pack
+file: core/chunk/packstore/gc.go
+find: if c, ok := repacked[p.Name]; ok {
+replace: if c, ok := repacked[p.Name]; ok && false {
+pkg: ./core/chunk/packstore
+run: ^TestARoundRepacksAPackThatIsMostlyDead$
+
+id: repack-expires-a-repacked-pack-after-grace
+file: core/chunk/packstore/gc.go
+find: if expired(c) {\n\t\t\t\tout.Expired = append(out.Expired, p.Name)
+replace: if false {\n\t\t\t\tout.Expired = append(out.Expired, p.Name)
+pkg: ./core/chunk/packstore
+run: ^TestARoundRepacksAPackThatIsMostlyDead$
+
+id: repack-lists-the-new-packs-and-moves-gcgen
+file: core/chunk/packstore/gc.go
+find: if gone > 0 || out.Repacked > 0 {
+replace: if gone > 0 {
+pkg: ./core/chunk/packstore
+run: ^TestARoundRepacksAPackThatIsMostlyDead$
+
+id: repack-copies-a-shared-chunk-once
+file: core/chunk/packstore/gc.go
+find: if !live(e.Hash) || moved[e.Hash] {
+replace: if !live(e.Hash) {
+pkg: ./core/chunk/packstore
+run: ^TestRepackingCopiesAChunkTwoPacksShareOnce$
+
+id: repack-checks-the-packs-length
+file: core/chunk/packstore/gc.go
+find: if int64(len(b)) != c.Size {
+replace: if false {
+pkg: ./core/chunk/packstore
+run: ^TestRepackingRefusesACorruptPack$
+
+id: packstore-a-repacked-pack-is-condemned-to-writers
+file: core/chunk/packstore/packstore.go
+find: if c.kind == condemnedPack || c.kind == repackedPack {
+replace: if c.kind == condemnedPack {
+pkg: ./core/chunk/packstore
+run: ^TestAfterARepackWritersFindTheNewPacks$
+
+id: packstore-packs-in-service-are-indexed-first
+file: core/chunk/packstore/packstore.go
+find: if cond[info.Name] == (pass == 1) {
+replace: if cond[info.Name] == (pass == 0) {
+pkg: ./core/chunk/packstore
+run: ^TestARoundRepacksAPackThatIsMostlyDead$
+
+id: gc-run-passes-the-repack-policy
+file: core/gc/gc.go
+find: r.Repack(o.Repack)
+replace: r.Repack(packstore.Repack{Off: true})
+pkg: ./core/gc
+run: ^TestGCSafetyProperty$

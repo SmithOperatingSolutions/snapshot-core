@@ -57,6 +57,7 @@ func round(t *testing.T, bs blob.BlobStore, kr *seal.Keyring, live func(hash.Has
 	if err != nil {
 		t.Fatalf("Begin: %v", err)
 	}
+	r.Repack(packstore.Repack{Off: true}) // condemnation alone; repacking has tests of its own
 	out, err := r.Apply(ctx, live, now, time.Hour)
 	if err != nil {
 		t.Fatalf("Apply at %v: %v", now.Sub(t0), err)

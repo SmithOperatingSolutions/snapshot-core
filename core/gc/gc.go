@@ -100,6 +100,7 @@ func Run(ctx context.Context, o Options) (Report, error) {
 			return rep, err
 		}
 		r.Orphans(old) // recorded in the swap, deleted only once it lands
+		r.Repack(o.Repack)
 		out, err := r.Apply(ctx, func(h hash.Hash) bool { return live[h] }, clock(), grace)
 		if errors.Is(err, packstore.ErrMoved) {
 			continue
@@ -108,6 +109,7 @@ func Run(ctx context.Context, o Options) (Report, error) {
 			return rep, err
 		}
 		rep.Live, rep.Condemned, rep.Reprieved = len(live), out.Condemned, out.Reprieved
+		rep.Repacked, rep.Copied = out.Repacked, out.Copied
 		for _, name := range append(append(out.Expired, out.Orphans...), probes...) {
 			if err := o.Blobs.Delete(ctx, name); err != nil {
 				return rep, err

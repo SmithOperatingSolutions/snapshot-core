@@ -308,11 +308,13 @@ Beyond the list: merging what a branch already holds changes nothing (`TestMergi
 | the GC property's reach | The spanning edit lost a session in only about 94% of runs, so a check that one did was flaky | A slow-writer step, whose pack GC deletes as an orphan before it publishes |
 | the design of #8 | `Init` claimed a store by writing one config put-if-absent; on a best-effort store two `Init`s overwrote each other's config and the first key lost its repository (`TestInitsRacingDoNotOverwriteEachOther` made the race certain) | Each `Init` writes `config/<repo id>` and claims the store with the root's first swap |
 | the split store's tests | Two fixtures held only when the scheduler cooperated (a writer catching the first of three swaps; a copy landing before Close), and a string order check read "three" before "two" | The writer is held inside its first copy before the next swaps; numbered roots |
+| the GC property's convergence bound (#1) | Repacking left the store over twice its live bytes for one grace window more than it should: a condemned pack found live again and mostly dead was reprieved in one round and repacked only in the next; and a pack whose every chunk is live looked mostly dead by its overhead, so tiny root packs were rewritten for nothing | A reprieved pack is repacked in the same round; a pack with no dead frame is never a candidate |
 | (redcheck on this branch) | Build-tagged tests unjudged; `TestMain` judged; pairs not matched by scope; contract changes invisible; environment-bound callers refused; no `main` in a new clone; a tagged backfill's mutants built without its tag; fuzz targets not counted as tests | Tool fixed each time, with a red test |
 
 ### Batch 2 (in progress)
 
 - [x] #8 The root apart from the objects: `TestObjectsOnlyRunsWhereConditionalWritesAreIgnored`, `TestObjectsOnlyPutIsAHeadThenAPut`, `TestTheMirrorIsReplacedInPlace`; the split store's contract and modes (`TestContractOverASplitStore`, `TestWaitMirrorsEachSwapBeforeReturning`, `TestBackgroundMirrorsTheNewestRootAndCloseFlushes`, `TestBackgroundCopiesEachSwap`, `TestBackgroundReportsAndRetriesAFailedCopy`, `TestPeriodicMirrorsOnItsClock`, `TestOffKeepsNoCopy`, `TestRecoverSeedsAnEmptyRootStoreFromTheCopy`); `TestTheRootsCopyPassesThroughTheCache`; two `Init`s racing (`TestAnotherInitCannotTakeOverARepository`, `TestInitsRacingDoNotOverwriteEachOther`, `TestAStoppedInitFinishedTwiceAtOnceIsFinishedOnce`, `TestOpenTakesTheConfigThatAuthenticatesTheRoot`); end to end on an endpoint ignoring conditional writes, recovered from the copy, `TestARepositoryRunsOnAnEndpointWithoutConditionalWrites`.
+- [x] #1 Reclaiming space in mixed packs: a round repacks kept packs that are mostly dead, emptiest first within a byte budget, records them under a kind of their own and expires them a grace window on (`TestARoundRepacksAPackThatIsMostlyDead`, `TestAPackAboveTheThresholdIsKeptWhole`, `TestRepackingSpendsItsBudgetOnTheEmptiestPacksFirst`, `TestAfterARepackWritersFindTheNewPacks`, `TestRepackingCopiesAChunkTwoPacksShareOnce`, `TestRepackingRefusesACorruptPack`); the GC property converges to at most twice the live bytes (`TestGCSafetyProperty`).
 - [ ] #4 The real provider, nightly: the job and its two tests are in; the secrets are the admin's, and the item closes on the first green night. The MinIO tier runs the e2e package on every push meanwhile.
 
 ## Next
@@ -320,9 +322,10 @@ Beyond the list: merging what a branch already holds changes nothing (`TestMergi
 The storage core's milestones, C0 to C4, are done. What remains is outside
 them, each tracked as an issue:
 
-1. **Reclaiming space in mixed packs** (#1): GC frees whole packs;
-   rewriting mostly-dead ones (their live chunks copied out, the pack
-   condemned) is the step after v1.
+1. ✅ **Reclaiming space in mixed packs** (#1): a GC round repacks packs
+   that are mostly dead, within a per-run byte budget
+   (`TestARoundRepacksAPackThatIsMostlyDead`,
+   `TestRepackingSpendsItsBudgetOnTheEmptiestPacksFirst`).
 2. ✅ **Reading and deleting tags** (#2): `Tags`, `Tag` and `DeleteTag`
    (`TestTagsAreListedAndReadBack`, `TestAMissingOrDeletedTagIsNotFound`,
    `TestForgedTagRefsAreCorrupt`; what only a deleted tag reached is

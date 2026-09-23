@@ -575,12 +575,16 @@ in one GET, opens its live frames and seals them into new packs, uploads
 those before its swap (a swap that loses leaves them orphans, which a later
 run deletes), lists them in its index objects, and records the old pack as
 repacked (condemned kind 5): a repacked pack is never reprieved by the
-chunks it still holds, since the new packs hold them, it is dropped from
-the index objects at once, and it expires a grace window later like any
-condemned pack, so a reader holding an older manifest still finds it. The
-round moves gcGen, so every store rebuilds its index and finds the live
-chunks in the new packs at once, and a writer never deduplicates against
-the old pack again.
+chunks it still holds, since the new packs hold them; it stays listed in
+the index objects and expires a grace window later like any condemned
+pack, so a reader that located a chunk in it still reads it, and one that
+reads it after it is gone refreshes and finds the chunk in its new pack.
+A pack whose every chunk is live is never a candidate, whatever its
+overhead; a condemned pack found live again and mostly dead is repacked in
+the round that reprieves it. The round moves gcGen, so every store
+rebuilds its index, adding the packs still in service before the
+condemned and repacked ones, and finds the live chunks in the new packs
+at once; a writer never deduplicates against a repacked pack.
 
 **Proof.** `TestGCSafetyProperty` drives random histories the way a host
 following the contract does, with GC between the steps as the clock moves

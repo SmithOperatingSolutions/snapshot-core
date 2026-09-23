@@ -174,40 +174,60 @@ func (s *Store) refresh(ctx context.Context) error {
 	// Manifests only move forward (every swap increments seq); a slower
 	// refresh must not roll back what a faster one saw.
 	newer := s.ver == blob.NoVersion || m.seq > s.man.seq
+	cond := condemnedPacks(m)
 	if rebuild && newer {
 		x := dedup.New()
 		s.loaded = map[[32]byte]bool{}
+		var infos []pack.Info
 		for _, sum := range m.indexes {
-			for _, info := range loaded[sum] {
-				x.Add(info)
-			}
+			infos = append(infos, loaded[sum]...)
 			s.loaded[sum] = true
 		}
+		addPacks(x, infos, cond)
 		for _, info := range s.unpublished {
 			x.Add(info)
 		}
 		s.index = x
 	} else if !rebuild {
-		for sum, infos := range loaded {
+		var infos []pack.Info
+		for sum, packs := range loaded {
 			if s.loaded[sum] {
 				continue
 			}
-			for _, info := range infos {
-				s.index.Add(info)
-			}
+			infos = append(infos, packs...)
 			s.loaded[sum] = true
 		}
+		addPacks(s.index, infos, cond)
 	}
 	if newer {
 		s.man, s.ver = m, r.Version
-		s.condemned = map[string]bool{}
-		for _, c := range m.condemned {
-			if c.kind == condemnedPack {
-				s.condemned[dedup.PackName(c.sum)] = true
+		s.condemned = cond
+	}
+	return nil
+}
+
+// addPacks adds packs to an index, those still in service first, so a chunk
+// a repacked pack also holds resolves to its new pack (DESIGN §9).
+func addPacks(x *dedup.Index, infos []pack.Info, cond map[string]bool) {
+	for pass := range 2 {
+		for _, info := range infos {
+			if cond[info.Name] == (pass == 1) {
+				x.Add(info)
 			}
 		}
 	}
-	return nil
+}
+
+// condemnedPacks is the packs m condemns or has repacked: none is
+// deduplicated against, since each is on its way out.
+func condemnedPacks(m manifest) map[string]bool {
+	out := map[string]bool{}
+	for _, c := range m.condemned {
+		if c.kind == condemnedPack || c.kind == repackedPack {
+			out[dedup.PackName(c.sum)] = true
+		}
+	}
+	return out
 }
 
 func (s *Store) loadIndex(ctx context.Context, sum [32]byte) ([]pack.Info, error) {

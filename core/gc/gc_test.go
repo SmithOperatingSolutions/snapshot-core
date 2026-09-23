@@ -428,7 +428,7 @@ func TestGCKeepsWhatTheRefsReachAndDeletesTheRest(t *testing.T) {
 	if first.Condemned == 0 || len(first.Deleted) != 0 || first.Live == 0 {
 		t.Fatalf("the first run condemned %d packs, deleted %v, marked %d; want some condemned, none deleted", first.Condemned, first.Deleted, first.Live)
 	}
-	if n := count(t, w.blobs, "packs/"); n != packs {
+	if n := count(t, w.blobs, "packs/"); n < packs {
 		t.Fatalf("the first run left %d packs of %d: it deleted before the grace window", n, packs)
 	}
 	want := w.readable()

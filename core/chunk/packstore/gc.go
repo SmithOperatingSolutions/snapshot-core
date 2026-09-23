@@ -5,10 +5,12 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"sort"
 	"time"
 
 	"github.com/SmithOperatingSolutions/snapshot-core/core/blob"
+	"github.com/SmithOperatingSolutions/snapshot-core/core/chunk"
 	"github.com/SmithOperatingSolutions/snapshot-core/core/dedup"
 	"github.com/SmithOperatingSolutions/snapshot-core/core/hash"
 	"github.com/SmithOperatingSolutions/snapshot-core/core/pack"
@@ -120,7 +122,12 @@ func (r *Round) Apply(ctx context.Context, live func(hash.Hash) bool, now time.T
 	}
 	at := now.UnixNano()
 	expired := func(c condemned) bool { return at-c.at >= int64(grace) }
+	policy, err := r.repack.resolved()
+	if err != nil {
+		return Outcome{}, err
+	}
 	packs := map[string]condemned{}
+	repacked := map[string]condemned{} // packs whose live chunks are already in new packs
 	var next []condemned
 	recorded := map[string]bool{} // orphans already recorded as deleted
 	lapsed := 0
@@ -128,6 +135,8 @@ func (r *Round) Apply(ctx context.Context, live func(hash.Hash) bool, now time.T
 		switch {
 		case c.kind == condemnedPack:
 			packs[dedup.PackName(c.sum)] = c
+		case c.kind == repackedPack:
+			repacked[dedup.PackName(c.sum)] = c
 		case c.kind == deletedPack || c.kind == deletedIndex:
 			if at-c.at >= int64(grace+recheckAfter) { // every writer has looked its uploads up by now
 				lapsed++
@@ -142,11 +151,29 @@ func (r *Round) Apply(ctx context.Context, live func(hash.Hash) bool, now time.T
 		}
 	}
 	var keep []pack.Info
+	var candidates []candidate
 	gone := 0
 	for _, p := range r.packs {
+		if c, ok := repacked[p.Name]; ok {
+			// Never reprieved: the new packs hold its live chunks. It stays
+			// listed until it expires, for readers that located a chunk in it.
+			if expired(c) {
+				out.Expired = append(out.Expired, p.Name)
+				gone++
+			} else {
+				keep = append(keep, p)
+				next = append(next, c)
+			}
+			continue
+		}
 		c, was := packs[p.Name]
 		switch {
 		case isLive(p, live):
+			if !policy.Off { // a reprieved pack too: mostly dead, it is repacked at once
+				if share, dead := liveShare(p, live); dead && share < policy.MaxLive {
+					candidates = append(candidates, candidate{p, share})
+				}
+			}
 			keep = append(keep, p)
 			if was {
 				out.Reprieved++
@@ -169,9 +196,21 @@ func (r *Round) Apply(ctx context.Context, live func(hash.Hash) bool, now time.T
 			keep = append(keep, p)
 		}
 	}
+	fresh, err := r.copyLive(ctx, candidates, live, policy.Budget, &out)
+	if err != nil {
+		return Outcome{}, err
+	}
+	for _, c := range candidates[:out.Repacked] {
+		sum, err := dedup.PackSum(c.Name)
+		if err != nil {
+			return Outcome{}, err
+		}
+		next = append(next, condemned{kind: repackedPack, sum: sum, at: at})
+	}
+	keep = append(keep, fresh...)
 	upd := r.man
 	upd.seq++
-	if gone > 0 {
+	if gone > 0 || out.Repacked > 0 {
 		sums, err := writeIndexes(ctx, r.o, keep)
 		if err != nil {
 			return Outcome{}, err
@@ -217,7 +256,7 @@ func (r *Round) Apply(ctx context.Context, live func(hash.Hash) bool, now time.T
 		out.Orphans = append(out.Orphans, name)
 	}
 	upd.condemned = next
-	if out.Condemned == 0 && out.Reprieved == 0 && len(out.Expired) == 0 && added == 0 && lapsed == 0 {
+	if out.Condemned == 0 && out.Reprieved == 0 && len(out.Expired) == 0 && added == 0 && lapsed == 0 && out.Repacked == 0 {
 		return out, nil
 	}
 	sealed, err := upd.seal(r.o.Keys, r.o.Repo)
@@ -231,6 +270,139 @@ func (r *Round) Apply(ctx context.Context, live func(hash.Hash) bool, now time.T
 		return Outcome{}, err
 	}
 	return out, nil
+}
+
+// resolved is the policy with its defaults filled in.
+func (p Repack) resolved() (Repack, error) {
+	if p.MaxLive == 0 {
+		p.MaxLive = DefaultMaxLive
+	}
+	if p.Budget == 0 {
+		p.Budget = DefaultBudget
+	}
+	if p.MaxLive < 0 || p.MaxLive > 1 || p.Budget < 0 {
+		return Repack{}, fmt.Errorf("packstore: repack policy: live share %v must be within 0..1 and the budget %d non-negative", p.MaxLive, p.Budget)
+	}
+	return p, nil
+}
+
+// candidate is a kept pack that is mostly dead.
+type candidate struct {
+	pack.Info
+	share float64 // its live bytes over its size
+}
+
+// liveShare is the share of a pack's bytes its live frames take, and
+// whether it holds a dead frame at all: a pack whose every chunk is live
+// has nothing to reclaim, whatever its overhead.
+func liveShare(p pack.Info, live func(hash.Hash) bool) (share float64, dead bool) {
+	var n int64
+	for _, e := range p.Entries {
+		if live(e.Hash) {
+			n += int64(e.StoredLen)
+		} else {
+			dead = true
+		}
+	}
+	return float64(n) / float64(p.Size), dead
+}
+
+// copyLive repacks candidates emptiest first until budget bytes of frames
+// have been copied, reading each in one GET, opening its live frames and
+// sealing them into new packs, which it uploads and returns. It sorts
+// candidates so that the first out.Repacked of them are the ones repacked.
+func (r *Round) copyLive(ctx context.Context, candidates []candidate, live func(hash.Hash) bool, budget int64, out *Outcome) ([]pack.Info, error) {
+	sort.Slice(candidates, func(i, j int) bool {
+		if candidates[i].share != candidates[j].share {
+			return candidates[i].share < candidates[j].share
+		}
+		return candidates[i].Name < candidates[j].Name
+	})
+	size := r.o.PackSize
+	if size == 0 {
+		size = DefaultPackSize
+	}
+	codec, err := pack.NewCodec()
+	if err != nil {
+		return nil, err
+	}
+	defer codec.Close()
+	var fresh []pack.Info
+	var w *pack.Writer
+	finish := func() error {
+		if w == nil || w.Count() == 0 {
+			return nil
+		}
+		b, err := w.Finish()
+		w = nil
+		if err != nil {
+			return err
+		}
+		if err := r.o.Blobs.Put(ctx, b.Name, bytes.NewReader(b.Bytes), int64(len(b.Bytes))); err != nil && !errors.Is(err, blob.ErrExists) {
+			return fmt.Errorf("packstore: uploading repacked %s: %w", b.Name, err)
+		}
+		fresh = append(fresh, b.Info)
+		return nil
+	}
+	moved := map[hash.Hash]bool{} // copied this round, from an emptier pack
+	for _, c := range candidates {
+		if out.Copied >= budget {
+			break
+		}
+		rc, err := r.o.Blobs.Get(ctx, c.Name, 0, -1)
+		if err != nil {
+			return nil, fmt.Errorf("packstore: repacking %s: %w", c.Name, err)
+		}
+		b, err := io.ReadAll(io.LimitReader(rc, c.Size+1))
+		_ = rc.Close()
+		if err != nil {
+			return nil, err
+		}
+		if int64(len(b)) != c.Size {
+			return nil, fmt.Errorf("%w: pack %s is %d bytes, the index says %d", chunk.ErrCorrupt, c.Name, len(b), c.Size)
+		}
+		keys, err := pack.DeriveKeys(r.o.Keys, r.o.Repo, c.Salt)
+		if err != nil {
+			return nil, err
+		}
+		for _, e := range c.Entries {
+			if !live(e.Hash) || moved[e.Hash] {
+				continue
+			}
+			end := int64(e.Offset) + int64(e.StoredLen)
+			if end > c.Size {
+				return nil, fmt.Errorf("%w: pack %s: frame %s past its end", chunk.ErrCorrupt, c.Name, e.Hash.Short())
+			}
+			data, err := pack.OpenFrame(keys, codec, e, b[e.Offset:end])
+			if err != nil {
+				return nil, fmt.Errorf("%w: pack %s, chunk %s: %w", chunk.ErrCorrupt, c.Name, e.Hash.Short(), err)
+			}
+			if w == nil {
+				if w, err = pack.NewWriter(r.o.Keys, r.o.Repo, codec, size); err != nil {
+					return nil, err
+				}
+			}
+			if err = w.Add(e.Hash, data); errors.Is(err, pack.ErrFull) {
+				if err = finish(); err != nil {
+					return nil, err
+				}
+				if w, err = pack.NewWriter(r.o.Keys, r.o.Repo, codec, size); err != nil {
+					return nil, err
+				}
+				err = w.Add(e.Hash, data)
+			}
+			if err != nil {
+				return nil, err
+			}
+			moved[e.Hash] = true
+			out.Copied += int64(e.StoredLen)
+		}
+		out.Repacked++
+	}
+	if err := finish(); err != nil {
+		return nil, err
+	}
+	return fresh, nil
 }
 
 // deletion is the record of deleting name, a pack or an index object, as an
