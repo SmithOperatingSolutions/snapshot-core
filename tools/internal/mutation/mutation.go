@@ -32,7 +32,8 @@ type Mutant struct {
 	Replace string // what it becomes
 	Pkg     string // package to test, e.g. ./core/blob/mem
 	Run     string // -run pattern naming the guarding test
-	Line    int    // line in the mutants file, for messages
+	Env     []string // extra KEY=VALUE for the test run (e.g. crash iterations)
+	Line    int      // line in the mutants file, for messages
 }
 
 // Outcome is what happened to one mutant.

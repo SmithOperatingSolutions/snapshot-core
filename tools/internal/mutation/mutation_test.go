@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 )
@@ -15,6 +16,7 @@ find: return a + b
 replace: return a - b
 pkg: ./calc
 run: ^TestAdd$
+env: CALC_MODE=strict
 
 id: add-weak
 file: calc/calc.go
@@ -33,8 +35,8 @@ func TestParseReadsEveryField(t *testing.T) {
 		t.Fatalf("parsed %d mutants from a file holding 2", len(ms))
 	}
 	want := Mutant{ID: "add-sign", File: "calc/calc.go", Find: "return a + b", Replace: "return a - b",
-		Pkg: "./calc", Run: "^TestAdd$", Line: 2}
-	if ms[0] != want {
+		Pkg: "./calc", Run: "^TestAdd$", Env: []string{"CALC_MODE=strict"}, Line: 2}
+	if !reflect.DeepEqual(ms[0], want) {
 		t.Fatalf("first mutant = %+v\nwant %+v", ms[0], want)
 	}
 }
@@ -129,5 +131,33 @@ func TestRunNeverTouchesTheWorkingTree(t *testing.T) {
 	}
 	if string(after) != string(before) {
 		t.Fatalf("mutating left the working tree changed:\n%s", after)
+	}
+}
+
+// Some guards are only seen at scale (the crash harness needs 1,000 kills to
+// catch a torn write); a mutant can set the test's environment.
+func TestParseAndRunHonorEnv(t *testing.T) {
+	ms, err := Parse(strings.NewReader("id: e\nfile: calc/calc.go\nfind: return a + b\nreplace: return a - b\n" +
+		"pkg: ./calc\nrun: ^TestEnv$\nenv: CALC_STRICT=1\nenv: OTHER=2\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(ms) != 1 || strings.Join(ms[0].Env, ",") != "CALC_STRICT=1,OTHER=2" {
+		t.Fatalf("parsed env %v, want [CALC_STRICT=1 OTHER=2]", ms)
+	}
+	root := fixtureModule(t)
+	// A test that only checks when CALC_STRICT is set: without the env the
+	// mutant survives, with it the mutant is killed.
+	test := "package calc\n\nimport (\n\t\"os\"\n\t\"testing\"\n)\n\nfunc TestEnv(t *testing.T) {\n" +
+		"\tif os.Getenv(\"CALC_STRICT\") == \"1\" && Add(2, 3) != 5 {\n\t\tt.Fatal(\"wrong\")\n\t}\n}\n"
+	if err := os.WriteFile(filepath.Join(root, "calc/env_test.go"), []byte(test), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	outs, err := Run(context.Background(), Options{Root: root}, ms)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if outs[0].Status != Killed {
+		t.Fatalf("with env CALC_STRICT=1 the mutant was %v (%s): the env did not reach the test", outs[0].Status, outs[0].Detail)
 	}
 }

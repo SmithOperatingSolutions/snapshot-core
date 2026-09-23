@@ -158,7 +158,13 @@ func runChild(t *testing.T, mode, dir string, start int) progress {
 		_ = cmd.Process.Kill()
 		t.Fatal("the crash child never started")
 	}
-	time.Sleep(time.Duration(rand.IntN(8000)) * time.Microsecond)
+	// The window spans a few operations: a fsync'd Put takes milliseconds, a
+	// swap less, and the kill must land both between and inside them.
+	window := 20000
+	if mode == "put" {
+		window = 80000
+	}
+	time.Sleep(time.Duration(rand.IntN(window)) * time.Microsecond)
 	if err := cmd.Process.Kill(); err != nil {
 		t.Fatal(err)
 	}
