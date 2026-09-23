@@ -901,3 +901,31 @@ find: (e.Codec != pack.CodecRaw && e.Codec != pack.CodecZstd) ||
 replace: false ||
 pkg: ./core/dedup
 run: ^TestForgedObjectsAreRefused$
+
+id: memstore-verifies-on-read
+file: core/chunk/memstore/memstore.go
+find: if hash.Sum(out) != h {
+replace: if hash.Sum(out) != h && false {
+pkg: ./core/chunk/memstore
+run: ^TestContract$/^FlippedByteIsCorrupt$
+
+id: memstore-cas-compares
+file: core/chunk/memstore/memstore.go
+find: if s.root != expected {
+replace: if s.root != expected && false {
+pkg: ./core/chunk/memstore
+run: ^TestContract$/^StaleCASChangesNothing$
+
+id: memstore-root-must-be-stored
+file: core/chunk/memstore/memstore.go
+find: if _, ok := s.chunks[next]; !ok || next.IsZero() {
+replace: if next.IsZero() {
+pkg: ./core/chunk/memstore
+run: ^TestContract$/^RootMustBeStored$
+
+id: memstore-chunk-limit
+file: core/chunk/memstore/memstore.go
+find: if len(data) > chunk.MaxChunkSize {
+replace: if len(data) > chunk.MaxChunkSize+1 {
+pkg: ./core/chunk/memstore
+run: ^TestContract$/^TooLarge$
