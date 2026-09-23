@@ -5,9 +5,9 @@ every "first failing test" checkbox in both specs. Updated at each milestone
 boundary and whenever a checklist item turns green; the evidence for each item
 is the named test, and the commit that added it carries its red.
 
-**Updated 2026-09-23** · branch `storage-core` (local, not pushed) · 45 commits
-· red-check: 21 `test:` commits, 108 tests, all proven red · 67 checked-in
-mutants, all killed · lint clean
+**Updated 2026-09-23** · branch `storage-core` (local, not pushed) · 53 commits
+· red-check clean · 87 checked-in mutants, all killed · lint clean · every
+package at or above its coverage gate
 
 ## Milestones
 
@@ -21,17 +21,16 @@ mutants, all killed · lint clean
 
 **C1 remaining:** `blob/s3` (pure-Go in-process S3 server for the local run,
 startup probe, MinIO tier), local read cache, `core/pack`, `core/dedup`, the
-chunk port + contract + `chunk/memstore` + `chunk/packstore`; and the coverage
-gate (below).
+chunk port + contract + `chunk/memstore` + `chunk/packstore`.
 
-**Open issue: coverage gate.** Statement coverage over the merged suite:
-`core/blob/internal/fsutil` 75.6%, `core/blob/local` 84.7%,
-`core/blob/multivol` 87.5% (gate 90%). The gaps are I/O error paths. They get
-fault-injection tests (the Engine Spec's "on any error, roll back fully"), and
-local's root/marker and multivol's volume-map decoders get fuzz targets, before
-C1 closes. Every other package is at or above its gate (`cdc` and `wire` 100%,
-`blob/mem` 98.4%, `hash` 94.1%, `blob` 93.5%, `dnx` 91.7% of an 80% gate,
-`seal` 91.1%).
+**Coverage gate: met.** Statement coverage over the merged suite: `cdc` and
+`wire` 100%, `blob/mem` 98.4%, `hash` 94.1%, `blob` 93.5%, `blob/multivol`
+92.6%, `blob/local` 92.2%, `dnx` 91.7% (gate 80%), `seal` 91.1%,
+`blob/internal/fsutil` 90.7%. The disk backends got there through
+fault-injection tests (the Engine Spec's "on any error, roll back fully"),
+not by testing trivia: each pins an I/O error that must never be read as a
+benign state (an unreadable root as "no root", an unreadable directory as
+empty, a permission error as "already exists" or "not found").
 
 ## Storage Core Spec checklists
 
@@ -76,7 +75,7 @@ C1 closes. Every other package is at or above its gate (`cdc` and `wire` 100%,
 - [ ] AES-256-GCM for all data and metadata at rest (`seal` ✅; pack, index, root, config wiring ⏳)
 - [x] Master keys from a KMS or Argon2id passphrase; keys never stored beside data (`seal.Wrapper` + contract, key files returned to the host, never written to a backend)
 - [ ] SHA-256 verified on every read, from every backend, cached or not (chunk layer ⏳)
-- [ ] Hand-written, bounds-checked decoders, fuzzed (`wire`, key file, KMS envelope ✅; local root/marker and multivol map fuzz targets ⏳; the rest as they land)
+- [ ] Hand-written, bounds-checked decoders, fuzzed (`wire`, key file, KMS envelope, local root file and marker, multivol volume map ✅; the rest as they land)
 - [ ] Model ids resolved only against the compiled-in registry (C3)
 - [ ] Every public call takes a `Principal`; default-deny `Authorizer` (C3)
 - [ ] Hard limits: object size ✅, list page ✅, path depth, conflicts per merge, `Log` length (C3)
@@ -136,6 +135,5 @@ listed here with their tests as they land.
 
 ## Next
 
-1. Fault-injection tests and decoder fuzz targets for the disk backends (coverage gate).
-2. `blob/s3` with a pure-Go in-process S3 server, the startup probe, and the MinIO tier.
-3. `core/pack`, `core/dedup`, the chunk port and its implementations; then close C1.
+1. `blob/s3` with a pure-Go in-process S3 server, the startup probe, and the MinIO tier.
+2. `core/pack`, `core/dedup`, the chunk port and its implementations; then close C1.
