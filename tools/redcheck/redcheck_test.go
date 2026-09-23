@@ -310,3 +310,18 @@ func TestChangedTestIsJudged(t *testing.T) {
 		t.Fatalf("a strengthened existing test was not judged as the commit's red (ran %d):\n%s", rep.TestsRun, reasons(rep))
 	}
 }
+
+// A test behind a build tag (the scale guards use -tags slow) is judged with
+// that tag; without it, it would never run and could never be red.
+func TestBuildTaggedTestIsRunWithItsTag(t *testing.T) {
+	f := newFixture(t)
+	f.write("calc/calc_slow_test.go", "//go:build slow\n\n"+strings.Replace(addTest, "TestAdd", "TestSlowAdd", 1))
+	f.commit("test(calc): Add adds, at scale")
+	f.write("calc/calc.go", addImpl)
+	f.commit("feat(calc): Add adds")
+
+	rep := f.check()
+	if len(rep.Violations) != 0 || rep.TestsRun != 1 {
+		t.Fatalf("a //go:build slow test was not judged under its tag (ran %d):\n%s", rep.TestsRun, reasons(rep))
+	}
+}
