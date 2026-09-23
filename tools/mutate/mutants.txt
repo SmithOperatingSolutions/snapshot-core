@@ -1313,3 +1313,24 @@ find: if l.total == 1 {
 replace: if l.total == 1 && lv == 0 {
 pkg: ./core/stream
 run: ^TestWriterEmitsTheDocumentedIndexFormat$|^TestAOnePieceStreamIsItsOwnRoot$
+
+id: stream-node-sum-checked
+file: core/stream/stream.go
+find: if sum != want {
+replace: if sum != want && false {
+pkg: ./core/stream
+run: ^TestForgeriesThatWouldReadCleanly$
+
+id: stream-level-matches-depth
+file: core/stream/stream.go
+find: if level != depth {
+replace: if level != depth && false {
+pkg: ./core/stream
+run: ^TestForgeriesThatWouldReadCleanly$
+
+id: stream-index-sizes-nonzero
+file: core/stream/stream.go
+find: if r.Err() != nil || e.size == 0 || carry != 0 {
+replace: if r.Err() != nil || carry != 0 {
+pkg: ./core/stream
+run: ^TestForgeriesThatWouldReadCleanly$

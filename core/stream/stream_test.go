@@ -328,3 +328,32 @@ func TestIdenticalContentIsTheSameStream(t *testing.T) {
 		t.Fatalf("the same bytes written again are %+v (was %+v) and added %d chunks", again, ref, s.added.Load())
 	}
 }
+
+// Three forgeries that would read back without any error if their check
+// were missing: a Ref claiming fewer bytes than its tree holds, an entry of
+// zero bytes (a second encoding of the same stream), and data that is itself
+// a well-formed index node, read one level too deep.
+func TestForgeriesThatWouldReadCleanly(t *testing.T) {
+	s := newStore()
+	good := handBuilt(t, s)
+	a, b, c := put(t, s, []byte("alpha")), put(t, s, []byte("beta")), put(t, s, []byte("gamma"))
+	// An index node whose entries add up to its own length, stored as data.
+	crafted := encodeIndex(1, []ientry{{put(t, s, random("x", 40)), 40}, {put(t, s, random("y", 29)), 29}})
+	if len(crafted) != 69 {
+		t.Fatalf("fixture: the crafted node is %d bytes, want 69", len(crafted))
+	}
+	d := put(t, s, crafted)
+	twice := stream.Ref{Root: put(t, s, encodeIndex(1, []ientry{{d, 69}, {d, 69}})), Size: 138, Depth: 1}
+	if got, err := stream.ReadAll(ctx, s, twice); err != nil || !bytes.Equal(got, append(bytes.Clone(crafted), crafted...)) {
+		t.Fatalf("positive control: a stream whose data looks like an index node read as %d bytes (%v)", len(got), err)
+	}
+	for name, ref := range map[string]stream.Ref{
+		"ref size smaller than the tree": {Root: good.Root, Size: 13, Depth: 1},
+		"a zero-length entry":            {Root: put(t, s, encodeIndex(1, []ientry{{a, 5}, {b, 0}, {b, 4}, {c, 5}})), Size: 14, Depth: 1},
+		"data read as an index node":     {Root: twice.Root, Size: 138, Depth: 2},
+	} {
+		if got, err := stream.ReadAll(ctx, s, ref); !errors.Is(err, chunk.ErrCorrupt) {
+			t.Errorf("%s: ReadAll = %d bytes, %v; want ErrCorrupt", name, len(got), err)
+		}
+	}
+}
