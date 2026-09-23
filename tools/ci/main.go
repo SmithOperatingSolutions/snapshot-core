@@ -413,16 +413,24 @@ func stream(ctx context.Context, env []string, name string, args ...string) erro
 	return cmd.Run()
 }
 
+// output returns what the command wrote to stdout; what it wrote to stderr
+// (docker's pull progress, go's downloads) is only for saying why it failed.
 func output(ctx context.Context, env []string, name string, args ...string) (string, error) {
 	cmd := exec.CommandContext(ctx, name, args...)
 	cmd.Env = append(os.Environ(), env...)
-	var b bytes.Buffer
-	cmd.Stdout, cmd.Stderr = &b, &b
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout, cmd.Stderr = &stdout, &stderr
 	err := cmd.Run()
-	if s := strings.TrimSpace(b.String()); err != nil && s != "" {
-		err = fmt.Errorf("%w: %s", err, s) // the error says why, not only "exit status 125"
+	if err != nil {
+		why := strings.TrimSpace(stderr.String())
+		if why == "" {
+			why = strings.TrimSpace(stdout.String())
+		}
+		if why != "" {
+			err = fmt.Errorf("%w: %s", err, why) // the error says why, not only "exit status 125"
+		}
 	}
-	return b.String(), err
+	return stdout.String(), err
 }
 
 func envOr(k, def string) string {
