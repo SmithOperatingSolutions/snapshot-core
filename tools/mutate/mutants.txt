@@ -3172,3 +3172,87 @@ find: page, err := bs.List(ctx, prefix, after, blob.MaxListPage)\n\t\t\tif err !
 replace: page, err := bs.List(ctx, prefix, after, blob.MaxListPage)\n\t\t\tif err != nil && false {
 pkg: ./core/gc
 run: ^TestEveryStoreFailureIsGCsError$
+
+id: vcs-tags-authorized
+file: core/vcs/vcs.go
+find: func (r *Repo) Tags(ctx context.Context, p auth.Principal) ([]string, error) {\n\tif err := r.check(ctx, p, auth.Read, "repo"); err != nil {
+replace: func (r *Repo) Tags(ctx context.Context, p auth.Principal) ([]string, error) {\n\tif err := r.check(ctx, p, auth.Read, "repo"); err != nil && false {
+pkg: ./core/vcs
+run: ^TestEveryCallIsAuthorized$
+
+id: vcs-tag-read-authorized
+file: core/vcs/vcs.go
+find: func (r *Repo) Tag(ctx context.Context, p auth.Principal, name string) (Tag, error) {\n\tif err := r.check(ctx, p, auth.Read, "tag:"+name); err != nil {
+replace: func (r *Repo) Tag(ctx context.Context, p auth.Principal, name string) (Tag, error) {\n\tif err := r.check(ctx, p, auth.Read, "tag:"+name); err != nil && false {
+pkg: ./core/vcs
+run: ^TestEveryCallIsAuthorized$
+
+id: vcs-tag-delete-authorized
+file: core/vcs/vcs.go
+find: func (r *Repo) DeleteTag(ctx context.Context, p auth.Principal, name string) error {\n\tif err := r.check(ctx, p, auth.Manage, "tag:"+name); err != nil {
+replace: func (r *Repo) DeleteTag(ctx context.Context, p auth.Principal, name string) error {\n\tif err := r.check(ctx, p, auth.Manage, "tag:"+name); err != nil && false {
+pkg: ./core/vcs
+run: ^TestEveryCallIsAuthorized$
+
+id: vcs-tag-read-names-checked
+file: core/vcs/vcs.go
+find: if err := r.check(ctx, p, auth.Read, "tag:"+name); err != nil {\n\t\treturn Tag{}, err\n\t}\n\tif err := validName(name); err != nil {
+replace: if err := r.check(ctx, p, auth.Read, "tag:"+name); err != nil {\n\t\treturn Tag{}, err\n\t}\n\tif err := validName(name); err != nil && false {
+pkg: ./core/vcs
+run: ^TestAMissingOrDeletedTagIsNotFound$
+
+id: vcs-tag-delete-names-checked
+file: core/vcs/vcs.go
+find: if err := r.check(ctx, p, auth.Manage, "tag:"+name); err != nil {\n\t\treturn err\n\t}\n\tif err := validName(name); err != nil {
+replace: if err := r.check(ctx, p, auth.Manage, "tag:"+name); err != nil {\n\t\treturn err\n\t}\n\tif err := validName(name); err != nil && false {
+pkg: ./core/vcs
+run: ^TestAMissingOrDeletedTagIsNotFound$
+
+id: vcs-tag-ref-errors-surface
+file: core/vcs/vcs.go
+find: h, ok, err := ref(ctx, m, tagKey(name))\n\tif err != nil {
+replace: h, ok, err := ref(ctx, m, tagKey(name))\n\tif err != nil && false {
+pkg: ./core/vcs
+run: ^TestForgedTagRefsAreCorrupt$
+
+id: vcs-tag-not-found
+file: core/vcs/vcs.go
+find: if !ok {\n\t\treturn Tag{}, fmt.Errorf("%w: %s", ErrTagNotFound, name)
+replace: if !ok && false {\n\t\treturn Tag{}, fmt.Errorf("%w: %s", ErrTagNotFound, name)
+pkg: ./core/vcs
+run: ^TestAMissingOrDeletedTagIsNotFound$
+
+id: vcs-tag-read-decodes
+file: core/vcs/vcs.go
+find: t, err := decodeTag(b)\n\tif err != nil {\n\t\treturn Tag{}, err
+replace: t, err := decodeTag(b)\n\tif err != nil && false {\n\t\treturn Tag{}, err
+pkg: ./core/vcs
+run: ^TestForgedTagRefsAreCorrupt$
+
+id: vcs-tag-delete-not-found
+file: core/vcs/vcs.go
+find: } else if !ok {\n\t\t\treturn fmt.Errorf("%w: %s", ErrTagNotFound, name)
+replace: } else if !ok && false {\n\t\t\treturn fmt.Errorf("%w: %s", ErrTagNotFound, name)
+pkg: ./core/vcs
+run: ^TestAMissingOrDeletedTagIsNotFound$
+
+id: vcs-tag-delete-deletes
+file: core/vcs/vcs.go
+find: return e.Delete(tagKey(name))
+replace: return nil
+pkg: ./core/vcs
+run: ^TestAMissingOrDeletedTagIsNotFound$
+
+id: vcs-deleted-tag-is-collected
+file: core/vcs/vcs.go
+find: return e.Delete(tagKey(name))
+replace: return nil
+pkg: ./core/gc
+run: ^TestADeletedTagsHistoryIsCollected$
+
+id: vcs-names-bounded-by-prefix
+file: core/vcs/vcs.go
+find: end := prefix[:len(prefix)-1] + "0" // '0' follows '/'
+replace: end := "~" // '0' follows '/'
+pkg: ./core/vcs
+run: ^TestTagsAreListedAndReadBack$

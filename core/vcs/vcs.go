@@ -342,11 +342,18 @@ func (r *Repo) Branches(ctx context.Context, p auth.Principal) ([]string, error)
 	if err := r.check(ctx, p, auth.Read, "repo"); err != nil {
 		return nil, err
 	}
+	return r.names(ctx, "heads/")
+}
+
+// names lists the refs under prefix ("heads/" or "tags/") in order, without
+// the prefix.
+func (r *Repo) names(ctx context.Context, prefix string) ([]string, error) {
 	m, err := r.refs(ctx)
 	if err != nil {
 		return nil, err
 	}
-	it, err := m.IterRange(ctx, []byte("heads/"), []byte("heads0")) // '0' follows '/'
+	end := prefix[:len(prefix)-1] + "0" // '0' follows '/'
+	it, err := m.IterRange(ctx, []byte(prefix), []byte(end))
 	if err != nil {
 		return nil, err
 	}
@@ -356,7 +363,7 @@ func (r *Repo) Branches(ctx context.Context, p auth.Principal) ([]string, error)
 		if err != nil || !ok {
 			return out, err
 		}
-		out = append(out, string(bytes.TrimPrefix(k, []byte("heads/"))))
+		out = append(out, string(bytes.TrimPrefix(k, []byte(prefix))))
 	}
 }
 
@@ -622,13 +629,66 @@ func (r *Repo) CreateTag(ctx context.Context, p auth.Principal, name string, tar
 }
 
 // Tags lists the tags' names in order.
-func (r *Repo) Tags(ctx context.Context, p auth.Principal) ([]string, error) { return nil, nil }
+func (r *Repo) Tags(ctx context.Context, p auth.Principal) ([]string, error) {
+	if err := r.check(ctx, p, auth.Read, "repo"); err != nil {
+		return nil, err
+	}
+	return r.names(ctx, "tags/")
+}
 
-// Tag returns the tag a name holds.
-func (r *Repo) Tag(ctx context.Context, p auth.Principal, name string) (Tag, error) { return Tag{}, nil }
+// Tag returns the tag a name holds (ErrTagNotFound when there is none).
+func (r *Repo) Tag(ctx context.Context, p auth.Principal, name string) (Tag, error) {
+	if err := r.check(ctx, p, auth.Read, "tag:"+name); err != nil {
+		return Tag{}, err
+	}
+	if err := validName(name); err != nil {
+		return Tag{}, err
+	}
+	m, err := r.refs(ctx)
+	if err != nil {
+		return Tag{}, err
+	}
+	h, ok, err := ref(ctx, m, tagKey(name))
+	if err != nil {
+		return Tag{}, err
+	}
+	if !ok {
+		return Tag{}, fmt.Errorf("%w: %s", ErrTagNotFound, name)
+	}
+	return r.readTag(ctx, h)
+}
 
-// DeleteTag removes a tag.
-func (r *Repo) DeleteTag(ctx context.Context, p auth.Principal, name string) error { return nil }
+func (r *Repo) readTag(ctx context.Context, h hash.Hash) (Tag, error) {
+	b, err := r.s.Get(ctx, h)
+	if err != nil {
+		return Tag{}, err
+	}
+	t, err := decodeTag(b)
+	if err != nil {
+		return Tag{}, err
+	}
+	t.Hash = h
+	return t, nil
+}
+
+// DeleteTag removes a tag, freeing its name. The commit it named stays while
+// anything else reaches it; what only the tag reached, GC collects.
+func (r *Repo) DeleteTag(ctx context.Context, p auth.Principal, name string) error {
+	if err := r.check(ctx, p, auth.Manage, "tag:"+name); err != nil {
+		return err
+	}
+	if err := validName(name); err != nil {
+		return err
+	}
+	return r.update(ctx, func(m *prolly.Map, e *prolly.Editor) error {
+		if _, ok, err := ref(ctx, m, tagKey(name)); err != nil {
+			return err
+		} else if !ok {
+			return fmt.Errorf("%w: %s", ErrTagNotFound, name)
+		}
+		return e.Delete(tagKey(name))
+	})
+}
 
 // byHeight is a max-heap of commits by height, lower hash first on a tie.
 type byHeight []Commit
