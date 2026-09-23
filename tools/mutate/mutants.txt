@@ -2638,3 +2638,17 @@ find: if err != nil || !deeper {\n\t\treturn err\n\t}\n\tn, err := w.read(root)
 replace: if err != nil || !(deeper || true) {\n\t\treturn err\n\t}\n\tn, err := w.read(root)
 pkg: ./core/prolly
 run: ^TestWalkGoesNoFurtherThanVisitSays$
+
+id: blob-walk-checks-the-format
+file: model/blob/blob.go
+find: if root.Format != Format {\n\t\treturn fmt.Errorf("%w: blob format %d", model.ErrUnknownModel, root.Format)\n\t}\n\treturn stream.Walk(
+replace: if root.Format != Format && false {\n\t\treturn fmt.Errorf("%w: blob format %d", model.ErrUnknownModel, root.Format)\n\t}\n\treturn stream.Walk(
+pkg: ./model/blob
+run: ^TestABlobWalksToEveryChunk$
+
+id: blob-walk-is-its-stream
+file: model/blob/blob.go
+find: return stream.Walk(ctx, r, stream.Ref{Root: root.Hash, Size: root.Size, Depth: root.Depth}, visit)
+replace: return stream.Walk(ctx, r, stream.Ref{Root: root.Hash, Size: root.Size}, visit)
+pkg: ./model/blob
+run: ^TestABlobWalksToEveryChunk$

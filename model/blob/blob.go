@@ -9,6 +9,7 @@ import (
 	"io"
 
 	"github.com/SmithOperatingSolutions/snapshot-core/core/chunk"
+	"github.com/SmithOperatingSolutions/snapshot-core/core/hash"
 	"github.com/SmithOperatingSolutions/snapshot-core/core/model"
 	"github.com/SmithOperatingSolutions/snapshot-core/core/stream"
 )
@@ -22,7 +23,10 @@ const Format = 1
 // Model is the blob model.
 type Model struct{}
 
-var _ model.Model = Model{}
+var (
+	_ model.Model  = Model{}
+	_ model.Walker = Model{}
+)
 
 // ID implements model.Model.
 func (Model) ID() model.ID { return ID }
@@ -45,6 +49,14 @@ func Open(ctx context.Context, rd chunk.Reader, root model.Root) (*stream.Reader
 		return nil, fmt.Errorf("%w: blob format %d", model.ErrUnknownModel, root.Format)
 	}
 	return stream.Open(ctx, rd, stream.Ref{Root: root.Hash, Size: root.Size, Depth: root.Depth})
+}
+
+// Walk implements model.Walker: a blob is its stream.
+func (Model) Walk(ctx context.Context, root model.Root, r chunk.Reader, visit func(hash.Hash) (bool, error)) error {
+	if root.Format != Format {
+		return fmt.Errorf("%w: blob format %d", model.ErrUnknownModel, root.Format)
+	}
+	return stream.Walk(ctx, r, stream.Ref{Root: root.Hash, Size: root.Size, Depth: root.Depth}, visit)
 }
 
 // Validate implements model.Model: the whole stream reads and verifies.
