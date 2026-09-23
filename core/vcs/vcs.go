@@ -218,6 +218,9 @@ func (r *Repo) update(ctx context.Context, fn func(m *prolly.Map, e *prolly.Edit
 			return err
 		}
 		err = r.s.CompareAndSetRoot(ctx, m.Root(), next.Root())
+		if errors.Is(err, chunk.ErrStale) { // GC fenced the write: the host re-reads
+			return fmt.Errorf("%w: %w", ErrConflict, err)
+		}
 		if !errors.Is(err, chunk.ErrRootConflict) {
 			return err
 		}

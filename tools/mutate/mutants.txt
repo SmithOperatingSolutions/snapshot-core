@@ -2988,3 +2988,10 @@ find: for _, prefix := range []string{"packs/", "index/", probePrefix} {
 replace: for _, prefix := range []string{"packs/", "index/"} {
 pkg: ./core/gc
 run: ^TestGCLeavesNoProbeBehind$
+
+id: vcs-fenced-write-is-a-conflict
+file: core/vcs/vcs.go
+find: if errors.Is(err, chunk.ErrStale) { // GC fenced the write: the host re-reads
+replace: if errors.Is(err, chunk.ErrStale) && false { // GC fenced the write: the host re-reads
+pkg: ./core/vcs
+run: ^TestAWriteFencedByGCIsAConflict$
