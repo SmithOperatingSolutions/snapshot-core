@@ -313,5 +313,16 @@ func (g Geometry) Stream() stream.Config { return stream.Config{CDC: g.CDC, Node
 // not the NoDelete one a repository runs on; it needs admin, and a model
 // registry whose every model walks.
 func GC(ctx context.Context, p auth.Principal, o Options, grace time.Duration) (gc.Report, error) {
-	return gc.Report{}, errors.New("repo: GC is not written yet")
+	if err := o.check(); err != nil {
+		return gc.Report{}, err
+	}
+	if err := auth.Check(ctx, o.Authorizer, p, auth.Admin, "repo"); err != nil {
+		return gc.Report{}, err
+	}
+	c, err := readConfig(ctx, o)
+	if err != nil {
+		return gc.Report{}, err
+	}
+	return gc.Run(ctx, gc.Options{Blobs: o.Blobs, Keys: o.Keys, Repo: c.RepoID, Config: c.Geometry.Prolly(),
+		Registry: o.Registry, Grace: grace, Clock: o.Clock})
 }

@@ -3016,3 +3016,17 @@ find: if err := WalkRef(ctx, rd, reg, ref, visit); err != nil {
 replace: if err := WalkRef(ctx, rd, reg, ref, func(hash.Hash, bool) (bool, error) { return false, nil }); err != nil {
 pkg: ./core/gc
 run: ^TestGCSafetyProperty$
+
+id: repo-gc-needs-admin
+file: core/repo/repo.go
+find: if err := auth.Check(ctx, o.Authorizer, p, auth.Admin, "repo"); err != nil {\n\t\treturn gc.Report{}, err
+replace: if err := auth.Check(ctx, o.Authorizer, p, auth.Admin, "repo"); err != nil && false {\n\t\treturn gc.Report{}, err
+pkg: ./core/repo
+run: ^TestAnAdminCollectsTheRepositoryOnTheRawStore$
+
+id: repo-gc-needs-a-repository
+file: core/repo/repo.go
+find: c, err := readConfig(ctx, o)\n\tif err != nil {\n\t\treturn gc.Report{}, err
+replace: c, err := readConfig(ctx, o)\n\tif err != nil && false {\n\t\treturn gc.Report{}, err
+pkg: ./core/repo
+run: ^TestAnAdminCollectsTheRepositoryOnTheRawStore$
