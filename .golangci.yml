@@ -1,0 +1,169 @@
+version: "2"
+
+# Warnings are errors: any finding fails `mise run lint` and CI.
+run:
+  tests: true
+
+linters:
+  default: standard # errcheck, govet, ineffassign, staticcheck, unused
+  enable:
+    - depguard       # dependency rule 2 and the layer table (docs/DESIGN.md §3)
+    - forbidigo      # no ad-hoc output or panics-as-control-flow in the core
+    - gochecknoinits # "no init() side effects"
+    - gosec
+    - errorlint
+    - bodyclose
+    - copyloopvar
+    - misspell
+    - nolintlint
+    - unconvert
+    - gocritic
+  settings:
+    nolintlint:
+      require-explanation: true
+      require-specific: true
+    gosec:
+      excludes:
+        # Integer-conversion findings flood hand-written binary codecs; bounds
+        # are checked explicitly before every conversion and every decoder is
+        # fuzzed, which is the real guard.
+        - G115
+    forbidigo:
+      forbid:
+        - pattern: ^(fmt\.Print.*|print|println)$
+          msg: "the core does not write to stdout; return errors or use a passed-in logger"
+    depguard:
+      rules:
+        disknexus-only-in-dnx:
+          files: ["$all", "!**/core/dnx/**"]
+          deny:
+            - pkg: github.com/SmithOperatingSolutions/disknexus-engine
+              desc: "disknexus-engine is imported only by core/dnx (Storage Core Spec, dependency rule 2)"
+        no-reflective-decoding:
+          files: ["**/core/**", "**/model/**", "!$test"]
+          deny:
+            - pkg: reflect
+              desc: "no reflection on stored bytes; write a bounds-checked decoder"
+            - pkg: encoding/json
+              desc: "no generic deserialization of stored bytes; write a bounds-checked decoder"
+            - pkg: encoding/gob
+              desc: "no generic deserialization of stored bytes"
+            - pkg: unsafe
+              desc: "no unsafe"
+            - pkg: os/exec
+              desc: "no os/exec in production code"
+        backends-store-opaque-bytes:
+          files: ["**/core/blob/**"]
+          deny:
+            - pkg: github.com/SmithOperatingSolutions/snapshot-core/core/seal
+              desc: "a backend stores opaque bytes; crypto lives above it"
+            - pkg: github.com/SmithOperatingSolutions/snapshot-core/core/pack
+              desc: "backends are below packs"
+            - pkg: github.com/SmithOperatingSolutions/snapshot-core/core/chunk
+              desc: "backends are below the chunk layer"
+        below-the-chunk-layer:
+          files:
+            - "**/core/dnx/**"
+            - "**/core/hash/**"
+            - "**/core/auth/**"
+            - "**/core/limits/**"
+            - "**/core/seal/**"
+            - "**/core/cdc/**"
+            - "**/core/boundary/**"
+            - "**/core/blob/**"
+            - "**/core/pack/**"
+            - "**/core/dedup/**"
+          deny:
+            - pkg: github.com/SmithOperatingSolutions/snapshot-core/core/chunk
+              desc: "no upward imports (docs/DESIGN.md §3)"
+            - pkg: github.com/SmithOperatingSolutions/snapshot-core/core/stream
+              desc: "no upward imports"
+            - pkg: github.com/SmithOperatingSolutions/snapshot-core/core/prolly
+              desc: "no upward imports"
+            - pkg: github.com/SmithOperatingSolutions/snapshot-core/core/model
+              desc: "no upward imports"
+            - pkg: github.com/SmithOperatingSolutions/snapshot-core/core/object
+              desc: "no upward imports"
+            - pkg: github.com/SmithOperatingSolutions/snapshot-core/core/vcs
+              desc: "no upward imports"
+            - pkg: github.com/SmithOperatingSolutions/snapshot-core/core/merge
+              desc: "no upward imports"
+            - pkg: github.com/SmithOperatingSolutions/snapshot-core/core/gc
+              desc: "no upward imports"
+            - pkg: github.com/SmithOperatingSolutions/snapshot-core/core/repo
+              desc: "no upward imports"
+            - pkg: github.com/SmithOperatingSolutions/snapshot-core/model
+              desc: "the core never imports a concrete model; models are plugins"
+        keyed-data-uses-the-chunk-port:
+          files: ["**/core/stream/**", "**/core/prolly/**"]
+          deny:
+            - pkg: github.com/SmithOperatingSolutions/snapshot-core/core/blob
+              desc: "keyed data talks to the chunk port, never to a backend"
+            - pkg: github.com/SmithOperatingSolutions/snapshot-core/core/chunk/packstore
+              desc: "keyed data talks to the chunk port, not an implementation"
+            - pkg: github.com/SmithOperatingSolutions/snapshot-core/core/model
+              desc: "no upward imports"
+            - pkg: github.com/SmithOperatingSolutions/snapshot-core/core/object
+              desc: "no upward imports"
+            - pkg: github.com/SmithOperatingSolutions/snapshot-core/core/vcs
+              desc: "no upward imports"
+            - pkg: github.com/SmithOperatingSolutions/snapshot-core/core/merge
+              desc: "no upward imports"
+            - pkg: github.com/SmithOperatingSolutions/snapshot-core/core/gc
+              desc: "no upward imports"
+            - pkg: github.com/SmithOperatingSolutions/snapshot-core/core/repo
+              desc: "no upward imports"
+            - pkg: github.com/SmithOperatingSolutions/snapshot-core/model
+              desc: "the core never imports a concrete model"
+        objects-below-history:
+          files: ["**/core/model/**", "**/core/object/**"]
+          deny:
+            - pkg: github.com/SmithOperatingSolutions/snapshot-core/core/blob
+              desc: "objects talk to the chunk port, never to a backend"
+            - pkg: github.com/SmithOperatingSolutions/snapshot-core/core/vcs
+              desc: "no upward imports"
+            - pkg: github.com/SmithOperatingSolutions/snapshot-core/core/merge
+              desc: "no upward imports"
+            - pkg: github.com/SmithOperatingSolutions/snapshot-core/core/gc
+              desc: "no upward imports"
+            - pkg: github.com/SmithOperatingSolutions/snapshot-core/core/repo
+              desc: "no upward imports"
+            - pkg: github.com/SmithOperatingSolutions/snapshot-core/model
+              desc: "the core never imports a concrete model"
+        history-below-gc:
+          files: ["**/core/vcs/**", "**/core/merge/**"]
+          deny:
+            - pkg: github.com/SmithOperatingSolutions/snapshot-core/core/blob
+              desc: "history talks to the chunk port, never to a backend"
+            - pkg: github.com/SmithOperatingSolutions/snapshot-core/core/gc
+              desc: "no upward imports"
+            - pkg: github.com/SmithOperatingSolutions/snapshot-core/core/repo
+              desc: "no upward imports"
+            - pkg: github.com/SmithOperatingSolutions/snapshot-core/model
+              desc: "the core never imports a concrete model"
+        models-are-plugins:
+          files: ["**/model/**"]
+          deny:
+            - pkg: github.com/SmithOperatingSolutions/snapshot-core/core/blob
+              desc: "a model reads and writes chunks through the ChunkReadWriter it is handed"
+            - pkg: github.com/SmithOperatingSolutions/snapshot-core/core/chunk/packstore
+              desc: "a model never touches a chunk store implementation"
+            - pkg: github.com/SmithOperatingSolutions/snapshot-core/core/vcs
+              desc: "models know nothing of history"
+            - pkg: github.com/SmithOperatingSolutions/snapshot-core/core/gc
+              desc: "models know nothing of GC"
+            - pkg: github.com/SmithOperatingSolutions/snapshot-core/core/repo
+              desc: "models know nothing of the repository"
+  exclusions:
+    presets:
+      - std-error-handling
+    rules:
+      # Dev tools and tests may shell out (git, go test) and print.
+      - path: ^tools/
+        linters: [forbidigo, gosec]
+      - path: _test\.go$
+        linters: [gosec, forbidigo]
+
+formatters:
+  enable:
+    - gofmt
