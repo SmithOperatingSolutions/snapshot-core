@@ -3977,3 +3977,24 @@ find: if s.disk != nil { // the repository shrank under the bound\n\t\t\t_ = s.d
 replace: if false { // the repository shrank under the bound\n\t\t\t_ = s.disk.close()\n\t\t\ts.disk = nil\n\t\t}
 pkg: ./core/chunk/packstore
 run: ^TestASpilledIndexReturnsToMemoryWhenTheRepositoryShrinks$
+
+id: table-finish-removes-the-merged-groups
+file: core/dedup/table.go
+find: removeAll(group)\n\t\t}\n\t\tb.runs = next
+replace: _ = group\n\t\t}\n\t\tb.runs = next
+pkg: ./core/dedup
+run: ^TestATableMergesMoreRunsThanItsFanIn$
+
+id: table-spill-fails-without-its-directory
+file: core/dedup/table.go
+find: f, err := os.CreateTemp(b.dir, "snapshot-run-*")\n\tif err != nil {\n\t\treturn err\n\t}
+replace: f, err := os.CreateTemp(b.dir, "snapshot-run-*")\n\tif err != nil {\n\t\tf, err = os.CreateTemp("", "snapshot-run-*")\n\t}
+pkg: ./core/dedup
+run: ^TestABuilderNeedsItsDirectory$
+
+id: table-cursor-reports-a-short-file
+file: core/dedup/table.go
+find: if _, err := io.ReadFull(c.r, c.rec); err != nil {
+replace: if _, err := io.ReadFull(c.r, c.rec); err != nil && false {
+pkg: ./core/dedup
+run: ^TestATableCutUnderneathReportsAnError$

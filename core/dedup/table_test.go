@@ -215,6 +215,7 @@ func TestATableThatDoesNotDecodeIsRefused(t *testing.T) {
 		"another value":  withValueLen(whole, 16),
 		"another period": withEvery(whole, 128),
 		"version 2":      withVersion(whole, 2),
+		"value too wide": withValueLen(whole, 300),
 		"reserved set":   withReserved(whole),
 	}
 	for name, b := range forged {
@@ -319,4 +320,131 @@ func FuzzOpenTable(f *testing.F) {
 			}
 		}
 	})
+}
+
+// More runs than the merge takes at once (32) are merged in passes; every
+// record is still answered and keys are still unique. Has answers too.
+func TestATableMergesMoreRunsThanItsFanIn(t *testing.T) {
+	recs := records(8, 5_000)
+	tb := build(t, t.TempDir(), 100, recs) // fifty runs: two passes
+	if got := tb.Len(); got != int64(len(recs)) {
+		t.Fatalf("the table holds %d records, want %d", got, len(recs))
+	}
+	for i, r := range recs {
+		ok, err := tb.Has(r.h)
+		if err != nil || !ok {
+			t.Fatalf("record %d of fifty runs is not found (%v, %v)", i, ok, err)
+		}
+	}
+	if ok, err := tb.Has(records(9, 1)[0].h); ok || err != nil {
+		t.Fatalf("a key never added is found (%v, %v)", ok, err)
+	}
+	entries, err := os.ReadDir(filepath.Dir(dedup.TablePath(tb)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 1 {
+		t.Fatalf("after merging fifty runs in passes the directory holds %d files, want the table alone: the merged groups must be removed", len(entries))
+	}
+}
+
+// A directory that stops being writable mid-build (its runs spilled, the
+// merge still to come) fails Finish, in passes and at the table alike, and
+// nothing is returned.
+func TestABuilderWhoseDirectoryStopsBeingWritableFails(t *testing.T) {
+	for name, n := range map[string]int{"at the table": 10, "merging in passes": 70} {
+		dir := t.TempDir()
+		b, err := dedup.NewBuilder(dir, 0)
+		if err != nil {
+			t.Fatal(err)
+		}
+		dedup.SetRunSize(b, 2)
+		for _, r := range records(11, n) {
+			if err := b.Add(r.h, nil); err != nil {
+				t.Fatal(err)
+			}
+		}
+		if err := os.Chmod(dir, 0o500); err != nil {
+			t.Fatal(err)
+		}
+		tb, err := b.Finish()
+		_ = os.Chmod(dir, 0o700)
+		if err == nil {
+			_ = tb.Close()
+			t.Fatalf("%s: a table was finished in a directory that stopped being writable", name)
+		}
+	}
+}
+
+// A builder whose directory is not there fails at the first spill, and
+// Finish fails rather than return a table; Abort leaves nothing.
+func TestABuilderNeedsItsDirectory(t *testing.T) {
+	missing := filepath.Join(t.TempDir(), "not", "here")
+	b, err := dedup.NewBuilder(missing, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	dedup.SetRunSize(b, 2)
+	if err := b.Add(hash.Hash{1}, nil); err != nil {
+		t.Fatalf("the first record, under the run size, is refused: %v", err)
+	}
+	if err := b.Add(hash.Hash{2}, nil); err == nil {
+		t.Fatalf("the record that fills a run was added with the directory %s missing", missing)
+	}
+	b.Abort()
+	b, err = dedup.NewBuilder(missing, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := b.Add(hash.Hash{1}, nil); err != nil {
+		t.Fatal(err)
+	}
+	if tb, err := b.Finish(); err == nil {
+		_ = tb.Close()
+		t.Fatalf("a table was finished in the missing directory %s", missing)
+	}
+	ok, err := dedup.NewBuilder(t.TempDir(), 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tb, err := ok.Finish()
+	if err != nil {
+		t.Fatalf("positive control: an empty table in a directory that exists: %v", err)
+	}
+	_ = tb.Close()
+}
+
+// A table whose file is cut underneath it answers with an error, never
+// with a wrong record or a hang: a lookup past the cut and a cursor
+// reaching it both fail.
+func TestATableCutUnderneathReportsAnError(t *testing.T) {
+	recs := records(10, 1_000)
+	tb := build(t, t.TempDir(), 300, recs)
+	if _, ok, err := tb.Lookup(recs[0].h); !ok || err != nil {
+		t.Fatalf("positive control: %v %v", ok, err)
+	}
+	if err := os.Truncate(dedup.TablePath(tb), 32+10*49); err != nil {
+		t.Fatal(err)
+	}
+	lookups := 0
+	for _, r := range recs {
+		if _, _, err := tb.Lookup(r.h); err != nil {
+			lookups++
+		}
+	}
+	if lookups == 0 {
+		t.Fatal("a thousand lookups on a table cut to ten records all answered without an error")
+	}
+	c := tb.Cursor()
+	n := 0
+	for {
+		_, _, ok, err := c.Next()
+		if err != nil {
+			break
+		}
+		if !ok {
+			t.Fatalf("the cursor reached the end of a table cut to ten records after %d of %d without an error", n, len(recs))
+		}
+		n++
+	}
 }
