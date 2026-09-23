@@ -308,6 +308,10 @@ func stepMutate(ctx context.Context, _ *config) error {
 	return stream(ctx, nil, "go", "run", "./tools/mutate")
 }
 
+// minioImage is the MinIO the S3 suites were proven against, pinned by
+// digest. Docker Hub no longer serves minio/minio; quay.io still does.
+const minioImage = "quay.io/minio/minio:RELEASE.2025-09-07T16-13-09Z@sha256:14cea493d9a34af32f524e538b8346cf79f3321eff8e708c1e2960462bd8936e"
+
 // stepMinio runs the S3 suites against a real MinIO. With SNAPSHOT_S3_ENDPOINT
 // set it uses that server; otherwise it starts a throwaway container.
 func stepMinio(ctx context.Context, _ *config) error {
@@ -321,7 +325,7 @@ func stepMinio(ctx context.Context, _ *config) error {
 		}
 		id, err := output(ctx, nil, "docker", "run", "-d", "--rm", "-p", "127.0.0.1::9000",
 			"-e", "MINIO_ROOT_USER=snapshotcore", "-e", "MINIO_ROOT_PASSWORD=snapshotcore-secret",
-			"minio/minio:latest", "server", "/data")
+			minioImage, "server", "/data")
 		if err != nil {
 			return fmt.Errorf("starting MinIO: %w", err)
 		}
