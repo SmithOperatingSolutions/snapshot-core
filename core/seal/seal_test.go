@@ -341,11 +341,11 @@ func TestKeyFileTamperingNeverOpens(t *testing.T) {
 func TestKeyFileParameterBounds(t *testing.T) {
 	kr := mustKeyring(t)
 	for name, p := range map[string]seal.Argon2Params{
-		"time 1":            {Time: 1, Memory: fast.Memory, Threads: 1},
+		"time 1":             {Time: 1, Memory: fast.Memory, Threads: 1},
 		"memory under 19MiB": {Time: 2, Memory: 19*1024 - 1, Threads: 1},
-		"threads 0":         {Time: 2, Memory: fast.Memory, Threads: 0},
-		"memory over 4GiB":  {Time: 2, Memory: 4*1024*1024 + 1, Threads: 1},
-		"time over 64":      {Time: 65, Memory: fast.Memory, Threads: 1},
+		"threads 0":          {Time: 2, Memory: fast.Memory, Threads: 0},
+		"memory over 4GiB":   {Time: 2, Memory: 4*1024*1024 + 1, Threads: 1},
+		"time over 64":       {Time: 65, Memory: fast.Memory, Threads: 1},
 	} {
 		if _, err := seal.NewKeyFile(kr, []byte("passphrase"), p); !errors.Is(err, seal.ErrParams) {
 			t.Errorf("%s: NewKeyFile accepted %+v (err=%v)", name, p, err)
@@ -411,6 +411,13 @@ func (f *fakeKMS) Unwrap(_ context.Context, w []byte) ([]byte, error) {
 		return nil, errors.New("fake kms: short")
 	}
 	return f.gcm.Open(nil, w[:12], w[12:], nil)
+}
+
+// Positive control for the contract suite itself: a correct KMS passes it.
+func TestFakeKMSPassesTheWrapperContract(t *testing.T) {
+	contract.RunWrapper(t, func(t *testing.T) contract.Pair {
+		return contract.Pair{A: newFakeKMS(t), B: newFakeKMS(t)}
+	})
 }
 
 func TestX25519WrapperPassesTheWrapperContract(t *testing.T) {

@@ -123,3 +123,80 @@ find: if r.err != nil {\n\t\treturn nil\n\t}\n\tif n < 0 {
 replace: if n < 0 {
 pkg: ./core/internal/wire
 run: ^TestErrorsAreSticky$
+
+id: seal-domain-validated
+file: core/seal/seal.go
+find: if tag == "" {
+replace: if tag == "" && false {
+pkg: ./core/seal
+run: ^TestInvalidDomainsAreRefused$
+
+id: seal-hkdf-uses-salt
+file: core/seal/seal.go
+find: raw, err := hkdf.Key(sha256.New, master, salt[:], info, dnx.KeySize)
+replace: raw, err := hkdf.Key(sha256.New, master, nil, info, dnx.KeySize)
+pkg: ./core/seal
+run: ^TestKeysAreBoundToMasterRepoAndSalt$
+
+id: seal-hkdf-binds-repo
+file: core/seal/seal.go
+find: info := "snapshot-core/object-key/v1\x00" + tag + "\x00" + string(repo[:])
+replace: info := "snapshot-core/object-key/v1\x00" + tag + "\x00"
+pkg: ./core/seal
+run: ^TestKeysAreBoundToMasterRepoAndSalt$
+
+id: seal-budget-enforced
+file: core/seal/seal.go
+find: case k.seals >= k.limit:
+replace: case k.seals > k.limit:
+pkg: ./core/seal
+run: ^TestAKeyRefusesPastItsBudget$
+
+id: seal-destroyed-key-refuses
+file: core/seal/seal.go
+find: case k.destroyed:\n\t\tk.mu.Unlock()\n\t\treturn nil, ErrDestroyed
+replace: case false:
+pkg: ./core/seal
+run: ^TestDestroyedKeysRefuse$
+
+id: seal-argon-time-floor
+file: core/seal/keyfile.go
+find: case p.Time < minArgonTime || p.Time > maxArgonTime:
+replace: case p.Time < 1 || p.Time > maxArgonTime:
+pkg: ./core/seal
+run: ^TestKeyFileParameterBounds$
+
+id: seal-argon-time-ceiling
+file: core/seal/keyfile.go
+find: case p.Time < minArgonTime || p.Time > maxArgonTime:
+replace: case p.Time < minArgonTime:
+pkg: ./core/seal
+run: ^TestKeyFileParameterBounds$
+
+id: seal-argon-memory-floor
+file: core/seal/keyfile.go
+find: case p.Memory < minArgonMemory || p.Memory > maxArgonMemory:
+replace: case p.Memory < 8 || p.Memory > maxArgonMemory:
+pkg: ./core/seal
+run: ^TestKeyFileParameterBounds$
+
+id: seal-open-validates-before-deriving
+file: core/seal/keyfile.go
+find: if err := p.validate(); err != nil {\n\t\treturn nil, err // before derivation: a crafted file cannot demand 4 TiB\n\t}
+replace: _ = 0
+pkg: ./core/seal
+run: ^TestKeyFileParameterBounds$
+
+id: seal-passphrase-bounds
+file: core/seal/keyfile.go
+find: if len(p) == 0 || len(p) > maxPassphrase {
+replace: if len(p) > 2*maxPassphrase {
+pkg: ./core/seal
+run: ^TestPassphraseBounds$
+
+id: seal-envelope-checks-key-id
+file: core/seal/keyfile.go
+find: if kid := kr.ID(); !bytes.Equal(kid[:], id) {\n\t\tkr.Destroy()
+replace: if kid := kr.ID(); !bytes.Equal(kid[:], id) && false {\n\t\tkr.Destroy()
+pkg: ./core/seal
+run: ^TestWrapKeyringRoundTripAndWrongKMS$
