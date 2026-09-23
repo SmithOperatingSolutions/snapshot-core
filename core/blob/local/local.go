@@ -211,11 +211,7 @@ func (s *Store) Put(ctx context.Context, name string, r io.Reader, size int64) e
 		return err
 	}
 	tmpName := tmp.Name()
-	defer os.Remove(tmpName) // after a successful link it is just a second name
-	if err := tmp.Chmod(filePerm); err != nil {
-		_ = tmp.Close()
-		return err
-	}
+	defer os.Remove(tmpName) // after a successful link it is just a second name; CreateTemp makes it 0600
 	if err := blob.CopyExact(tmp, r, size); err != nil {
 		_ = tmp.Close()
 		return err
@@ -483,10 +479,7 @@ func (s *Store) SwapRoot(ctx context.Context, expected blob.Version, next []byte
 	}
 	tmpName := tmp.Name()
 	defer os.Remove(tmpName) // no-op after the rename
-	_, werr := tmp.Write(encodeRoot(v, next))
-	if werr == nil {
-		werr = tmp.Chmod(filePerm)
-	}
+	_, werr := tmp.Write(encodeRoot(v, next)) // CreateTemp makes it 0600
 	if werr == nil {
 		werr = tmp.Sync()
 	}

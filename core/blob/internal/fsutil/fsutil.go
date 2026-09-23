@@ -26,10 +26,7 @@ func WriteFileAtomic(path string, b []byte) error {
 	}
 	name := tmp.Name()
 	defer os.Remove(name) // no-op after the rename
-	_, err = tmp.Write(b)
-	if err == nil {
-		err = tmp.Chmod(FilePerm)
-	}
+	_, err = tmp.Write(b) // CreateTemp makes the file 0600 (FilePerm) itself
 	if err == nil {
 		err = tmp.Sync()
 	}
