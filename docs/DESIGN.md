@@ -73,5 +73,53 @@ Keys never live in the BlobStore ("keys never stored beside data"): the host
 holds the master key through a KMS wrapper or a passphrase key file it stores
 elsewhere.
 
-*(Formats, the chunk layer protocol, prolly, the version graph, merge and GC
-are added below as each lands.)*
+## 5. On-disk formats (a compatibility contract)
+
+All integers are little-endian; varints are minimal LEB128 (`core/internal/wire`,
+which refuses anything else). Every format has a hand-written decoder and a fuzz
+target; packs and index objects also have a checked-in v1 file that must read
+forever (`core/pack/testdata/pack_v1.bin`, `core/dedup/testdata/index_v1.bin`).
+
+**Key derivation (`core/seal`).** An object key is
+`HKDF-SHA-256(ikm = master, salt = object salt, info = "snapshot-core/object-key/v1" 0 tag 0 repo-id)`;
+associated data is `tag 0 context`. The key id is
+`HKDF-SHA-256(master, no salt, "snapshot-core/key-id/v1")`. Pinned by
+`TestObjectKeyDerivationAndAssociatedDataArePinned`.
+
+| Structure | Layout |
+| --- | --- |
+| Key file (139 B) | `"SCKF"` · version u16 · Argon2 time u32 · memory u32 · threads u8 · salt [32] · key id [32] · AES-GCM(KEK, master) [60]; AAD `"vdb/keyfile/v1" 0 header[0:79]` |
+| KMS envelope | `"SCKW"` · version u16 · key id [32] · wrapped (len-prefixed, ≤ 8 KiB) |
+| Pack | header `"SCPK"` · version u16 · flags u16 · salt [32]; frames `seal(Chunk, ctx = chunk hash, zstd-or-raw)`; index `seal(PackIndex, ctx = header, "SCPI" · version · count · entries sorted by hash: hash [32] · offset · stored · raw · codec)`; trailer index-offset u64 · index-length u32 · `"SCPE"` |
+| Index object | `"SCIX"` · version u16 · salt [32] · `seal(Index, ctx = header, "SCIP" · version · packs: pack hash [32] · salt [32] · size · entries …)`, packs and entries strictly sorted |
+| Manifest (the root value) | `"SCMF"` · version u16 · salt [32] · `seal(Refs, ctx = header, "SCMP" · version · seq u64 · gcGen u64 · root [32] · index-object hashes (sorted) · condemned list)` |
+| local store | `.snapshot-core` marker (`"SCLS"` · version · store id [16]) · `objects/<segment>~` · `tmp/` · `root` (`"SCRF"` · version · value · SHA-256) · `root.lock` |
+| multivol map | `"SCMV"` · version u16 · count u16 · (volume id [16] · path) … · SHA-256 |
+| S3 keys | `<prefix>objects/<name>!` (the `!` keeps any key from being both an object and a path prefix, which MinIO hides from listings; it sorts below every name byte) · `<prefix>root` = 16-byte nonce ‖ value · `<prefix>probe/…` |
+| Disk cache entry | `"SCCE"` · object name · SHA-256 of content · content |
+
+Object names: packs are `packs/<first byte hex>/<SHA-256 of the pack bytes>`,
+index objects `index/<SHA-256 of the object bytes>`; readers verify both.
+
+## 6. The chunk layer protocol (`core/chunk/packstore`)
+
+- **Put** adds to an in-memory pack writer. A full pack is finished, added to
+  the in-memory index, and uploaded; until the upload is confirmed its bytes
+  stay readable from memory. A failed upload is kept and retried by the next
+  CompareAndSetRoot, which refuses to publish while any pack is unstored.
+- **CompareAndSetRoot(expected, next)** refuses a `next` that is not a stored
+  chunk, uploads every pending pack, writes one index object for the session's
+  packs, then swaps the manifest (root := next, index list += the session's
+  objects, seq + 1). Every chunk a published root reaches is therefore durable
+  before the manifest names it. If the root moved, `ErrRootConflict` returns at
+  once (the caller re-reads and re-applies); if only the manifest changed
+  (another writer's index objects, GC), it refreshes and retries with jittered
+  backoff, at most 10 attempts (Engine Spec).
+- **Get** serves from the pending pack, then a byte-bounded LRU, then the
+  backend by one range read (the index object carries each pack's salt, so no
+  header fetch). A hash the index does not know triggers one manifest refresh.
+  Every path re-hashes what it returns.
+- Scale limit (v1): the whole index lives in memory (~70–80 bytes per chunk),
+  and the manifest lists every index object until GC compacts them (C4).
+
+*(The prolly tree, the version graph, merge and GC are added below as each lands.)*
