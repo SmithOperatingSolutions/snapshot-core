@@ -40,14 +40,15 @@ func (m *Map) apply(ctx context.Context, edits []edit) (*Map, error) {
 // chunker draws one level's nodes from its entries, storing each node as
 // it ends and keeping the entries a level up that name them.
 type chunker struct {
-	ctx     context.Context
-	m       *Map
-	level   int
-	split   *boundary.Splitter
-	pending []entry
-	out     []entry // one per stored node: its last key, hash and count
-	nodes   []*node // kept, not stored, when hold is set
-	hold    bool
+	ctx      context.Context
+	m        *Map
+	level    int
+	split    *boundary.Splitter
+	pending  []entry
+	out      []entry // one per stored node: its last key, hash and count
+	nodes    []*node // kept, not stored, when hold is set
+	hold     bool
+	existing map[hash.Hash]bool // nodes already stored: drawing one again writes nothing
 }
 
 func (m *Map) newChunker(ctx context.Context, level int, hold bool) *chunker {
@@ -73,7 +74,7 @@ func (c *chunker) end() error {
 		c.nodes = append(c.nodes, n)
 		return nil
 	}
-	e, err := c.m.store(c.ctx, n)
+	e, err := c.m.store(c.ctx, n, c.existing)
 	if err != nil {
 		return err
 	}
@@ -81,11 +82,15 @@ func (c *chunker) end() error {
 	return nil
 }
 
-// store writes n and returns the entry a level up that names it.
-func (m *Map) store(ctx context.Context, n *node) (entry, error) {
-	h, err := m.s.Put(ctx, n.encode())
-	if err != nil {
-		return entry{}, err
+// store writes n, unless it is one of existing, and returns the entry a
+// level up that names it.
+func (m *Map) store(ctx context.Context, n *node, existing map[hash.Hash]bool) (entry, error) {
+	b := n.encode()
+	h := hash.Sum(b)
+	if !existing[h] {
+		if _, err := m.s.Put(ctx, b); err != nil {
+			return entry{}, err
+		}
 	}
 	return entry{key: n.lastKey(), child: h, count: n.total()}, nil
 }
@@ -141,9 +146,11 @@ func (m *Map) applyLevel(ctx context.Context, level int, edits []edit) ([]edit, 
 			return nil, err
 		}
 		ch := m.newChunker(ctx, level, false)
+		ch.existing = map[hash.Hash]bool{} // a node drawn again ends where its old self did
 		var removed []entry
 		for {
 			removed = append(removed, entry{key: c.n.lastKey(), child: nodeHash(c), count: c.n.total()})
+			ch.existing[nodeHash(c)] = true
 			var limit []byte
 			if !c.lastNode() {
 				limit = c.n.lastKey()
@@ -218,7 +225,7 @@ func (m *Map) applyRoot(ctx context.Context, root *node, edits []edit) (*Map, er
 			}
 			n = c
 		}
-		e, err := m.store(ctx, n)
+		e, err := m.store(ctx, n, nil)
 		if err != nil {
 			return nil, err
 		}
@@ -226,7 +233,7 @@ func (m *Map) applyRoot(ctx context.Context, root *node, edits []edit) (*Map, er
 	}
 	up := make([]entry, 0, len(ch.nodes))
 	for _, n := range ch.nodes {
-		e, err := m.store(ctx, n)
+		e, err := m.store(ctx, n, nil)
 		if err != nil {
 			return nil, err
 		}

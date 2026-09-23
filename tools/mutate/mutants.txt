@@ -1469,3 +1469,24 @@ find: case len(ch.nodes) == 0: // everything was deleted
 replace: case len(ch.nodes) == 0 && false: // everything was deleted
 pkg: ./core/prolly
 run: ^TestDeletingEverythingLeavesTheEmptyMap$
+
+id: prolly-flush-identical-is-no-edit
+file: core/prolly/flush.go
+find: if removed[i].child != added[j].child || removed[i].count != added[j].count {
+replace: if removed[i].child != added[j].child || removed[i].count != added[j].count || true {
+pkg: ./core/prolly
+run: ^TestANoOpFlushWritesNothing$
+
+id: prolly-flush-stops-when-nothing-changed
+file: core/prolly/flush.go
+find: if len(edits) == 0 {\n\t\t\treturn m, nil
+replace: if len(edits) == 0 && false {\n\t\t\treturn m, nil
+pkg: ./core/prolly
+run: ^TestANoOpFlushWritesNothing$
+
+id: prolly-flush-skips-unchanged-nodes
+file: core/prolly/flush.go
+find: if !existing[h] {
+replace: if !existing[h] || true {
+pkg: ./core/prolly
+run: ^TestANoOpFlushWritesNothing$
