@@ -10,4 +10,5 @@ require (
 require (
 	github.com/cespare/xxhash/v2 v2.3.0 // indirect
 	golang.org/x/sys v0.47.0 // indirect
+	pgregory.net/rapid v1.3.0 // indirect
 )
