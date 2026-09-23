@@ -319,3 +319,88 @@ find: cmd.Env = append(os.Environ(), env...)
 replace: cmd.Env = os.Environ()
 pkg: ./tools/internal/mutation
 run: ^TestParseAndRunHonorEnv$
+
+id: local-put-links-never-overwrites
+file: core/blob/local/local.go
+find: if err := os.Link(tmpName, final); err != nil {
+replace: if err := os.Rename(tmpName, final); err != nil {
+pkg: ./core/blob/local
+run: ^TestContract$/^PutExistingRefused$
+
+id: local-swap-compares-version
+file: core/blob/local/local.go
+find: if cur.Version != expected {
+replace: if cur.Version != expected && false {
+pkg: ./core/blob/local
+run: ^TestContract$/^StaleSwapRefused$
+
+id: local-root-checksum-verified
+file: core/blob/local/local.go
+find: if want := sha256.Sum256(body); !bytes.Equal(sum, want[:]) {
+replace: if want := sha256.Sum256(body); !bytes.Equal(sum, want[:]) && false {
+pkg: ./core/blob/local
+run: ^TestRootFileCorruptionIsDetected$
+
+id: local-root-written-by-rename
+file: core/blob/local/local.go
+find: if err := os.Rename(tmpName, filepath.Join(s.dir, rootName)); err != nil {
+replace: if err := os.WriteFile(filepath.Join(s.dir, rootName), encodeRoot(v, next), filePerm); err != nil {
+pkg: ./core/blob/local
+run: ^TestCrashDuringSwapRootLeavesOldOrNew$
+env: SNAPSHOT_CRASH_ITERATIONS=1000
+
+id: local-list-dirs-sort-as-slash
+file: core/blob/local/local.go
+find: entries = append(entries, listEntry{key: base + de.Name() + "/", isDir: true})
+replace: entries = append(entries, listEntry{key: base + de.Name(), isDir: true})
+pkg: ./core/blob/local
+run: ^TestContract$/^ListPaging$
+
+id: local-filesystem-allowlist
+file: core/blob/local/local.go
+find: if !slices.Contains(AllowedFilesystems, name) {
+replace: if !slices.Contains(AllowedFilesystems, name) && false {
+pkg: ./core/blob/local
+run: ^TestOnlyAllowlistedFilesystems$
+
+id: local-open-checks-permissions
+file: core/blob/local/local.go
+find: if info.Mode().Perm()&0o077 != 0 {
+replace: if info.Mode().Perm()&0o077 != 0 && false {
+pkg: ./core/blob/local
+run: ^TestOpenRefusesAStoreOthersCanRead$
+
+id: local-open-requires-marker
+file: core/blob/local/local.go
+find: b, err := os.ReadFile(filepath.Join(dir, markerName))\n\tif errors.Is(err, fs.ErrNotExist) {\n\t\treturn nil, fmt.Errorf("%w: %s", ErrNotAStore, dir)\n\t}
+replace: b, err := os.ReadFile(filepath.Join(dir, markerName))\n\tif errors.Is(err, fs.ErrNotExist) {\n\t\tb, err = nil, nil\n\t}
+pkg: ./core/blob/local
+run: ^TestOpenRefusesADirectoryThatIsNotAStore$
+
+id: local-create-refuses-nonempty
+file: core/blob/local/local.go
+find: if len(entries) > 0 {
+replace: if len(entries) > 1000 {
+pkg: ./core/blob/local
+run: ^TestCreateRefusesANonEmptyDirectory$
+
+id: local-dirs-owner-only
+file: core/blob/local/local.go
+find: dirPerm     = 0o700
+replace: dirPerm     = 0o755
+pkg: ./core/blob/local
+run: ^TestNothingIsWiderThanOwnerOnly$
+
+id: local-files-owner-only
+file: core/blob/local/local.go
+find: filePerm    = 0o600
+replace: filePerm    = 0o644
+pkg: ./core/blob/local
+run: ^TestNothingIsWiderThanOwnerOnly$
+
+id: local-magic-ext4
+file: core/blob/local/local.go
+find: case 0xEF53:
+replace: case 0xEF54:
+pkg: ./core/blob/local
+run: ^TestFilesystemMagicNumbers$
