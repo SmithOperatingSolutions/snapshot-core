@@ -36,9 +36,9 @@ import (
 const DefaultMaxBytes = 10 << 30
 
 const (
-	entryMagic = "SCCE"
-	maxEntry   = 64 << 20 // larger reads pass through uncached
-	dirPerm    = 0o700
+	entryMagic        = "SCCE"
+	defaultEntryLimit = 64 << 20 // larger reads pass through uncached
+	dirPerm           = 0o700
 )
 
 // Options configures a cache.
@@ -56,8 +56,9 @@ type entry struct {
 // Store is a caching BlobStore.
 type Store struct {
 	blob.BlobStore
-	dir string
-	max int64
+	dir        string
+	max        int64
+	entryLimit int64
 
 	mu     sync.Mutex
 	used   int64
@@ -82,7 +83,7 @@ func New(inner blob.BlobStore, o Options) (*Store, error) {
 	if err := os.Chmod(o.Dir, dirPerm); err != nil {
 		return nil, err
 	}
-	s := &Store{BlobStore: inner, dir: o.Dir, max: o.MaxBytes, lru: list.New(),
+	s := &Store{BlobStore: inner, dir: o.Dir, max: o.MaxBytes, entryLimit: defaultEntryLimit, lru: list.New(),
 		items: map[string]*list.Element{}, byName: map[string]map[string]bool{}}
 	if err := s.reload(); err != nil {
 		return nil, err
@@ -242,12 +243,12 @@ func (s *Store) Get(ctx context.Context, name string, off, n int64) (io.ReadClos
 	if err != nil {
 		return nil, err
 	}
-	head, err := io.ReadAll(io.LimitReader(rc, maxEntry+1))
+	head, err := io.ReadAll(io.LimitReader(rc, s.entryLimit+1))
 	if err != nil {
 		_ = rc.Close()
 		return nil, err
 	}
-	if len(head) > maxEntry {
+	if int64(len(head)) > s.entryLimit {
 		return readCloser{Reader: io.MultiReader(bytes.NewReader(head), rc), c: rc}, nil // too big to cache
 	}
 	_ = rc.Close()
