@@ -27,6 +27,8 @@ var (
 	// (docs/DESIGN.md §9); nothing was published, and the writer must read
 	// again and write again.
 	ErrStale = errors.New("chunk: a chunk this write counted on was collected")
+	// ErrSessionLost: GC deleted writes this store had not published.
+	ErrSessionLost = errors.New("chunk: GC deleted writes this store had not published")
 )
 
 // MaxChunkSize is the Engine Spec's chunk limit.

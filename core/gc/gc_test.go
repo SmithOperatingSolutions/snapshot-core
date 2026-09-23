@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math/rand"
 	"strings"
 	"sync"
 	"testing"
@@ -196,6 +197,14 @@ func (w *world) note(m model.ID, content string) object.Ref {
 
 func (w *world) put(branch, path string, ref object.Ref) {
 	w.t.Helper()
+	if err := w.tryPut(branch, path, ref); err != nil {
+		w.t.Fatal(err)
+	}
+}
+
+// tryPut is put, returning the update's error.
+func (w *world) tryPut(branch, path string, ref object.Ref) error {
+	w.t.Helper()
 	ws, err := w.r.WorkingSet(ctx, alice, branch)
 	if err != nil {
 		w.t.Fatal(err)
@@ -213,9 +222,30 @@ func (w *world) put(branch, path string, ref object.Ref) {
 	}
 	next := ws
 	next.Working, next.Staged = n.Root(), n.Root()
-	if _, err := w.r.UpdateWorkingSet(ctx, alice, branch, ws, next); err != nil {
+	_, err = w.r.UpdateWorkingSet(ctx, alice, branch, ws, next)
+	return err
+}
+
+// reopen opens the repository again on a fresh store, as a host does when
+// its session was lost.
+func (w *world) reopen() {
+	w.t.Helper()
+	w.s = w.store()
+	r, err := vcs.Open(ctx, w.s, w.vcs())
+	if err != nil {
 		w.t.Fatal(err)
 	}
+	w.r = r
+}
+
+// root is the refs root the store sees.
+func (w *world) root() hash.Hash {
+	w.t.Helper()
+	h, err := w.s.Root(ctx)
+	if err != nil {
+		w.t.Fatal(err)
+	}
+	return h
 }
 
 func (w *world) commit(branch, msg string) vcs.Commit {
@@ -521,6 +551,56 @@ func TestAnAbandonedMergeIsCollected(t *testing.T) {
 	}
 	if got := w.readable(); !got["a note main keeps"] || !got["added on main"] {
 		t.Fatal("collecting the abandoned merge lost what main keeps")
+	}
+}
+
+// incompressible is n bytes of content that no codec shrinks.
+func incompressible(seed int64, n int) string {
+	b := make([]byte, n)
+	rand.New(rand.NewSource(seed)).Read(b)
+	return string(b)
+}
+
+// A writer that sat on a pack it uploaded past the grace window, while GC
+// deleted it as an orphan, cannot publish a root that reaches it: its
+// session is lost (ErrSessionLost) and the refs stay as they were. The host
+// reopens the repository, writes the note again, and it publishes; the
+// repository reads whole (issue #3).
+func TestAWriterCannotPublishAPackGCDeletedAsAnOrphan(t *testing.T) {
+	w := newWorld(t)
+	main := vcs.MainBranch
+	w.put(main, "notes/first", w.note(7, "an ordinary note"))
+	w.commit(main, "first")
+	packs := count(t, w.blobs, "packs/")
+	notes := []string{incompressible(1, 1500), incompressible(2, 1500), incompressible(3, 1500)}
+	var refs []object.Ref
+	for _, n := range notes { // the third fills the pack holding the first two: uploaded, not published
+		refs = append(refs, w.note(7, n))
+	}
+	if n := count(t, w.blobs, "packs/"); n != packs+1 {
+		t.Fatalf("fixture: the writer left %d packs, want one more than the %d published", n, packs)
+	}
+	root := w.root()
+	w.jump = grace + time.Minute
+	rep, err := w.gc()
+	if err != nil {
+		t.Fatalf("GC: %v", err)
+	}
+	deleted := strings.Join(rep.Deleted, " ")
+	if !strings.Contains(deleted, "packs/") {
+		t.Fatalf("fixture: GC deleted %v, want the writer's pack among them", rep.Deleted)
+	}
+	if err := w.tryPut(main, "notes/slow", refs[0]); !errors.Is(err, vcs.ErrSessionLost) {
+		t.Fatalf("publishing a note whose pack GC deleted as an orphan = %v, want ErrSessionLost", err)
+	}
+	if w.root() != root {
+		t.Fatal("the refused publish moved the refs")
+	}
+	w.reopen()
+	w.put(main, "notes/slow", w.note(7, notes[0]))
+	w.commit(main, "the slow note, written again")
+	if got := w.readable(); !got[notes[0]] {
+		t.Fatal("the note written again does not read")
 	}
 }
 

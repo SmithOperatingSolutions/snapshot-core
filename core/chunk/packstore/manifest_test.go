@@ -176,6 +176,23 @@ func (p plainParts) bytes(m manifest) []byte {
 	return append(b[:len(b)-p.trim], p.tail...)
 }
 
+// The manifest records the orphans GC deleted, packs and index objects
+// apart (kinds 3 and 4), and reads them back (issue #3).
+func TestAManifestRecordsDeletedOrphans(t *testing.T) {
+	kr := goldenKeyring(t)
+	m := goldenManifest()
+	m.condemned = append(m.condemned,
+		condemned{kind: 3, sum: sha256.Sum256([]byte("an orphan pack")), at: 1_700_000_001_000_000_000},
+		condemned{kind: 4, sum: sha256.Sum256([]byte("an orphan index object")), at: 1_700_000_001_500_000_000})
+	b, err := m.seal(kr, goldenRepo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if back, err := openManifest(b, kr, goldenRepo); err != nil || !sameManifest(back, m) {
+		t.Fatalf("a manifest recording deleted orphans reads back as %+v (%v), want %+v", back, err, m)
+	}
+}
+
 func TestForgedManifestsAreRefused(t *testing.T) {
 	kr, repo, g := goldenKeyring(t), goldenRepo, goldenManifest()
 	honest := partsOf(g)

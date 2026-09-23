@@ -53,8 +53,9 @@ type Options struct {
 	Blobs      blob.BlobStore
 	Keys       *seal.Keyring
 	Repo       seal.RepoID
-	PackSize   int // 0: DefaultPackSize
-	CacheBytes int // 0: DefaultCacheBytes; negative: no cache
+	PackSize   int              // 0: DefaultPackSize
+	CacheBytes int              // 0: DefaultCacheBytes; negative: no cache
+	Clock      func() time.Time // dates this store's uploads; nil: time.Now
 	backoff    time.Duration
 }
 

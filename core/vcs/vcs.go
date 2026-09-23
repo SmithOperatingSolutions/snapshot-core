@@ -50,6 +50,7 @@ var (
 	ErrUnresolvedConflicts = errors.New("vcs: unresolved merge conflicts")
 	ErrMergeState          = errors.New("vcs: only merging, resolving, committing and abandoning change a merge in progress")
 	ErrNoMerge             = errors.New("vcs: no merge in progress")
+	ErrSessionLost         = errors.New("vcs: GC deleted writes this repository had not published")
 )
 
 // Options configures a repository.

@@ -22,11 +22,16 @@ var ErrMoved = errors.New("packstore: the manifest moved during the GC round")
 // Begin reads it, GC marks from its root, and Apply condemns, reprieves and
 // expires against it, losing to any writer that published in between.
 type Round struct {
-	o     Options
-	man   manifest
-	ver   blob.Version
-	packs []pack.Info // every pack the manifest's index objects list
+	o       Options
+	man     manifest
+	ver     blob.Version
+	packs   []pack.Info // every pack the manifest's index objects list
+	orphans []string
 }
+
+// Orphans hands the round the packs and index objects GC found older than
+// the grace window by the backend's clock.
+func (r *Round) Orphans(names []string) {}
 
 // Begin reads the manifest and every index object it lists.
 func Begin(ctx context.Context, o Options) (*Round, error) {
@@ -68,6 +73,7 @@ type Outcome struct {
 	Condemned, Reprieved int             // packs
 	Expired              []string        // packs and index objects the manifest no longer names: the GC role deletes them
 	Named                map[string]bool // every pack and index object the manifest now names, live or condemned
+	Orphans              []string        // packs and index objects no manifest names, recorded as deleted: the GC role deletes them
 }
 
 // Apply decides against the round's manifest and swaps it: a pack none of

@@ -1,8 +1,11 @@
 package packstore
 
 import (
+	"context"
+	"sort"
 	"time"
 
+	"github.com/SmithOperatingSolutions/snapshot-core/core/dedup"
 	"github.com/SmithOperatingSolutions/snapshot-core/core/hash"
 )
 
@@ -30,4 +33,28 @@ func CorruptCached(s *Store, h hash.Hash) bool {
 	}
 	d[len(d)/2] ^= 1
 	return true
+}
+
+// Recorded lists, in order, the objects the store's manifest records as
+// orphans GC deleted.
+func Recorded(ctx context.Context, o Options) ([]string, error) {
+	r, err := o.Blobs.Root(ctx)
+	if err != nil || len(r.Value) == 0 {
+		return nil, err
+	}
+	m, err := openManifest(r.Value, o.Keys, o.Repo)
+	if err != nil {
+		return nil, err
+	}
+	var out []string
+	for _, c := range m.condemned {
+		switch c.kind {
+		case deletedPack:
+			out = append(out, dedup.PackName(c.sum))
+		case deletedIndex:
+			out = append(out, indexName(c.sum))
+		}
+	}
+	sort.Strings(out)
+	return out, nil
 }

@@ -38,6 +38,8 @@ type condemned struct {
 const (
 	condemnedPack  = 1
 	condemnedIndex = 2
+	deletedPack    = 3 // an orphan pack GC deleted
+	deletedIndex   = 4 // an orphan index object GC deleted
 )
 
 const (
