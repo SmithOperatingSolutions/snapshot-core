@@ -43,6 +43,10 @@ type Ref struct {
 type Config struct {
 	CDC   cdc.Geometry      // how data is cut
 	Nodes boundary.Geometry // how index nodes are split
+	// Workers hash and compress chunks in parallel while one goroutine cuts
+	// and one appends, in stream order (#10): 0 is runtime.GOMAXPROCS(0),
+	// 1 is the serial path. Chunks and hashes are the same at any count.
+	Workers int
 }
 
 // DefaultConfig is the default repo geometry.
