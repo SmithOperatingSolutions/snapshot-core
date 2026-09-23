@@ -275,6 +275,20 @@ func mustKeys(t *testing.T) *seal.Keyring {
 	return k
 }
 
+// exists looks an object up by name: a prefix can be shared by a real pack,
+// whose name is the hash of bytes sealed under a random salt.
+func exists(t *testing.T, bs blob.BlobStore, name string) bool {
+	t.Helper()
+	_, err := bs.Stat(ctx, name)
+	if errors.Is(err, blob.ErrNotFound) {
+		return false
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	return true
+}
+
 func count(t *testing.T, bs blob.BlobStore, prefix string) int {
 	t.Helper()
 	infos, err := bs.List(ctx, prefix, "", blob.MaxListPage)
@@ -300,7 +314,7 @@ func TestOrphanAgesAreTheBackendsClock(t *testing.T) {
 	if _, err := w.gc(); err != nil {
 		t.Fatal(err)
 	}
-	if n := count(t, w.blobs, "packs/cd/"); n != 1 {
+	if !exists(t, w.blobs, fresh) {
 		t.Fatal("GC deleted an upload of a moment ago because the backend's clock is behind its own")
 	}
 
@@ -323,7 +337,7 @@ func TestOrphanAgesAreTheBackendsClock(t *testing.T) {
 	if n := count(t, w.blobs, "packs/"); n >= packs {
 		t.Fatalf("with GC's clock a grace window on, %d packs remain of %d: the expired ones were left for an orphan scan the backend's clock cannot pass", n, packs)
 	}
-	if n := count(t, w.blobs, "packs/cd/"); n != 1 {
+	if !exists(t, w.blobs, fresh) {
 		t.Fatalf("an object new by the backend's clock was deleted (deleted %v)", second.Deleted)
 	}
 	if got := w.readable(); !got["kept"] {
@@ -483,5 +497,99 @@ func TestGCTakesAnotherRoundWhenAWriterPublishes(t *testing.T) {
 	}
 	if got := w.readable(); !got["published during the mark"] || !got["before"] {
 		t.Fatalf("after GC the repository reads %v, want both notes", got)
+	}
+}
+
+// del removes path from a branch's working namespace and stages it.
+func (w *world) del(branch, path string) {
+	w.t.Helper()
+	ws, err := w.r.WorkingSet(ctx, alice, branch)
+	if err != nil {
+		w.t.Fatal(err)
+	}
+	n, err := w.r.Namespace(ctx, ws.Working)
+	if err != nil {
+		w.t.Fatal(err)
+	}
+	e := n.Editor()
+	if err := e.Delete(path); err != nil {
+		w.t.Fatal(err)
+	}
+	if n, err = e.Flush(ctx); err != nil {
+		w.t.Fatal(err)
+	}
+	next := ws
+	next.Working, next.Staged = n.Root(), n.Root()
+	if _, err := w.r.UpdateWorkingSet(ctx, alice, branch, ws, next); err != nil {
+		w.t.Fatal(err)
+	}
+}
+
+// flush publishes what has been put so far, in a pack of its own.
+func (w *world) flush() {
+	w.t.Helper()
+	root, err := w.s.Root(ctx)
+	if err != nil {
+		w.t.Fatal(err)
+	}
+	if err := w.s.CompareAndSetRoot(ctx, root, root); err != nil {
+		w.t.Fatal(err)
+	}
+}
+
+// GC is not steered by bytes that play two parts (DESIGN §9): a file whose
+// bytes are an old commit's namespace node, written into the working set,
+// is met first, as a leaf, when GC walks the working set; the node, met
+// later through the history, must still be gone into, or the object only
+// that old commit holds (in a pack of its own) would be deleted.
+func TestGCIsNotSteeredByAFileThatIsANode(t *testing.T) {
+	w := newWorld(t)
+	x := w.note(7, "only the old commit holds this")
+	w.flush()
+	w.put(vcs.MainBranch, "x", x)
+	old := w.commit(vcs.MainBranch, "old")
+	w.del(vcs.MainBranch, "x")
+	w.commit(vcs.MainBranch, "new")
+	node, err := w.s.Get(ctx, old.Namespace)
+	if err != nil {
+		t.Fatal(err)
+	}
+	steer := w.note(7, string(node))
+	if steer.Root.Hash != old.Namespace {
+		t.Fatal("fixture: the file's bytes are not the node's")
+	}
+	w.put(vcs.MainBranch, "steer", steer)
+	if _, err := w.gc(); err != nil {
+		t.Fatal(err)
+	}
+	w.jump = grace + time.Minute
+	if _, err := w.gc(); err != nil {
+		t.Fatal(err)
+	}
+	if !w.readable()["only the old commit holds this"] {
+		t.Fatal("the object only the old commit holds is gone: GC took the node for the file")
+	}
+}
+
+// GC leaves no probe of the backend's clock behind, and deletes one a
+// stopped run left, once it is older than the grace window.
+func TestGCLeavesNoProbeBehind(t *testing.T) {
+	w := newWorld(t)
+	left := "gc/clock-" + strings.Repeat("0", 16)
+	if err := w.blobs.Put(ctx, left, strings.NewReader(""), 0); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := w.gc(); err != nil {
+		t.Fatal(err)
+	}
+	if n := count(t, w.blobs, "gc/"); n != 1 {
+		t.Fatalf("after a run %d objects under gc/, want only the one a stopped run left", n)
+	}
+	w.jump = grace + time.Minute
+	if _, err := w.gc(); err != nil {
+		t.Fatal(err)
+	}
+	if n := count(t, w.blobs, "gc/"); n != 0 {
+		t.Fatalf("a grace window on, %d objects under gc/, want none", n)
 	}
 }

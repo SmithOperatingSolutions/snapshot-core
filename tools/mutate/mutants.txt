@@ -2967,3 +2967,24 @@ find: now, err := backendNow(ctx, o.Blobs)
 replace: now, err := clock(), error(nil)
 pkg: ./core/gc
 run: ^TestOrphanAgesAreTheBackendsClock$
+
+id: gc-prunes-only-what-it-went-into
+file: core/gc/gc.go
+find: live[h] = true\n\t\tif leaf || gone[h] {
+replace: seen := live[h]\n\t\tlive[h] = true\n\t\tif leaf || seen {
+pkg: ./core/gc
+run: ^TestGCIsNotSteeredByAFileThatIsANode$
+
+id: gc-removes-its-probe
+file: core/gc/gc.go
+find: if derr := bs.Delete(ctx, name); err == nil {
+replace: if derr := error(nil); err == nil {
+pkg: ./core/gc
+run: ^TestGCLeavesNoProbeBehind$
+
+id: gc-sweeps-stopped-probes
+file: core/gc/gc.go
+find: for _, prefix := range []string{"packs/", "index/", probePrefix} {
+replace: for _, prefix := range []string{"packs/", "index/"} {
+pkg: ./core/gc
+run: ^TestGCLeavesNoProbeBehind$
