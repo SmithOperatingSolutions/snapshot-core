@@ -118,11 +118,8 @@ func TestATableAnswersEveryRecordItWasBuiltFrom(t *testing.T) {
 // A key added twice keeps its first value, across runs and within one: the
 // packs still in service are added first, and win.
 func TestTheFirstRecordOfAKeyWins(t *testing.T) {
-	recs := records(3, 10)
-	var twice []record
-	for _, r := range recs {
-		twice = append(twice, r)
-	}
+	recs := records(3, 2_000)
+	twice := slices.Clone(recs)
 	for _, r := range recs {
 		later := slices.Clone(r.v)
 		later[0] ^= 0xff
@@ -171,11 +168,11 @@ func TestAnEmptyTableMissesEverything(t *testing.T) {
 // buffers of a lookup, however large the table.
 func TestATableHoldsAlmostNothingInMemory(t *testing.T) {
 	recs := records(5, 1_000_000)
-	heap := func() uint64 {
+	heap := func() int64 {
 		runtime.GC()
 		var m runtime.MemStats
 		runtime.ReadMemStats(&m)
-		return m.HeapAlloc
+		return int64(m.HeapAlloc)
 	}
 	dir := t.TempDir()
 	before := heap()

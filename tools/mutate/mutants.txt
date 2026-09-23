@@ -3816,3 +3816,66 @@ find: r.Repack(o.Repack)
 replace: r.Repack(packstore.Repack{Off: true})
 pkg: ./core/gc
 run: ^TestGCSafetyProperty$
+
+id: table-checks-the-magic
+file: core/dedup/table.go
+find: case string(hdr[:4]) != tableMagic:
+replace: case false && string(hdr[:4]) != tableMagic:
+pkg: ./core/dedup
+run: ^TestATableThatDoesNotDecodeIsRefused$
+
+id: table-checks-its-size
+file: core/dedup/table.go
+find: want != size {
+replace: false {
+pkg: ./core/dedup
+run: ^TestATableThatDoesNotDecodeIsRefused$
+
+id: table-merge-keeps-one-record-per-key
+file: core/dedup/table.go
+find: if last == nil || !bytes.Equal(r.rec[:hash.Size], last) {
+replace: if true {
+pkg: ./core/dedup
+run: ^TestTheFirstRecordOfAKeyWins$
+
+id: table-merge-takes-the-earlier-run-first
+file: core/dedup/table.go
+find: return c < 0 || (c == 0 && m.heads[i].i < m.heads[j].i)
+replace: return c < 0 || (c == 0 && m.heads[i].i > m.heads[j].i)
+pkg: ./core/dedup
+run: ^TestTheFirstRecordOfAKeyWins$
+
+id: table-spill-sorts-stably
+file: core/dedup/table.go
+find: slices.SortStableFunc(idx, func(i, j int32) int { return bytes.Compare(key(i), key(j)) })
+replace: slices.SortFunc(idx, func(i, j int32) int { return bytes.Compare(key(i), key(j)) })
+pkg: ./core/dedup
+run: ^TestTheFirstRecordOfAKeyWins$
+
+id: table-samples-each-blocks-first-key
+file: core/dedup/table.go
+find: if samples != nil && count%sampleEvery == 0 {
+replace: if samples != nil && count%sampleEvery == 1 {
+pkg: ./core/dedup
+run: ^TestATableAnswersEveryRecordItWasBuiltFrom$
+
+id: table-close-removes-the-file
+file: core/dedup/table.go
+find: if rerr := os.Remove(t.path); err == nil {
+replace: if rerr := error(nil); err == nil {
+pkg: ./core/dedup
+run: ^TestAnEmptyTableMissesEverything$
+
+id: table-cursor-ends-at-the-count
+file: core/dedup/table.go
+find: if c.left == 0 {\n\t\treturn h, nil, false, nil\n\t}
+replace: if false {\n\t\treturn h, nil, false, nil\n\t}
+pkg: ./core/dedup
+run: ^TestATableAnswersEveryRecordItWasBuiltFrom$
+
+id: table-finish-removes-the-runs
+file: core/dedup/table.go
+find: removeAll(b.runs)\n\tb.runs = nil\n\tt, err := OpenTable(path)
+replace: b.runs = nil\n\tt, err := OpenTable(path)
+pkg: ./core/dedup
+run: ^TestATableAnswersEveryRecordItWasBuiltFrom$
