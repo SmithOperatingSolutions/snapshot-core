@@ -129,3 +129,101 @@ can refuse them) and a fuzz target.
   and the manifest lists every index object until GC compacts them (C4).
 
 *(The prolly tree, the version graph, merge and GC are added below as each lands.)*
+
+## 7. Keyed data (`core/boundary`, `core/stream`, `core/prolly`)
+
+Everything above the chunk layer is chunks that name other chunks by hash.
+Two structures do it: prolly trees (ordered key-value maps, Engine Spec L1)
+and streams (byte sequences cut by CDC). Both draw node boundaries from
+content alone, so equal contents are equal chunks whatever history produced
+them. These formats are a compatibility contract like those in §5.
+
+**Chunk kinds.** A structured chunk's first byte says what it is:
+
+| First byte | Chunk |
+| --- | --- |
+| `0x01` | prolly node, v1 |
+| `0x02` | stream index node, v1 |
+
+Raw stream data (the bytes of a file or a long value) has no header. It is
+reached only through a stream index node or a stream ref, which say what it
+is. C3 adds kinds for commits and refs.
+
+### The split rule (`core/boundary`)
+
+A node ends after an entry when the entry's window falls under a threshold
+that rises with the node's size:
+
+- **Size** is the encoded length of the node's entries so far, without the
+  node header; `before` and `after` are that length without and with the entry.
+- `after < Min` (512 B): never. `after ≥ Max` (16 KiB): always.
+- Otherwise when `window < T`, with `T = ⌊(after⁴ − before⁴) · 2³² / λ⁴⌋`
+  (2³² or more: always), computed in 128-bit integers (`math/bits`) so that
+  every platform draws the same tree.
+- `λ = round(Target / Γ(5/4))`: 4,519 for the 4 KiB target, `λ⁴ =
+  417,031,985,092,321`. `(s/λ)⁴` is the cumulative hazard of a Weibull
+  distribution with shape 4 and scale λ, whose mean is the target, and `T` is
+  the entry's share of it: nodes cluster around 4 KiB, about 1 in 6,000 would
+  end before 512 B, and reaching 16 KiB has probability around 10⁻⁷⁵.
+- **Window** is 4 bytes of a 32-byte digest, big-endian: bytes `[4L, 4L+4)` at
+  level `L < 8`, and at `L ≥ 8` the same window of `SHA-256(digest ‖ byte(L/8))`.
+  Prolly uses `sha256(key)` (the leaf key, or at internal levels the child's
+  last key); streams use the child chunk's hash. A fresh window per level
+  keeps a key that ended a leaf from being biased to end its parent as well.
+- **At levels ≥ 1 a node takes at least two entries** before it may end (a
+  level's last node excepted). One internal entry with a 4 KiB key already
+  passes `Min`; without this rule a level could fail to shrink and a tree
+  would have no height bound. With it, height ≤ log₂ N + 1.
+
+### Prolly nodes (`core/prolly`)
+
+```
+node            0x01 · level u8 · count uvarint · entry × count
+leaf entry      key · value                                    (level 0)
+internal entry  key · child [32] · entries uvarint             (level ≥ 1)
+key             length uvarint (0..4096) · bytes
+value           0x00 · length uvarint (≤ inline limit) · bytes (inline)
+              | 0x01 · stream ref                              (longer values)
+stream ref      root [32] · size uvarint · depth u8
+```
+
+- Keys are strictly increasing within a node and across a level (raw byte
+  order). An internal entry's key is its child's last key, and `entries`
+  counts the leaf entries under it, so `Count` is O(1).
+- Canonical forms, enforced on decode (`ErrCorrupt`): a value at or under
+  the inline limit (256 KiB, repo geometry) is inline and a longer one is a
+  stream ref; a level with one node is the top (no single-child root); only
+  the empty map has a node without entries; level ≤ 63.
+- **The empty map** is the leaf `01 00 00`, root
+  `fb50dc0717ff266cf9baf82b1ce7a1c2ef6d9247859680b11a19fb7077f5f222`.
+- A key over 4 KiB is `ErrKeyTooLarge`, and the edit is not applied.
+
+### Streams (`core/stream`)
+
+```
+index node  0x02 · level u8 (≥ 1) · count uvarint (≥ 1) · (child [32] · size uvarint) × count
+stream ref  root [32] · size · depth
+```
+
+- Data is cut by `core/cdc` with the repo's geometry, each piece a raw data
+  chunk (at most 1 MiB). Level-1 index nodes list data chunks and higher
+  levels list index nodes; each entry carries the byte length under it, so a
+  read at any offset descends straight to its chunk. Index nodes split by the
+  rule above, windowed on the child hashes.
+- Depth 0: the root is the stream's only data chunk (every one-piece stream,
+  including the empty stream, which is the empty chunk). Otherwise the root is
+  an index node of level = depth, with more than one child.
+- Reads verify every chunk by SHA-256 (the chunk store) and every size
+  against the bytes actually found (`ErrCorrupt`).
+
+### Editing and diff
+
+- An `Editor` buffers puts and deletes; `Flush` applies them in key order,
+  level by level. At each level it re-chunks from the start of the first node
+  an edit touches and stops once a new boundary falls where an old one was,
+  past the last edit of that stretch; from there the old nodes are reused,
+  not rewritten. A value edit that keeps the value's length changes no
+  boundary, so it rewrites exactly one node per level: height + 1 nodes.
+- `Diff` walks both trees in key order and skips every pair of aligned
+  subtrees whose hashes match, so its reads grow with the size of the change
+  times the height, not with the size of the map.
