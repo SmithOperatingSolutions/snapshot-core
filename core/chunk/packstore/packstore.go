@@ -413,12 +413,46 @@ func (s *Store) upload(ctx context.Context, packs []pack.Built) error {
 	return first
 }
 
+// prepared is a chunk hashed and compressed, not yet stored.
+type prepared struct {
+	h       hash.Hash
+	n       int    // the chunk's length
+	payload []byte // compressed, or the chunk itself
+	codec   uint8
+}
+
+func (p *prepared) Hash() hash.Hash { return p.h }
+func (p *prepared) Len() int        { return p.n }
+
+var _ chunk.Preparer = (*Store)(nil)
+
+// Prepare implements chunk.Preparer: the hash and the compression, on the
+// caller's goroutine, with no lock taken.
+func (s *Store) Prepare(data []byte) (chunk.Prepared, error) {
+	if len(data) > chunk.MaxChunkSize {
+		return nil, fmt.Errorf("%w: %d bytes", chunk.ErrTooLarge, len(data))
+	}
+	payload, codec := s.codec.Compress(data)
+	return &prepared{h: hash.Sum(data), n: len(data), payload: payload, codec: codec}, nil
+}
+
 // Put implements chunk.Store.
 func (s *Store) Put(ctx context.Context, data []byte) (hash.Hash, error) {
-	if len(data) > chunk.MaxChunkSize {
-		return hash.Hash{}, fmt.Errorf("%w: %d bytes", chunk.ErrTooLarge, len(data))
+	p, err := s.Prepare(data)
+	if err != nil {
+		return hash.Hash{}, err
 	}
-	h := hash.Sum(data)
+	return s.PutPrepared(ctx, p)
+}
+
+// PutPrepared implements chunk.Preparer: the deduplication check, the seal
+// into the pending pack and its upload when full, under the store's lock.
+func (s *Store) PutPrepared(ctx context.Context, cp chunk.Prepared) (hash.Hash, error) {
+	p, ok := cp.(*prepared)
+	if !ok {
+		return hash.Hash{}, errors.New("packstore: a chunk prepared by another store")
+	}
+	h := p.h
 	s.mu.Lock()
 	if s.closed {
 		s.mu.Unlock()
@@ -451,12 +485,12 @@ func (s *Store) Put(ctx context.Context, data []byte) (hash.Hash, error) {
 		}
 		s.pending = w
 	}
-	err = s.pending.Add(h, data)
+	err = s.pending.AddCompressed(h, p.n, p.payload, p.codec)
 	var full *pack.Built
 	if errors.Is(err, pack.ErrFull) {
 		if full, err = s.finishPendingLocked(); err == nil {
 			if s.pending, err = s.newWriter(); err == nil {
-				err = s.pending.Add(h, data)
+				err = s.pending.AddCompressed(h, p.n, p.payload, p.codec)
 			}
 		}
 	}

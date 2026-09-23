@@ -17,6 +17,7 @@ import (
 	"io"
 	"math"
 	"math/bits"
+	"runtime"
 
 	"github.com/SmithOperatingSolutions/snapshot-core/core/boundary"
 	"github.com/SmithOperatingSolutions/snapshot-core/core/cdc"
@@ -69,6 +70,19 @@ func Write(ctx context.Context, w chunk.Writer, r io.Reader, c Config) (Ref, err
 		return Ref{}, err
 	}
 	b := &builder{ctx: ctx, w: w, rule: rule}
+	workers := c.Workers
+	if workers == 0 {
+		workers = runtime.GOMAXPROCS(0)
+	}
+	if pw, ok := w.(chunk.Preparer); ok && workers > 1 {
+		stop := make(chan struct{}) // the write is over: every goroutine winds down
+		defer close(stop)
+		ahead, err := cdc.New(readAhead(r, stop), c.CDC)
+		if err != nil {
+			return Ref{}, err
+		}
+		return b.parallel(ahead, pw, workers, stop)
+	}
 	for {
 		data, err := cut.Next()
 		if errors.Is(err, io.EOF) {
@@ -85,6 +99,80 @@ func Write(ctx context.Context, w chunk.Writer, r io.Reader, c Config) (Ref, err
 			return Ref{}, err
 		}
 	}
+}
+
+// job is one chunk on its way through the workers: cut, then prepared,
+// then stored in stream order.
+type job struct {
+	data []byte
+	p    chunk.Prepared
+	err  error
+	done chan struct{}
+}
+
+// parallel is Write with the chunks hashed and compressed on workers
+// goroutines (#10): one goroutine reads ahead, one cuts, the workers
+// prepare, and this goroutine stores each prepared chunk in stream order
+// and grows the index. At most 2*workers chunks and a few read buffers are
+// in flight, so memory is bounded by about 2*workers*MaxChunkSize whatever
+// the stream's size. The stream is the same as the serial path's: the
+// cutter is the same and stores happen in its order, so every chunk, hash
+// and node is identical. stop, closed by the caller when the write is
+// over, winds every goroutine down.
+func (b *builder) parallel(cut *cdc.Chunker, w chunk.Preparer, workers int, stop chan struct{}) (Ref, error) {
+	work := make(chan *job, workers) // cut, to be prepared
+	order := make(chan *job, workers)
+	go func() {
+		defer close(work)
+		defer close(order)
+		for {
+			data, err := cut.Next()
+			j := &job{data: data, err: err, done: make(chan struct{})}
+			if err != nil {
+				close(j.done) // nothing to prepare; the storer sees the error, or EOF
+				select {
+				case order <- j:
+				case <-stop:
+				}
+				return
+			}
+			select {
+			case order <- j:
+			case <-stop:
+				return
+			}
+			select {
+			case work <- j:
+			case <-stop:
+				return
+			}
+		}
+	}()
+	for range workers {
+		go func() {
+			for j := range work {
+				j.p, j.err = w.Prepare(j.data)
+				close(j.done)
+			}
+		}()
+	}
+	for j := range order {
+		<-j.done
+		if errors.Is(j.err, io.EOF) {
+			return b.finish()
+		}
+		if j.err != nil {
+			return Ref{}, j.err
+		}
+		h, err := w.PutPrepared(b.ctx, j.p)
+		if err != nil {
+			return Ref{}, err
+		}
+		if err := b.add(1, entry{child: h, size: uint64(len(j.data))}); err != nil {
+			return Ref{}, err
+		}
+	}
+	return Ref{}, errors.New("stream: the cutter stopped without an end")
 }
 
 // builder grows the index tree one entry at a time: each level holds the
@@ -381,4 +469,67 @@ func ReadAll(ctx context.Context, rd chunk.Reader, ref Ref) ([]byte, error) {
 		return nil, err
 	}
 	return buf.Bytes(), nil
+}
+
+// readAhead reads r on its own goroutine, a few buffers ahead of the
+// cutter, so the source's latency and the cut overlap; it serves the bytes,
+// then the error, in the order they came, and stops when stop closes.
+func readAhead(r io.Reader, stop <-chan struct{}) io.Reader {
+	const bufSize, ahead = 64 << 10, 4
+	ra := &aheadReader{filled: make(chan aheadBuf, ahead), stop: stop}
+	go func() {
+		defer close(ra.filled)
+		for {
+			buf := make([]byte, bufSize)
+			n, err := r.Read(buf)
+			select {
+			case ra.filled <- aheadBuf{buf[:n], err}:
+			case <-stop:
+				return
+			}
+			if err != nil {
+				return
+			}
+		}
+	}()
+	return ra
+}
+
+type aheadBuf struct {
+	data []byte
+	err  error
+}
+
+type aheadReader struct {
+	filled chan aheadBuf
+	stop   <-chan struct{}
+	cur    aheadBuf
+	err    error
+}
+
+// Read serves the buffers in order; a read that returned bytes with its
+// error is served as the bytes, then the error, as the cutter expects.
+func (ra *aheadReader) Read(p []byte) (int, error) {
+	for len(ra.cur.data) == 0 {
+		if ra.cur.err != nil {
+			err := ra.cur.err
+			ra.cur.err = nil
+			return 0, err
+		}
+		if ra.err != nil {
+			return 0, ra.err
+		}
+		next, ok := <-ra.filled
+		if !ok {
+			ra.err = io.EOF
+			return 0, io.EOF
+		}
+		ra.cur = next
+		if len(ra.cur.data) == 0 && ra.cur.err == nil {
+			return 0, nil // a (0, nil) read, passed on as such
+		}
+	}
+	n := copy(p, ra.cur.data)
+	ra.cur.data = ra.cur.data[n:]
+	return n, nil
 }

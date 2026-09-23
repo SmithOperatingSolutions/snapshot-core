@@ -51,6 +51,22 @@ type ReadWriter interface {
 	Writer
 }
 
+// Prepared is a chunk hashed and compressed, ready for a Preparer to store.
+type Prepared interface {
+	Hash() hash.Hash
+	Len() int // the chunk's bytes
+}
+
+// Preparer is a Writer whose per-chunk work (hashing, compression) can be
+// done on any goroutine, apart from storing: Prepare on many goroutines
+// at once, then PutPrepared in the order the caller needs (#10). Prepare
+// and PutPrepared together are Put.
+type Preparer interface {
+	Writer
+	Prepare(data []byte) (Prepared, error)
+	PutPrepared(ctx context.Context, p Prepared) (hash.Hash, error)
+}
+
 // Stats describes what a store holds.
 type Stats struct {
 	Chunks int64 // distinct chunks stored (including ones not yet published)

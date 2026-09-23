@@ -170,7 +170,11 @@ func NewWriter(kr *seal.Keyring, repo seal.RepoID, codec *Codec, maxSize int) (*
 	w.U16(version)
 	w.U16(0) // flags
 	w.Raw(salt[:])
-	return &Writer{codec: codec, keys: keys, salt: salt, maxSize: maxSize, buf: w.Bytes(),
+	// The pack's bytes, allocated once at the pack's size: appending frames
+	// then never grows and copies the pack, which was a third of what a
+	// store did per chunk (#10).
+	buf := make([]byte, 0, maxSize)
+	return &Writer{codec: codec, keys: keys, salt: salt, maxSize: maxSize, buf: append(buf, w.Bytes()...),
 		entries: map[hash.Hash]Entry{}}, nil
 }
 
@@ -182,22 +186,38 @@ func indexBound(n int) int { return len(indexMagic) + 2 + 5 + n*maxEntryLen + se
 // past its size or count limit (ErrFull: start another pack). A pack's first
 // chunk is always accepted, so one oversized chunk still gets a pack.
 func (w *Writer) Add(h hash.Hash, data []byte) error {
+	if w.finished || len(data) > MaxChunkSize || len(w.entries) >= MaxChunksPerPack {
+		return w.AddCompressed(h, len(data), nil, CodecRaw) // the refusal, without compressing first
+	}
+	payload, codec := w.codec.Compress(data)
+	return w.AddCompressed(h, len(data), payload, codec)
+}
+
+// Compress is the payload a chunk is stored as: zstd when that is shorter,
+// else the bytes themselves. Safe to call from many goroutines at once.
+func (c *Codec) Compress(data []byte) (payload []byte, codec uint8) {
+	if len(data) > 0 {
+		if z := c.enc.EncodeAll(data, nil); len(z) < len(data) {
+			return z, CodecZstd
+		}
+	}
+	return data, CodecRaw
+}
+
+// AddCompressed is Add for a chunk already compressed by this writer's
+// codec (Compress): rawLen is the chunk's length, payload and codec what
+// Compress returned. The seal, which needs this pack's keys, happens here.
+func (w *Writer) AddCompressed(h hash.Hash, rawLen int, payload []byte, codec uint8) error {
 	switch {
 	case w.finished:
 		return errors.New("pack: writer is finished")
-	case len(data) > MaxChunkSize:
-		return fmt.Errorf("%w: %d bytes, limit %d", ErrTooLarge, len(data), MaxChunkSize)
+	case rawLen > MaxChunkSize:
+		return fmt.Errorf("%w: %d bytes, limit %d", ErrTooLarge, rawLen, MaxChunkSize)
 	case len(w.entries) >= MaxChunksPerPack:
 		return ErrFull
 	}
 	if _, ok := w.entries[h]; ok {
 		return ErrDup
-	}
-	payload, codec := data, CodecRaw
-	if len(data) > 0 {
-		if z := w.codec.enc.EncodeAll(data, nil); len(z) < len(data) {
-			payload, codec = z, CodecZstd
-		}
 	}
 	sealed, err := w.keys.chunk.Seal(h[:], payload)
 	if err != nil {
@@ -207,7 +227,7 @@ func (w *Writer) Add(h hash.Hash, data []byte) error {
 		return ErrFull
 	}
 	w.entries[h] = Entry{Hash: h, Offset: uint32(len(w.buf)), StoredLen: uint32(len(sealed)),
-		RawLen: uint32(len(data)), Codec: codec}
+		RawLen: uint32(rawLen), Codec: codec}
 	w.buf = append(w.buf, sealed...)
 	return nil
 }
