@@ -338,7 +338,18 @@ func stepMinio(ctx context.Context, _ *config) error {
 		env = append(env, "SNAPSHOT_S3_ENDPOINT="+endpoint, "SNAPSHOT_S3_ACCESS_KEY=snapshotcore",
 			"SNAPSHOT_S3_SECRET_KEY=snapshotcore-secret", "SNAPSHOT_S3_BUCKET=snapshot-core-test")
 	}
-	return stream(ctx, env, "go", "test", "-count=1", "-timeout", "20m", "./core/blob/s3/...", "./core/chunk/...")
+	pkgs, err := productPackages(ctx)
+	if err != nil {
+		return err
+	}
+	var s3pkgs []string
+	for _, p := range pkgs {
+		if strings.HasPrefix(p, "./core/blob/s3") || strings.HasPrefix(p, "./core/chunk") {
+			s3pkgs = append(s3pkgs, p)
+		}
+	}
+	args := append([]string{"test", "-count=1", "-timeout", "20m"}, s3pkgs...)
+	return stream(ctx, env, "go", args...)
 }
 
 // --- helpers ---
