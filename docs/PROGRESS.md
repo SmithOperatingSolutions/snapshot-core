@@ -153,7 +153,7 @@ packages have no gate: their callers exercise them.
 - [x] SHA-256 verified on every read, from every backend, cached or not (chunk contract on every backend, `TestCachedReadsAreVerified`; disk-cache entries carry their own SHA-256, `TestDamagedEntryIsRefetched`)
 - [x] Hand-written, bounds-checked decoders, fuzzed: `wire`, key file, KMS envelope, local root file and marker, multivol volume map, pack, index object, manifest, stream index node, prolly node, commit, tag, working set, conflict record, tree entry, object reference (`FuzzDecodeRef`) and repository config (`FuzzOpenConfig`); each sealed format also with a v1 golden file, every format with forgery tests, and CI's fuzz step lists the targets itself
 - [x] Model ids resolved only against the compiled-in registry (registries are built explicitly by the host, `model.NewRegistry`; nothing registers itself, and an id or format the registry lacks is `ErrUnknownModel` before anything is read)
-- [x] Every public call takes a `Principal`; the core passes it to a default-deny `Authorizer` per branch and per path prefix. Per branch, tag and repository (`TestEveryCallIsAuthorized` over all fifteen version-graph calls under a recording, a denying, a nil and a read-only authorizer; `Init` and `repo.GC` ask for admin, `TestARefusedInitWritesNothing`, `TestAnAdminCollectsTheRepositoryOnTheRawStore`; a nil authorizer denies, `TestDenyAllRefusesEveryCall`); per path, every write asks for each path it changes, checked against what is stored (`TestWritesAreAuthorizedPerPath`). Argued in DESIGN §8: `Namespace` opens what a hash names without asking, and reads stay per branch (a host holding the chunk store reads what it can open)
+- [x] Every public call takes a `Principal`; the core passes it to a default-deny `Authorizer` per branch and per path prefix. Per branch, tag and repository (`TestEveryCallIsAuthorized` over every version-graph call under a recording, a denying, a nil and a read-only authorizer; `Init` and `repo.GC` ask for admin, `TestARefusedInitWritesNothing`, `TestAnAdminCollectsTheRepositoryOnTheRawStore`; a nil authorizer denies, `TestDenyAllRefusesEveryCall`); per path, every write asks for each path it changes, checked against what is stored (`TestWritesAreAuthorizedPerPath`). Argued in DESIGN §8: `Namespace` opens what a hash names without asking, and reads stay per branch (a host holding the chunk store reads what it can open)
 - [x] Hard limits: object size, list page, chunk size, pack size and chunks per pack, index objects per manifest, key size, inline value size, tree height; path depth and length (`TestInvalidPathsAreRejected`), conflicts per merge (`TestTooManyConflictsAbort`, default 100,000), `Log` length (`TestLogIsBoundedAndHighestFirst`), commit and tag messages (`TestMessagesAreBoundedUTF8`), principal ids
 - [x] Supply chain: disknexus pinned by version and `go.sum`; `go mod verify`, `govulncheck` in CI
 - [x] CI: `staticcheck` (via golangci-lint), `golangci-lint` warnings as errors, `govulncheck`, red-check
@@ -308,8 +308,10 @@ them, each tracked as an issue:
 1. **Reclaiming space in mixed packs** (#1): GC frees whole packs;
    rewriting mostly-dead ones (their live chunks copied out, the pack
    condemned) is the step after v1.
-2. **Reading and deleting tags** (#2): tags are written and kept alive by
-   GC, but the version graph has no call to list, read or delete them.
+2. ✅ **Reading and deleting tags** (#2): `Tags`, `Tag` and `DeleteTag`
+   (`TestTagsAreListedAndReadBack`, `TestAMissingOrDeletedTagIsNotFound`,
+   `TestForgedTagRefsAreCorrupt`; what only a deleted tag reached is
+   collected, `TestADeletedTagsHistoryIsCollected`).
 3. **A slow writer's unpublished packs** (#3): the contract has hosts
    publish within the grace window; a check at publish would turn a breach
    into `ErrStale` rather than a root naming a deleted pack.

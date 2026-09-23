@@ -56,8 +56,8 @@ commit, _ := r.CommitWorkingSet(ctx, me, vcs.MainBranch, "add a note")
 **Branch and merge.** `CreateBranch`, `Merge` (conflicts are recorded in the
 working set, and a commit is refused until they are resolved), `Conflicts`,
 `ResolveConflict`, then `CommitWorkingSet`, which makes a commit with two
-parents. `Log`, `MergeBase`, `Head`, `Branches` and `CreateTag` read and name
-history.
+parents. `Log`, `MergeBase`, `Head` and `Branches` read history; `CreateTag`,
+`Tag`, `Tags` and `DeleteTag` name commits.
 
 **Read.** Open a commit's namespace, `Get` a path, and read the object through
 its model (`blob.Open`, `tree.Read`).
