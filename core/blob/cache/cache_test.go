@@ -448,3 +448,19 @@ func TestAFailedBackendReadIsReturnedAndNotKept(t *testing.T) {
 		t.Fatal("once the backend healed, the read returned the wrong bytes")
 	}
 }
+
+// Options.MaxBytes 0 is the documented default, not a cache of size zero
+// that keeps nothing.
+func TestZeroMaxBytesIsTheDefault(t *testing.T) {
+	inner := &counting{BlobStore: mem.New()}
+	c, _ := newCache(t, inner, 0)
+	d := payload("default", 1000)
+	if err := c.Put(ctx, "packs/ii/d", bytes.NewReader(d), int64(len(d))); err != nil {
+		t.Fatal(err)
+	}
+	read(t, c, "packs/ii/d", 0, -1)
+	read(t, c, "packs/ii/d", 0, -1)
+	if n := inner.gets.Load(); n != 1 {
+		t.Fatalf("with MaxBytes 0, two reads reached the backend %d times, want 1: the default cap was not applied", n)
+	}
+}

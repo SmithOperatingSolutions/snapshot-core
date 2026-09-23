@@ -1139,3 +1139,10 @@ find: _ = rc.Close()\n\t\treturn nil, err
 replace: return nil, err
 pkg: ./core/blob/cache
 run: ^TestAFailedBackendReadIsReturnedAndNotKept$
+
+id: cache-default-max
+file: core/blob/cache/cache.go
+find: if o.MaxBytes == 0 {
+replace: if o.MaxBytes == 0 && false {
+pkg: ./core/blob/cache
+run: ^TestZeroMaxBytesIsTheDefault$
