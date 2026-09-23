@@ -316,6 +316,14 @@ func (r *Reader) Read(p []byte) (int, error) {
 	return n, err
 }
 
+// Walk calls visit for every chunk the stream at ref is made of, the root
+// first; visit says whether to go on into what that chunk reaches. Index
+// nodes are read and checked as a Reader checks them; data chunks are named,
+// never read, so walking a stream costs its index, not its bytes.
+func Walk(ctx context.Context, rd chunk.Reader, ref Ref, visit func(hash.Hash) (bool, error)) error {
+	return errors.New("stream: Walk is not written yet")
+}
+
 // ReadAll returns the whole stream. It grows with the bytes actually read,
 // not with what the Ref claims.
 func ReadAll(ctx context.Context, rd chunk.Reader, ref Ref) ([]byte, error) {
