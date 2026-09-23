@@ -3,7 +3,9 @@
 // set per branch of uncommitted changes. All of it hangs from the chunk
 // store's root, the refs map, and every change to it is one
 // CompareAndSetRoot: a writer that loses re-reads and re-applies, and never
-// overwrites blindly. Every call takes a Principal and asks the Authorizer.
+// overwrites blindly. Every call takes a Principal and asks the Authorizer,
+// except Namespace, which opens what a hash names: a host holding the hash
+// holds the chunk store it came from, so a check there would guard nothing.
 package vcs
 
 import (
