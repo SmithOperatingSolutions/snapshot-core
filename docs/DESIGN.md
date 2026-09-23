@@ -48,7 +48,7 @@ Lower rows never import higher rows.
 | Layer | Packages | Imports |
 | --- | --- | --- |
 | Adapter | `core/dnx` | disknexus-engine (the only importer), stdlib |
-| Primitives | `core/hash`, `core/auth`, `core/limits` | `core/dnx` (hash only), stdlib |
+| Primitives | `core/hash`, `core/auth`, `core/internal/wire` | `core/dnx` (hash only), stdlib |
 | Crypto, chunking | `core/seal`, `core/cdc`, `core/boundary` | primitives, `core/dnx` |
 | Backends | `core/blob`, `core/blob/{mem,local,multivol,s3,cache}` | stdlib, AWS SDK (s3 only) |
 | Packs | `core/pack`, `core/dedup` | seal, hash, zstd |
@@ -59,6 +59,13 @@ Lower rows never import higher rows.
 | GC | `core/gc` | everything below; the only caller of `BlobStore.Delete` |
 | Entry point | `core/repo` | everything below |
 | Models | `model/blob`, `model/tree`, `model/contract` | `core/model`, `core/stream`, `core/prolly`, `core/object` |
+| End to end (tests only) | `e2e` | everything, models included |
+
+Limits live in the package they bound (`chunk.MaxChunkSize`,
+`prolly.MaxKeySize`, `auth.MaxIDLen`, `vcs.MaxLog`, `vcs.MaxMessageLen`,
+`merge.DefaultMaxConflicts`, the path limits in `core/object`); there is no
+separate limits package. Nothing under `core/` may import a concrete model,
+so tests that drive the core through real models live in `e2e`.
 
 ## 4. What a repository looks like in a BlobStore
 
@@ -278,7 +285,17 @@ The repo id and key id ride in the header in the clear (neither is a secret,
 and no key can be derived without the repo id); the header is
 authenticated. The key id is outside the seal so that `Open` can tell a
 wrong master key (`ErrWrongKey`, before trying to decrypt) from a damaged
-config (`ErrConfig`).
+config (`ErrConfig`). A header or plaintext of another magic or version, a
+plaintext with bytes left over, and a geometry the core cannot use are
+`ErrConfig` even when they authenticate.
+
+`Init` asks for admin before it writes anything, then claims the store by
+writing the config (put-if-absent), then writes the version graph. An
+`Init` that stops in between (a crash, a backend that went away) leaves a
+config and no refs: `Open` reports that store as `ErrNoRepo`, and the next
+`Init` with the same key finishes it, on the repo id and geometry its config
+records. A store claimed by another key, or holding a finished repository,
+is `ErrExists`.
 
 ### Objects (`core/object`, `core/model`)
 
@@ -324,6 +341,20 @@ working set  0x05 · working [32] · staged [32] · merging u8 (0 or 1) ·
 - **Branch and tag names**: `^[a-zA-Z0-9][a-zA-Z0-9._/-]{0,127}$`, with no
   `..`, no `//`, and no trailing `/` or `.lock`; anything else is refused.
 - `Log` takes a limit, capped at 10,000.
+- A working set names stored namespaces, and a branch or tag a stored
+  commit. `UpdateWorkingSet` changes the namespaces only: the merge state
+  it is handed must be the stored one (`ErrMergeState`), since only
+  `Merge`, `ResolveConflict` and `CommitWorkingSet` change it. There is no
+  abort in v1: a merge in progress ends by resolving every conflict and
+  committing.
+- A writer that loses the root swap re-reads and re-applies, up to 1,000
+  times in a row, then gives up with an error; nothing it did reaches the
+  root. A store error anywhere is the call's error, and leaves the refs as
+  they were.
+- Every call takes a `Principal` and asks the `Authorizer` about exactly
+  what it does (read, write or manage a branch, manage a tag, admin the
+  repository), except `Namespace`: it opens what a hash names, and a host
+  that has the hash has the chunk store it came from.
 
 ### Merging (`core/merge`)
 
@@ -337,3 +368,13 @@ working set  0x05 · working [32] · staged [32] · merging u8 (0 or 1) ·
   record) so a session can resolve them later; a commit is refused while any
   remain. More than 100,000 is `ErrTooManyConflicts`, and a model's error
   aborts the merge; either way the working set is left exactly as it was.
+- One merge at a time per branch. Merging a commit the branch already holds
+  (its head or an ancestor) changes nothing and starts no merge. Merging a
+  descendant is not fast-forwarded: it merges, and the commit that finishes
+  it has two parents.
+
+```
+conflict   kind u8 (1 both changed · 2 delete against edit · 3 add against add · 4 model change) ·
+           (present u8 · object reference [46]) × 3 (base, ours, theirs) ·
+           model conflicts uvarint (≤ 10,000) · (location (≤ 4 KiB) · reason (≤ 1 KiB)) × that many
+```
