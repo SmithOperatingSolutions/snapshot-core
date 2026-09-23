@@ -191,15 +191,22 @@ func (s *Store) probe(ctx context.Context) error {
 		_, _ = s.c.DeleteObject(ctx, &awss3.DeleteObjectInput{Bucket: aws.String(s.bucket), Key: aws.String(key)})
 	}()
 	if _, err := s.put(ctx, key, body, size, "*", ""); statusOf(err) != http.StatusPreconditionFailed {
-		return fmt.Errorf("%w: a second PUT with If-None-Match: * was not refused (err=%v)", ErrUnsafeEndpoint, err)
+		return unsafe("a second PUT with If-None-Match: * was not refused", err)
 	}
 	if _, err := s.put(ctx, key, body, size, "", `"00000000000000000000000000000000"`); statusOf(err) != http.StatusPreconditionFailed {
-		return fmt.Errorf("%w: a PUT with a wrong If-Match ETag was not refused (err=%v)", ErrUnsafeEndpoint, err)
+		return unsafe("a PUT with a wrong If-Match ETag was not refused", err)
 	}
 	if _, err := s.put(ctx, key, body, size, "", etag); err != nil {
-		return fmt.Errorf("%w: a PUT with the right If-Match ETag failed: %v", ErrUnsafeEndpoint, err)
+		return unsafe("a PUT with the right If-Match ETag failed", err)
 	}
 	return nil
+}
+
+func unsafe(what string, err error) error {
+	if err != nil {
+		return fmt.Errorf("%w: %s: %w", ErrUnsafeEndpoint, what, err)
+	}
+	return fmt.Errorf("%w: %s", ErrUnsafeEndpoint, what)
 }
 
 // Put implements blob.BlobStore.
@@ -416,7 +423,8 @@ func (s *Store) SwapRoot(ctx context.Context, expected blob.Version, next []byte
 	if err != nil {
 		return blob.NoVersion, err
 	}
-	body := append(nonce, next...)
+	body := make([]byte, 0, nonceSize+len(next))
+	body = append(append(body, nonce...), next...)
 	ifNoneMatch, ifMatch := "", string(expected)
 	if expected == blob.NoVersion {
 		ifNoneMatch = "*"

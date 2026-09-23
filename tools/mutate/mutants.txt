@@ -617,15 +617,15 @@ run: ^TestSwapRootRefusesWithoutItsLock$
 
 id: s3-probe-checks-if-none-match
 file: core/blob/s3/s3.go
-find: if _, err := s.put(ctx, key, body, size, "*", ""); statusOf(err) != http.StatusPreconditionFailed {
-replace: if _, err := s.put(ctx, key, body, size, "*", ""); statusOf(err) != http.StatusPreconditionFailed && false {
+find: statusOf(err) != http.StatusPreconditionFailed {\n\t\treturn unsafe("a second PUT with If-None-Match
+replace: statusOf(err) != http.StatusPreconditionFailed && false {\n\t\treturn unsafe("a second PUT with If-None-Match
 pkg: ./core/blob/s3
 run: ^TestProbeRefusesEndpointsThatIgnoreConditionalWrites$
 
 id: s3-probe-checks-if-match
 file: core/blob/s3/s3.go
-find: statusOf(err) != http.StatusPreconditionFailed {\n\t\treturn fmt.Errorf("%w: a PUT with a wrong If-Match ETag
-replace: statusOf(err) != http.StatusPreconditionFailed && false {\n\t\treturn fmt.Errorf("%w: a PUT with a wrong If-Match ETag
+find: statusOf(err) != http.StatusPreconditionFailed {\n\t\treturn unsafe("a PUT with a wrong If-Match ETag
+replace: statusOf(err) != http.StatusPreconditionFailed && false {\n\t\treturn unsafe("a PUT with a wrong If-Match ETag
 pkg: ./core/blob/s3
 run: ^TestProbeRefusesEndpointsThatIgnoreConditionalWrites$
 
