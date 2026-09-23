@@ -1299,3 +1299,17 @@ find: return binary.BigEndian.Uint32(digest[4*(level%8):])
 replace: return binary.BigEndian.Uint32(digest[:])
 pkg: ./core/boundary
 run: ^TestWindowsAreFreshPerLevel$
+
+id: stream-top-has-two-children
+file: core/stream/stream.go
+find: if depth == int(r.ref.Depth) && len(es) < 2 {
+replace: if depth == int(r.ref.Depth) && len(es) < 2 && false {
+pkg: ./core/stream
+run: ^TestForgedStreamsAreCorrupt$
+
+id: stream-root-collapses
+file: core/stream/stream.go
+find: if l.total == 1 {
+replace: if l.total == 1 && lv == 0 {
+pkg: ./core/stream
+run: ^TestWriterEmitsTheDocumentedIndexFormat$|^TestAOnePieceStreamIsItsOwnRoot$
