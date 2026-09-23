@@ -247,3 +247,91 @@ stream ref  root [32] · size · depth
   flushes; `Get`, iteration and `Diff` read them back whole. The map and its
   editor are concrete types, not a port: there is one implementation, and
   the chunk store beneath it is the swappable part.
+
+## 8. History and models (C3)
+
+A repository is a history of **namespaces**: each commit names one prolly map
+from path to typed object, so a table, a folder of files and a JSON document
+branch, diff and merge together (Storage Core Spec, "Object model and commit
+graph"). The Engine Spec's L2 and L3 rules apply unchanged.
+
+**Chunk kinds**, continuing §7:
+
+| First byte | Chunk |
+| --- | --- |
+| `0x03` | commit, v1 |
+| `0x04` | tag, v1 |
+| `0x05` | working set, v1 |
+
+### The repository config (`config`, in the BlobStore)
+
+Written once by `Init`, never changed, and read by `Open` before the chunk
+layer: it says how everything else was written.
+
+```
+config     "SCRC" · version u16 · repo id [16] · salt [32] · seal(Config, ctx = header, plaintext)
+plaintext  "SCRP" · version u16 · key id [32] · cdc min u32 · cdc max u32 · cdc mask u64 ·
+           node min u32 · node target u32 · node max u32 · inline limit u32 · pack size u32
+```
+
+The repo id rides in the header in the clear (it is not a secret, and a key
+cannot be derived without it); the header is authenticated. The key id lets
+`Open` tell a wrong master key from a damaged config.
+
+### Objects (`core/object`, `core/model`)
+
+- An **object reference** is the namespace's value, a fixed 46-byte record:
+  `model u16 · format u16 · flags u8 · depth u8 · size u64 · root [32]`.
+  `root` is the object's top chunk, `size` its logical size, and `depth`
+  the stream depth for objects rooted in a stream (0 otherwise). The spec's
+  "flags" is split into flags (all zero in v1) and depth.
+- **Paths** follow an allowlist: valid UTF-8, `/`-separated, each segment 1
+  to 255 bytes, not `.` or `..`, no byte under 0x20 or 0x7f, at most 64
+  segments and 4,096 bytes in all (the prolly key limit). Anything else is
+  `ErrInvalidPath` at write; nothing is normalized.
+- The **model port** is `core/model`: a model has a stable id and a format
+  version, and validates, diffs and merges its objects given their roots.
+  `model.Root` (hash, size, depth, and the format version the object was
+  written in, so a model can read its older formats) is what a model sees;
+  the object reference adds the model id and flags. An object in a format
+  newer than its model knows is refused, like an unknown model. Registries are
+  built explicitly (`model.NewRegistry(...)`, a duplicate id is an error);
+  an id the registry lacks is `ErrUnknownModel`, and nothing is decoded.
+- **Generic diff** is a prolly diff of two namespaces: a path added, removed,
+  or changed; for a change within one model, that model's diff says where.
+
+### History (`core/vcs`)
+
+- The chunk store's root is the **refs map**, a prolly map: `heads/<branch>`
+  → commit, `tags/<name>` → tag, `work/<branch>` → working set, each a 32-byte
+  hash. Every change to it is one `CompareAndSetRoot`; a writer that loses
+  re-reads and re-applies.
+
+```
+commit       0x03 · parents u8 (0–2) · parent [32] × parents · namespace [32] · height uvarint ·
+             time i64 (UTC, unix ns) · author (uvarint length ≤ 256, UTF-8) · message (≤ 64 KiB, UTF-8)
+tag          0x04 · target [32] · time i64 · tagger (≤ 256) · message (≤ 64 KiB)
+working set  0x05 · working [32] · staged [32] · merging u8 (0 or 1) ·
+             [base [32] · theirs [32] · conflicts [32]]   (when merging)
+```
+
+- **Height** is 0 for a root commit and one more than the higher parent
+  otherwise, so `MergeBase` can stop early. The first parent of a merge is
+  the branch merged into.
+- The **author** comes from the `Principal` of the call, never from input.
+- **Branch and tag names**: `^[a-zA-Z0-9][a-zA-Z0-9._/-]{0,127}$`, with no
+  `..`, no `//`, and no trailing `/` or `.lock`; anything else is refused.
+- `Log` takes a limit, capped at 10,000.
+
+### Merging (`core/merge`)
+
+- Both diffs (base → ours, base → theirs) stream in path order and are
+  zipped; memory stays bounded whatever the size of the namespaces.
+- Per path, the Engine Spec's table: one side changed, take it; both made
+  the same change, take it; both changed the same object under one model,
+  ask that model; an add against a different add, a delete against an edit,
+  or two models for one path, a conflict.
+- Conflicts go into the working set (`conflicts`, a prolly map from path to
+  record) so a session can resolve them later; a commit is refused while any
+  remain. More than 100,000 is `ErrTooManyConflicts`, and a model's error
+  aborts the merge; either way the working set is left exactly as it was.
