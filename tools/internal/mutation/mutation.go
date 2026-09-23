@@ -1,4 +1,4 @@
-// Command mutate re-runs the repository's checked-in mutants: each one severs
+// Package mutation runs the repository's checked-in mutants: each one severs
 // a load-bearing guard, and the named test must go red (docs/TESTING.md §5).
 // Mutants run in a throwaway copy of the tree, never the working tree (§5);
 // the copy is restored from the original bytes, never from git (§5); every
@@ -8,7 +8,7 @@
 // The mutants file is stanzas of "key: value" lines separated by blank lines;
 // '#' starts a comment. Keys: id, file, find, replace, pkg, run. In find and
 // replace, \n, \t and \\ are escapes.
-package main
+package mutation
 
 import (
 	"bufio"

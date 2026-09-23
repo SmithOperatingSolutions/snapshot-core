@@ -1,3 +1,5 @@
+// Command mutate re-runs the checked-in mutants (tools/mutate/mutants.txt);
+// every one must be killed. See tools/internal/mutation.
 package main
 
 import (
@@ -7,6 +9,8 @@ import (
 	"os"
 	"os/signal"
 	"strings"
+
+	"github.com/SmithOperatingSolutions/snapshot-core/tools/internal/mutation"
 )
 
 func main() {
@@ -19,7 +23,7 @@ func main() {
 		fmt.Fprintln(os.Stderr, "mutate:", err)
 		os.Exit(2)
 	}
-	ms, err := Parse(f)
+	ms, err := mutation.Parse(f)
 	f.Close()
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "mutate:", err)
@@ -30,7 +34,7 @@ func main() {
 		for _, id := range strings.Split(*only, ",") {
 			want[strings.TrimSpace(id)] = true
 		}
-		var sel []Mutant
+		var sel []mutation.Mutant
 		for _, m := range ms {
 			if want[m.ID] {
 				sel = append(sel, m)
@@ -41,7 +45,7 @@ func main() {
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
 	defer stop()
-	outs, err := Run(ctx, Options{Root: ".", Log: os.Stderr}, ms)
+	outs, err := mutation.Run(ctx, mutation.Options{Root: ".", Log: os.Stderr}, ms)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "mutate:", err)
 		os.Exit(2)
@@ -49,7 +53,7 @@ func main() {
 	bad := 0
 	for _, o := range outs {
 		fmt.Printf("%-9s %-40s %s\n", o.Status, o.Mutant.ID, o.Detail)
-		if o.Status != Killed {
+		if o.Status != mutation.Killed {
 			bad++
 		}
 	}
