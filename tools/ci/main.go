@@ -415,6 +415,9 @@ func output(ctx context.Context, env []string, name string, args ...string) (str
 	var b bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &b, &b
 	err := cmd.Run()
+	if s := strings.TrimSpace(b.String()); err != nil && s != "" {
+		err = fmt.Errorf("%w: %s", err, s) // the error says why, not only "exit status 125"
+	}
 	return b.String(), err
 }
 
