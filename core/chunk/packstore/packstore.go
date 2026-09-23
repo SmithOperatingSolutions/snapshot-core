@@ -56,8 +56,18 @@ type Options struct {
 	PackSize   int              // 0: DefaultPackSize
 	CacheBytes int              // 0: DefaultCacheBytes; negative: no cache
 	Clock      func() time.Time // dates this store's uploads; nil: time.Now
-	backoff    time.Duration
+	// The index of published chunks lives in memory up to IndexInMemory
+	// chunks (0: DefaultIndexInMemory) and on disk past that, as a table in
+	// IndexDir ("": the system's temporary directory), so a store's memory
+	// does not grow with the repository (#6, DESIGN §6).
+	IndexDir      string
+	IndexInMemory int
+	backoff       time.Duration
 }
+
+// DefaultIndexInMemory is the published chunks a store indexes in memory
+// before spilling the index to disk: about 60 MiB of index.
+const DefaultIndexInMemory = 1 << 19
 
 // Store is a chunk.Store over a BlobStore.
 type Store struct {
