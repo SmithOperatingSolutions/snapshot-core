@@ -1348,3 +1348,12 @@ find: case errors.As(err, &exitErr) && strings.Contains(out, "panic: test timed 
 replace: case errors.As(err, &exitErr) && strings.Contains(out, "panic: test timed out") && false:
 pkg: ./tools/internal/mutation
 run: ^TestAHangingMutantIsKilledAtTheTimeout$
+
+# Without the check, a chunk shorter than its entry makes ReadAt copy zero
+# bytes forever: this mutant is killed by the run's timeout.
+id: stream-data-length-checked
+file: core/stream/stream.go
+find: if uint64(len(b)) != want {
+replace: if uint64(len(b)) != want && false {
+pkg: ./core/stream
+run: ^TestForgedStreamsAreCorrupt$
