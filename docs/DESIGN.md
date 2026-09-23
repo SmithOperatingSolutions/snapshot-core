@@ -143,7 +143,7 @@ associated data is `tag 0 context`. The key id is
 | KMS envelope | `"SCKW"` · version u16 · key id [32] · wrapped (len-prefixed, ≤ 8 KiB) |
 | Pack | header `"SCPK"` · version u16 · flags u16 · salt [32]; frames `seal(Chunk, ctx = chunk hash, zstd-or-raw)`; index `seal(PackIndex, ctx = header, "SCPI" · version · count · entries sorted by hash: hash [32] · offset · stored · raw · codec)`; trailer index-offset u64 · index-length u32 · `"SCPE"` |
 | Index object | `"SCIX"` · version u16 · salt [32] · `seal(Index, ctx = header, "SCIP" · version · packs: pack hash [32] · salt [32] · size · entries …)`, packs and entries strictly sorted |
-| Manifest (the root value) | `"SCMF"` · version u16 · salt [32] · `seal(Refs, ctx = header, "SCMP" · version · seq u64 · gcGen u64 · root [32] · count · index-object hashes [32] strictly sorted · count · condemned (kind u8: 1 pack, 2 index object, 3 orphan pack deleted, 4 orphan index object deleted · hash [32] · at i64 unix ns))` |
+| Manifest (the root value) | `"SCMF"` · version u16 · salt [32] · `seal(Refs, ctx = header, "SCMP" · version · seq u64 · gcGen u64 · root [32] · count · index-object hashes [32] strictly sorted · count · condemned (kind u8: 1 pack, 2 index object, 3 orphan pack deleted, 4 orphan index object deleted, 5 pack repacked · hash [32] · at i64 unix ns))` |
 | local store | `.snapshot-core` marker (`"SCLS"` · version · store id [16]) · `objects/<segment>~` · `tmp/` · `root` (`"SCRF"` · version · value · SHA-256) · `root.lock` |
 | multivol map | `"SCMV"` · version u16 · count u16 · (volume id [16] · path) … · SHA-256 |
 | S3 keys | `<prefix>objects/<name>!` (the `!` keeps any key from being both an object and a path prefix, which MinIO hides from listings; it sorts below every name byte) · `<prefix>root` = 16-byte nonce ‖ value · `<prefix>mirror` = the root's copy, replaced in place · `<prefix>probe/…` |
@@ -566,10 +566,21 @@ the raw store. Run on a `NoDelete` store it condemns but cannot delete
 (`ErrDeleteForbidden`); what it expired is an orphan by then, and the next
 run on the raw store deletes it.
 
-**Reclaiming space.** GC frees whole packs. At the default pack size a
-session's packs mix what later dies with what lives, and such a pack is
-kept whole; rewriting mostly-dead packs (copying their live chunks out and
-condemning them) is the next step, not v1's.
+**Reclaiming space.** GC frees whole packs, and a pack that is mostly dead
+is rewritten (#1): in a round, a kept pack whose live bytes are under half
+its size (`Repack.MaxLive`) is a candidate, and candidates are repacked
+emptiest first until the round has copied its budget (`Repack.Budget`, a
+GiB by default; `Repack.Off` turns it off). The round reads each candidate
+in one GET, opens its live frames and seals them into new packs, uploads
+those before its swap (a swap that loses leaves them orphans, which a later
+run deletes), lists them in its index objects, and records the old pack as
+repacked (condemned kind 5): a repacked pack is never reprieved by the
+chunks it still holds, since the new packs hold them, it is dropped from
+the index objects at once, and it expires a grace window later like any
+condemned pack, so a reader holding an older manifest still finds it. The
+round moves gcGen, so every store rebuilds its index and finds the live
+chunks in the new packs at once, and a writer never deduplicates against
+the old pack again.
 
 **Proof.** `TestGCSafetyProperty` drives random histories the way a host
 following the contract does, with GC between the steps as the clock moves
