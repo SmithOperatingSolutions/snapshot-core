@@ -3977,3 +3977,10 @@ find: if b.at+n != b.size {
 replace: if false {
 pkg: ./core/chunk/packstore
 run: ^TestRepackingRefusesACorruptPack$
+
+id: packstore-index-objects-are-batched
+file: core/chunk/packstore/gc.go
+find: w.size+estimate(info) > maxIndexObject) {
+replace: false) {
+pkg: ./core/chunk/packstore
+run: ^TestALargeSessionPublishesSeveralIndexObjects$

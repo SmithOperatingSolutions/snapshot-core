@@ -2,6 +2,7 @@ package packstore_test
 
 import (
 	"bytes"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -181,4 +182,44 @@ func TestASpilledIndexNeedsItsDirectory(t *testing.T) {
 		t.Fatalf("positive control: the same store with a directory that exists: %v", err)
 	}
 	_ = s.Close()
+}
+
+// A session's packs go into index objects of at most 8 MiB estimated, not
+// one object whatever their number: an object is decoded whole by every
+// store that opens it, and one over dedup's limit could not be written at
+// all. A session over the bound publishes several, and reads whole.
+func TestALargeSessionPublishesSeveralIndexObjects(t *testing.T) {
+	bs, kr := mem.New(), keyring(t)
+	o := packstore.WithBackoff(packstore.Options{Blobs: bs, Keys: kr, Repo: repo, PackSize: 64 << 10}, time.Millisecond)
+	s, err := packstore.Open(ctx, o)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = s.Close() })
+	const n = 140_000 // 64 bytes an entry estimated: over 8 MiB
+	var root hash.Hash
+	var last []byte
+	for i := 0; i < n; i++ {
+		last = fmt.Appendf(last[:0], "chunk %d", i)
+		h, err := s.Put(ctx, last)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if i == 0 {
+			root = h
+		}
+	}
+	if err := s.CompareAndSetRoot(ctx, hash.Hash{}, root); err != nil {
+		t.Fatal(err)
+	}
+	if got := len(objects(t, bs, "index/")); got < 2 {
+		t.Fatalf("a session of %d chunks published %d index objects, want several of at most 8 MiB each", n, got)
+	}
+	fresh := open(t, bs, kr)
+	for _, i := range []int{0, 1, n / 2, n - 1} {
+		want := fmt.Appendf(nil, "chunk %d", i)
+		if got, err := fresh.Get(ctx, hash.Sum(want)); err != nil || !bytes.Equal(got, want) {
+			t.Fatalf("chunk %d reads as %d bytes, %v from a fresh store", i, len(got), err)
+		}
+	}
 }
