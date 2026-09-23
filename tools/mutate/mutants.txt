@@ -2540,3 +2540,10 @@ find: tags = []string{"-tags", strings.Join(m.Tags, ",")}
 replace: tags = nil
 pkg: ./tools/redcheck
 run: ^TestTaggedBackfillIsProvenUnderItsTag$
+
+id: merge-reads-only-what-changed
+file: core/prolly/diff.go
+find: if a.parent != nil && b.parent != nil && a.parent.valid() && b.parent.valid() && equalItems(a.parent, b.parent) {
+replace: if a.parent != nil && b.parent != nil && a.parent.valid() && b.parent.valid() && equalItems(a.parent, b.parent) && false {
+pkg: ./core/merge
+run: ^TestMergingLargeNamespacesReadsLittle$
