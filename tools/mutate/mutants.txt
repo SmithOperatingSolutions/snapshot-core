@@ -1945,3 +1945,59 @@ find: } else if ok {\n\t\t\treturn fmt.Errorf("%w: %s", ErrTagExists, name)
 replace: } else if ok && false {\n\t\t\treturn fmt.Errorf("%w: %s", ErrTagExists, name)
 pkg: ./core/vcs
 run: ^TestTagsNameCommits$
+
+id: vcs-commit-kind-byte
+file: core/vcs/encode.go
+find: kindCommit     = 0x03
+replace: kindCommit     = 0x13
+pkg: ./core/vcs
+run: ^TestAFixedHistoryHasAFixedHead$
+
+id: vcs-working-set-kind-byte
+file: core/vcs/encode.go
+find: kindWorkingSet = 0x05
+replace: kindWorkingSet = 0x15
+pkg: ./core/vcs
+run: ^TestAFixedHistoryHasAFixedHead$
+
+id: vcs-commit-parents-bounded
+file: core/vcs/encode.go
+find: if r.Err() != nil || kind != kindCommit || n > 2 {
+replace: if r.Err() != nil || kind != kindCommit || n > 3 {
+pkg: ./core/vcs
+run: ^TestForgedChunksAreCorrupt$
+
+id: vcs-commit-parents-distinct
+file: core/vcs/encode.go
+find: case n == 2 && c.Parents[0] == c.Parents[1]:
+replace: case n == 2 && c.Parents[0] == c.Parents[1] && false:
+pkg: ./core/vcs
+run: ^TestForgedChunksAreCorrupt$
+
+id: vcs-commit-height-fits-parents
+file: core/vcs/encode.go
+find: case (n == 0) != (c.Height == 0):
+replace: case false:
+pkg: ./core/vcs
+run: ^TestForgedChunksAreCorrupt$
+
+id: vcs-working-set-merge-flag
+file: core/vcs/encode.go
+find: case r.Err() != nil || merging > 1:
+replace: case r.Err() != nil:
+pkg: ./core/vcs
+run: ^TestForgedChunksAreCorrupt$
+
+id: vcs-conflict-kind-range
+file: core/vcs/encode.go
+find: if c.Kind < merge.BothChanged || c.Kind > merge.ModelChange {
+replace: if c.Kind < merge.BothChanged {
+pkg: ./core/vcs
+run: ^TestForgedChunksAreCorrupt$
+
+id: vcs-conflict-side-flag
+file: core/vcs/encode.go
+find: case r.Err() != nil || present > 1:
+replace: case r.Err() != nil:
+pkg: ./core/vcs
+run: ^TestForgedChunksAreCorrupt$
