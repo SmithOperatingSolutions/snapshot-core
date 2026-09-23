@@ -53,3 +53,17 @@ find: if len(aad) == 0 {\n\t\treturn nil, ErrUntagged\n\t}\n\treturn a.mk.Decryp
 replace: return a.mk.DecryptWithAAD(sealed, aad)
 pkg: ./core/dnx/compat
 run: ^TestAEADBindsTheDomainTag$
+
+id: hash-parse-lowercase-only
+file: core/hash/hash.go
+find: (c < 'a' || c > 'f')
+replace: (c < 'a' || c > 'f') && (c < 'A' || c > 'F')
+pkg: ./core/hash
+run: ^TestParseAcceptsOnlyCanonicalHex$
+
+id: hash-frombytes-length
+file: core/hash/hash.go
+find: if len(b) != Size {
+replace: if len(b) < Size {
+pkg: ./core/hash
+run: ^TestFromBytesRequiresExactlyThirtyTwo$
