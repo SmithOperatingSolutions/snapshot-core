@@ -4194,3 +4194,10 @@ find: if ra.cur.err != nil {\n\t\t\terr := ra.cur.err\n\t\t\tra.cur.err = nil\n\
 replace: if ra.cur.err != nil {\n\t\t\tra.cur.err = nil\n\t\t\treturn 0, io.EOF\n\t\t}
 pkg: ./e2e
 run: ^TestAWorkersWriteSurfacesTheSourcesError$
+
+id: packstore-refuses-a-chunk-prepared-elsewhere
+file: core/chunk/packstore/packstore.go
+find: p, ok := cp.(*prepared)\n\tif !ok {
+replace: p, ok := cp.(*prepared)\n\tif !ok && false {
+pkg: ./core/chunk/packstore
+run: ^TestAChunkPreparedByAnotherStoreIsRefused$

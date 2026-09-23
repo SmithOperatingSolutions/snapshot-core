@@ -422,3 +422,25 @@ func TestAForgedIndexTableRecordIsRefused(t *testing.T) {
 		}
 	}
 }
+
+// A chunk prepared by another store is refused: its payload was compressed
+// for that store's codec and would be sealed as if it were this store's.
+func TestAChunkPreparedByAnotherStoreIsRefused(t *testing.T) {
+	bs, kr := mem.New(), keyring(t)
+	s := open(t, bs, kr)
+	if _, err := s.PutPrepared(ctx, foreignPrepared{}); err == nil {
+		t.Fatal("a chunk prepared by another store was stored")
+	}
+	p, err := s.Prepare([]byte("prepared here"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.PutPrepared(ctx, p); err != nil {
+		t.Fatalf("positive control: a chunk this store prepared: %v", err)
+	}
+}
+
+type foreignPrepared struct{}
+
+func (foreignPrepared) Hash() hash.Hash { return hash.Hash{1} }
+func (foreignPrepared) Len() int        { return 1 }
