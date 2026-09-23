@@ -325,3 +325,45 @@ func TestBuildTaggedTestIsRunWithItsTag(t *testing.T) {
 		t.Fatalf("a //go:build slow test was not judged under its tag (ran %d):\n%s", rep.TestsRun, reasons(rep))
 	}
 }
+
+// Pairs may interleave across scopes: test(a), test(b), feat(b), feat(a).
+func TestInterleavedPairsAreMatchedByScope(t *testing.T) {
+	f := newFixture(t)
+	f.write("calc/calc_test.go", addTest)
+	f.commit("test(calc): Add adds")
+	f.write("tool/tool.go", "package tool\n\n// Two is a stub.\nfunc Two() int { return 0 }\n")
+	f.write("tool/tool_test.go", "package tool\n\nimport \"testing\"\n\nfunc TestTwo(t *testing.T) {\n\tif Two() != 2 {\n\t\tt.Fatal(\"Two() != 2\")\n\t}\n}\n")
+	f.commit("test(tool): Two is two")
+	f.write("tool/tool.go", "package tool\n\n// Two is two.\nfunc Two() int { return 2 }\n")
+	f.commit("feat(tool): Two is two")
+	f.write("calc/calc.go", addImpl)
+	f.commit("feat(calc): Add adds")
+
+	rep := f.check()
+	if len(rep.Violations) != 0 {
+		t.Fatalf("interleaved test/feat pairs of two scopes were blocked:\n%s", reasons(rep))
+	}
+	// And a feat whose scope never had a red is still blocked.
+	f.write("calc/more.go", "package calc\n\n// Three is three.\nfunc Three() int { return 3 }\n")
+	f.commit("feat(calc): Three")
+	rep = f.check()
+	if len(rep.Violations) != 1 || !strings.Contains(rep.Violations[0].Subject, "Three") {
+		t.Fatalf("a second feat(calc) with no new test(calc) was not blocked:\n%s", reasons(rep))
+	}
+}
+
+// TestMain is the test binary's entry point, not a test.
+func TestTestMainIsNotJudged(t *testing.T) {
+	f := newFixture(t)
+	f.write("calc/main_test.go", "package calc\n\nimport (\n\t\"os\"\n\t\"testing\"\n)\n\n"+
+		"func TestMain(m *testing.M) { os.Exit(m.Run()) }\n")
+	f.write("calc/calc_test.go", addTest)
+	f.commit("test(calc): Add adds")
+	f.write("calc/calc.go", addImpl)
+	f.commit("feat(calc): Add adds")
+
+	rep := f.check()
+	if len(rep.Violations) != 0 || rep.TestsRun != 1 {
+		t.Fatalf("TestMain was judged as a test (ran %d):\n%s", rep.TestsRun, reasons(rep))
+	}
+}
