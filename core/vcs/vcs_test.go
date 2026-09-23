@@ -641,6 +641,43 @@ func TestUpdateWorkingSetKeepsTheMergeState(t *testing.T) {
 	}
 }
 
+// Merging a commit the branch already holds, its head or an ancestor,
+// changes nothing: no merge starts, and the next commit is an ordinary one.
+// Merging the head used to start a merge whose commit named the head as
+// both parents, which no reader accepts, leaving the branch unreadable.
+func TestMergingWhatIsAlreadyMergedChangesNothing(t *testing.T) {
+	f := newFixture(t)
+	main := vcs.MainBranch
+	f.put(main, "a", f.obj(7, "a"))
+	first := f.commit(main, "first")
+	f.put(main, "b", f.obj(7, "b"))
+	head := f.commit(main, "second")
+	f.put(main, "uncommitted", f.obj(7, "u"))
+	before, err := f.r.WorkingSet(ctx, alice, main)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, c := range []struct {
+		name   string
+		theirs hash.Hash
+	}{{"its head", head.Hash}, {"an ancestor", first.Hash}} {
+		r, err := f.r.Merge(ctx, alice, main, c.theirs)
+		if err != nil || len(r.Conflicts) != 0 || r.Merged == nil || r.Merged.Root() != before.Working {
+			t.Fatalf("merging %s = %+v, %v; want nothing merged", c.name, r, err)
+		}
+		if now, _ := f.r.WorkingSet(ctx, alice, main); now.Hash != before.Hash {
+			t.Fatalf("merging %s changed the working set (a merge in progress: %v)", c.name, now.Merge != nil)
+		}
+	}
+	c := f.commit(main, "after")
+	if len(c.Parents) != 1 || c.Parents[0] != head.Hash {
+		t.Fatalf("the commit after merging what was merged has parents %v, want [%s]", c.Parents, head.Hash)
+	}
+	if got := f.head(main); got.Hash != c.Hash {
+		t.Fatalf("main is %s, want %s", got.Hash, c.Hash)
+	}
+}
+
 // Engine Spec L3: "A CellMerger error mid-merge leaves the working set hash
 // unchanged"; so does passing the conflict limit.
 func TestAFailedMergeLeavesTheWorkingSetUnchanged(t *testing.T) {
