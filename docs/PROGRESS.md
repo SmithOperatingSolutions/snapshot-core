@@ -12,7 +12,7 @@ lint clean · every package at or above its coverage gate
 
 | Milestone | Status | Delivered | Exit criteria |
 | --- | --- | --- | --- |
-| **C0 Foundations** | ✅ Done | Repo, `mise.toml` (Go 1.27), CI (static, race on Linux+macOS, MinIO tier, red-check; nightly fuzz/crash/slow/mutants), `tools/ci` run-all, `tools/redcheck`, `tools/mutate`, `core/dnx` + `core/dnx/compat` | Compat suite green against the pinned disknexus tag ✅ |
+| **C0 Foundations** | ✅ Done | Repo, `mise.toml` (Go 1.27), CI (static, race on Linux+macOS, MinIO tier, red-check; weekly fuzz/crash/slow/mutants), `tools/ci` run-all, `tools/redcheck`, `tools/mutate`, `core/dnx` + `core/dnx/compat` | Compat suite green against the pinned disknexus tag ✅ |
 | **C1 Blobs and chunks** | ✅ Done | `core/hash`, `core/internal/wire`, `core/cdc`, `core/seal` (per-object HKDF keys, key files, KMS port + contract); `core/blob` port + contract, `blob/mem`, `blob/local`, `blob/multivol`, `blob/s3` (pure-Go in-process S3 server `s3fake`, startup probe, MinIO tier), `blob/cache`; `core/pack`, `core/dedup`; `core/chunk` port + contract, `chunk/memstore`, `chunk/packstore` | Blob contract green on all backends ✅ (mem, local, multivol, s3 in-process and MinIO, and through the cache); crash harness passes ✅ (local and multivol at the blob layer, packstore at the chunk layer) |
 | **C2 Keyed data** | ✅ Done | `core/boundary` (the integer split rule), `core/stream` (CDC byte streams under a content-defined index tree), `core/prolly` (Map, Editor with incremental Flush, Diff) | Determinism and bounded-diff properties hold on 1M entries ✅ (`-tags slow`, about 9 s) |
 | **C3 History and models** | ✅ Done | `core/auth` (Principal, default-deny Authorizer), `core/model` (the port, frozen, and the registry), `core/object` (46-byte object references, the path grammar, namespaces and their diff), `model/contract`, `model/blob`, `model/tree`, `core/merge` (the zipped three-way driver), `core/vcs` (refs, commits, tags, working sets, merge base, log, merge and conflicts), `core/repo` (Init and Open over the sealed config object) | A folder of files branches, diffs and merges end to end ✅ (`TestAFolderBranchesDiffsAndMerges`, on a local disk store through encrypted packs); model interface frozen ✅ (`core/model`, port version 1) |
@@ -113,7 +113,7 @@ packages have no gate: their callers exercise them.
 ### Blob backends
 - [x] A shared `blob/contract` suite runs against every backend: put, get, range get, list paging, put-existing refused, root swap, stale swap refused, plus atomic puts and whole root reads under concurrent swaps (`core/blob/contract`; passing on `mem`, `local`, `multivol`, `s3` against the in-process server and MinIO, and through `blob/cache`)
 - [x] 50 concurrent root swappers on `s3` (MinIO in CI): exactly one wins per round, none lost (`ConcurrentSwappersOneWinnerPerRound` with 50 swappers in `TestContractAgainstTheInProcessServer` and `TestContractAgainstRealS3`)
-- [x] kill -9 during `SwapRoot` on `local` and `multivol`, 1,000 times: reopened root is old or new, never torn (`TestCrashDuringSwapRootLeavesOldOrNew`; 1,000 nightly)
+- [x] kill -9 during `SwapRoot` on `local` and `multivol`, 1,000 times: reopened root is old or new, never torn (`TestCrashDuringSwapRootLeavesOldOrNew`; 1,000 weekly)
 - [x] `s3` startup probe refuses an endpoint that ignores `If-Match` (`TestProbeRefusesEndpointsThatIgnoreConditionalWrites`)
 
 ### Chunkers
@@ -167,12 +167,12 @@ packages have no gate: their callers exercise them.
 - [x] Flipping one byte on disk makes `Get` return `ErrCorrupt` (`FlippedByteIsCorrupt`, through the raw backend)
 - [x] `CompareAndSetRoot` with a stale `expected` returns `ErrRootConflict` and leaves the root unchanged (`StaleCASChangesNothing`)
 - [x] 100 goroutines racing `CompareAndSetRoot`: exactly one wins per round (`RacingCASOneWinnerPerRound`; 50 on s3)
-- [x] Crash harness: kill mid-write 1,000 times; reopened store is at the old or new root (`TestCrashDuringCommitLeavesOldOrNew`, 1,000 nightly)
+- [x] Crash harness: kill mid-write 1,000 times; reopened store is at the old or new root (`TestCrashDuringCommitLeavesOldOrNew`, 1,000 weekly)
 - [x] `Put` of 1 MiB + 1 byte returns `ErrTooLarge` (`TooLarge`)
 - [x] (port rule) A closed store refuses every call with `ErrClosed` (`ClosedRefusesEveryCall`)
 
 ### L0 backends
-- [ ] Every backend runs the full contract suite in CI (S3 against MinIO per push; nightly real S3): mem, local, multivol, s3 against MinIO ✅; real S3 nightly: the test is written, the job and its credentials are not (#4)
+- [ ] Every backend runs the full contract suite in CI (S3 against MinIO per push; real S3 weekly): mem, local, multivol, s3 against MinIO ✅; real S3 nightly: the test is written, the job and its credentials are not (#4)
 - [x] filestore: starting on an SMB, NFS, or unrecognized filesystem fails (`TestOnlyAllowlistedFilesystems`)
 - [x] multistore: 4 volumes × 10,000 files, each 25% ± 3% (`TestPlacementIsEvenAcrossFourVolumes`)
 - [x] multistore: adding a 5th volume moves no existing files, ~20% of new files go to it (`TestAddingAVolumeMovesNothingAndTakesAFifth`)
@@ -260,6 +260,13 @@ Beyond the list: merging what a branch already holds changes nothing (`TestMergi
 - **Writes are authorized per path, reads per branch.**
 - **Equivalent mutants, not catalogued:** the cache's `Dir` check (`MkdirAll("")` fails anyway) and its `MkdirAll` error path (the `Chmod` after it fails); the pack index's per-entry read check (the reader's error is sticky and `Done` reports it); `OpenFrame`'s length check (authentication fails anyway); the manifest's count limits (the read fails at the first missing entry); the repository config's 4 KiB bound (the read is cut there anyway and a cut config fails to authenticate); `gc.Run`'s options check (a missing store, key or registry fails deeper down all the same); the version graph's walk of a conflict's sides (`vcs-walk-follows-conflicts`, retired: since a merge records where it started, the base, theirs and starting namespaces hold every side too, so the visit is defense in depth). Their statements are covered; no test can tell the mutant from the original.
 
+- **The slow tiers run weekly, not nightly** (2026-09-23). The specs say
+  "fuzzed nightly"; the fuzz job is 21 targets, hours at any useful budget
+  (30 minutes each exceeded its own 6-hour timeout), and the code lands in
+  batches, so `weekly.yml` runs fuzz (10 minutes a target), the crash
+  harness, the mutant catalog, the slow tier and the real-provider S3
+  suites every Sunday and on demand.
+
 ## What testing has found so far
 
 | Found by | What it showed | Fix |
@@ -320,7 +327,7 @@ Beyond the list: merging what a branch already holds changes nothing (`TestMergi
 - [x] #8 The root apart from the objects: `TestObjectsOnlyRunsWhereConditionalWritesAreIgnored`, `TestObjectsOnlyPutIsAHeadThenAPut`, `TestTheMirrorIsReplacedInPlace`; the split store's contract and modes (`TestContractOverASplitStore`, `TestWaitMirrorsEachSwapBeforeReturning`, `TestBackgroundMirrorsTheNewestRootAndCloseFlushes`, `TestBackgroundCopiesEachSwap`, `TestBackgroundReportsAndRetriesAFailedCopy`, `TestPeriodicMirrorsOnItsClock`, `TestOffKeepsNoCopy`, `TestRecoverSeedsAnEmptyRootStoreFromTheCopy`); `TestTheRootsCopyPassesThroughTheCache`; two `Init`s racing (`TestAnotherInitCannotTakeOverARepository`, `TestInitsRacingDoNotOverwriteEachOther`, `TestAStoppedInitFinishedTwiceAtOnceIsFinishedOnce`, `TestOpenTakesTheConfigThatAuthenticatesTheRoot`); end to end on an endpoint ignoring conditional writes, recovered from the copy, `TestARepositoryRunsOnAnEndpointWithoutConditionalWrites`.
 - [x] #1 Reclaiming space in mixed packs: a round repacks kept packs that are mostly dead, emptiest first within a byte budget, records them under a kind of their own and expires them a grace window on (`TestARoundRepacksAPackThatIsMostlyDead`, `TestAPackAboveTheThresholdIsKeptWhole`, `TestRepackingSpendsItsBudgetOnTheEmptiestPacksFirst`, `TestAfterARepackWritersFindTheNewPacks`, `TestRepackingCopiesAChunkTwoPacksShareOnce`, `TestRepackingRefusesACorruptPack`); the GC property converges to at most twice the live bytes (`TestGCSafetyProperty`).
 - [x] #6 The index in memory: a `dedup` table on disk (`TestATableAnswersEveryRecordItWasBuiltFrom`, `TestTheFirstRecordOfAKeyWins`, `TestATableHoldsAlmostNothingInMemory`, `TestATableThatDoesNotDecodeIsRefused`, `FuzzOpenTable`); a store spills its index past a bound (`TestAStoreSpillsItsIndexToDisk`, `TestASpilledIndexIsRebuiltWhenGCMovesIt`, `TestASpilledIndexNeedsItsDirectory`, `TestContractOverASpilledIndex`, `TestPacksInServiceComeFirstInTheIndex`); GC marks and indexes on disk (`TestGCNeedsItsWorkDirectory`); with 64 Ki in memory, a million chunks open in 16 KiB and collect in a 31 MiB peak, two million in 20 KiB and 34 MiB (`TestSlowMemoryPerChunkOn1MChunks`).
-- [ ] #4 The real provider, nightly: the job and its two tests are in; the secrets are the admin's, and the item closes on the first green night. The MinIO tier runs the e2e package on every push meanwhile.
+- [ ] #4 The real provider, weekly: the job and its two tests are in, the secrets are set, and the item closes on the first green run. The first run found the endpoint given as a bare host: accepted as HTTPS. The MinIO tier runs the e2e package on every push meanwhile.
 
 ## Next
 
@@ -343,7 +350,7 @@ them, each tracked as an issue:
    `TestReadingAPromisedChunkThatIsGoneLosesTheSession`; end to end,
    `TestAWriterCannotPublishAPackGCDeletedAsAnOrphan`; slow writers in
    `TestGCSafetyProperty`).
-4. **Real S3 in the nightly run** (#4): the nightly job is written
+4. **Real S3 in the weekly run** (#4): the job is written
    (`real-provider`: `TestContractAgainstRealS3` objects only and
    `TestARepositoryRunsOnTheRealProvider`, on Backblaze B2 or iDrive e2 with
    the root on the runner's disk); it fails until an admin adds the
@@ -363,6 +370,6 @@ them, each tracked as an issue:
 7. **The write path is single-threaded** (#10): measured on a laptop
    over `blob/local`, 113 MB/s writing random data, 187 compressible,
    188 re-snapshotting a deduplicated file, 0.5–1.2 GB/s reading, 80 ms
-   a commit. First a slow-tier test that reports the figures nightly,
+   a commit. First a slow-tier test that reports the figures weekly,
    then hashing, compressing and sealing chunks on N workers with the
    memory in flight bounded.

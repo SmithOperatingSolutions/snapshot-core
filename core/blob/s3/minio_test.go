@@ -54,7 +54,7 @@ func realS3(t *testing.T) (*awss3.Client, string) {
 
 // The Storage Core Spec's "MinIO in CI" tier: the full contract, 50 racing
 // swappers included, against a real S3-compatible server. Passing the probe
-// at Open is part of it. With SNAPSHOT_S3_OBJECTS_ONLY=1 (the nightly run on
+// at Open is part of it. With SNAPSHOT_S3_OBJECTS_ONLY=1 (the weekly run on
 // a provider that ignores conditional writes, #4) the store opens objects
 // only and the contract runs for objects.
 func TestContractAgainstRealS3(t *testing.T) {

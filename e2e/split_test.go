@@ -46,7 +46,7 @@ func TestARepositoryRunsOnAnEndpointWithoutConditionalWrites(t *testing.T) {
 	runOnEndpoint(t, client, "b2-like")
 }
 
-// The same repository on the real provider the nightly run names
+// The same repository on the real provider the weekly run names
 // (SNAPSHOT_S3_ENDPOINT and its bucket and keys, #4): objects only, since
 // the provider need not honor conditional writes, the root on this disk.
 // Without an endpoint the test skips, unless SNAPSHOT_S3_REQUIRED=1 says the

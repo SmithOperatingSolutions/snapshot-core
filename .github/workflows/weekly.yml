@@ -1,11 +1,14 @@
-# The slow tiers: fuzzers for 30 minutes per target, the kill -9 crash harness
-# at its full 1,000 iterations, every checked-in mutant re-run to prove the
-# guards still have teeth, and the S3 suites against the real provider.
-name: Nightly
+# The slow tiers, once a week (Sunday morning UTC) and on demand: fuzzers
+# for 10 minutes per target, the kill -9 crash harness at its full 1,000
+# iterations, every checked-in mutant re-run to prove the guards still have
+# teeth, the slow-tier scale tests, and the S3 suites against the real
+# provider. Weekly, not nightly: the fuzz job alone is hours, and the code
+# changes in batches (docs/PROGRESS.md, decisions).
+name: Weekly
 
 on:
   schedule:
-    - cron: "17 6 * * *"
+    - cron: "17 6 * * 0"
   workflow_dispatch:
 
 permissions:
@@ -22,7 +25,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
         with: { go-version-file: go.mod, cache: true }
-      - run: go run ./tools/ci -only fuzz -fuzztime 30m
+      - run: go run ./tools/ci -only fuzz -fuzztime 10m
 
   crash:
     runs-on: ubuntu-latest
@@ -52,7 +55,7 @@ jobs:
       - run: go run ./tools/mutate
 
   real-provider:
-    # The Engine Spec's nightly run on real S3 (#4), on the provider whose
+    # The Engine Spec's run on real S3 (#4), weekly here, on the provider whose
     # bucket and keys are the repository's SNAPSHOT_S3_* secrets: Backblaze B2
     # or iDrive e2, which need not honor conditional writes, so the store
     # runs objects only with the root on the runner's disk (DESIGN §4). No
