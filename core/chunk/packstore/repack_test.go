@@ -3,6 +3,7 @@ package packstore_test
 import (
 	"bytes"
 	"errors"
+	"io"
 	"strings"
 	"testing"
 	"time"
@@ -55,6 +56,17 @@ func repackedNames(t *testing.T, bs blob.BlobStore, kr *seal.Keyring) []string {
 		t.Fatal(err)
 	}
 	return names
+}
+
+// packsOf is the packs among names, index objects left out.
+func packsOf(names []string) []string {
+	var out []string
+	for _, n := range names {
+		if strings.HasPrefix(n, "packs/") {
+			out = append(out, n)
+		}
+	}
+	return out
 }
 
 func locationOf(t *testing.T, s *packstore.Store, h hash.Hash) string {
@@ -110,8 +122,8 @@ func TestARoundRepacksAPackThatIsMostlyDead(t *testing.T) {
 		t.Fatalf("half a grace window on, the round repacked %d and expired %v; want nothing, the repacked pack neither reprieved nor expired", out.Repacked, out.Expired)
 	}
 	out = repackRound(t, bs, kr, liveSet(hs[0], hs[3]), t0.Add(time.Hour), packstore.Repack{})
-	if strings.Join(out.Expired, " ") != old[0] {
-		t.Fatalf("a grace window on, the round expired %v, want the repacked pack %s alone", out.Expired, old[0])
+	if got := packsOf(out.Expired); strings.Join(got, " ") != old[0] {
+		t.Fatalf("a grace window on, the round expired %v, want the repacked pack %s alone (and the index object that listed it)", out.Expired, old[0])
 	}
 	remove(t, bs, out.Expired)
 	fresh = open(t, bs, kr)
@@ -217,5 +229,77 @@ func TestAfterARepackWritersFindTheNewPacks(t *testing.T) {
 	}
 	if n := len(newNames(packs, objects(t, bs, "packs/"))); n != 0 {
 		t.Fatalf("after the repack a writer storing the live chunk wrote %d new packs, want none: it must deduplicate against the new pack", n)
+	}
+}
+
+// Two writers can store the same chunk, each in a pack of its own. When
+// both packs are repacked in one round the chunk is copied once, and reads
+// back.
+func TestRepackingCopiesAChunkTwoPacksShareOnce(t *testing.T) {
+	bs, kr := mem.New(), keyring(t)
+	a, b := open(t, bs, kr), open(t, bs, kr)
+	shared := payload("shared", 1<<10)
+	hs := packed(t, a, hash.Hash{}, []byte("the root"), shared, payload("dead a", 3<<10))
+	if _, err := b.Put(ctx, shared); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := b.Put(ctx, payload("dead b", 3<<10)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := b.Root(ctx); err != nil { // b learns of a's publish, its own pack already holding the chunk
+		t.Fatal(err)
+	}
+	if err := b.CompareAndSetRoot(ctx, hs[0], hs[0]); err != nil {
+		t.Fatal(err)
+	}
+	if n := len(objects(t, bs, "packs/")); n != 2 {
+		t.Fatalf("fixture: %d packs, want one per writer", n)
+	}
+	out := repackRound(t, bs, kr, liveSet(hs[0], hs[1]), t0, packstore.Repack{})
+	if out.Repacked != 2 {
+		t.Fatalf("the round repacked %d packs, want both, which share a live chunk", out.Repacked)
+	}
+	fresh := open(t, bs, kr)
+	if got, err := fresh.Get(ctx, hs[1]); err != nil || !bytes.Equal(got, shared) {
+		t.Fatalf("the shared chunk reads as %d bytes, %v", len(got), err)
+	}
+}
+
+// A candidate whose bytes are not what its index says is corrupt: the round
+// fails rather than repack it, and repacks it once the pack is whole again.
+func TestRepackingRefusesACorruptPack(t *testing.T) {
+	bs, kr := mem.New(), keyring(t)
+	s := open(t, bs, kr)
+	hs := packed(t, s, hash.Hash{}, []byte("the root"), payload("live", 1<<10), payload("dead", 3<<10))
+	name := objects(t, bs, "packs/")[0]
+	rc, err := bs.Get(ctx, name, 0, -1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	whole, err := io.ReadAll(rc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = rc.Close()
+	replace := func(b []byte) {
+		t.Helper()
+		if err := bs.Delete(ctx, name); err != nil {
+			t.Fatal(err)
+		}
+		if err := bs.Put(ctx, name, bytes.NewReader(b), int64(len(b))); err != nil {
+			t.Fatal(err)
+		}
+	}
+	replace(whole[:len(whole)-1])
+	r, err := packstore.Begin(ctx, packstore.Options{Blobs: bs, Keys: kr, Repo: repo})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := r.Apply(ctx, liveSet(hs[0], hs[1]), t0, time.Hour); !errors.Is(err, chunk.ErrCorrupt) {
+		t.Fatalf("repacking a pack a byte short: %v, want ErrCorrupt", err)
+	}
+	replace(whole)
+	if out := repackRound(t, bs, kr, liveSet(hs[0], hs[1]), t0, packstore.Repack{}); out.Repacked != 1 {
+		t.Fatalf("the pack whole again, the round repacked %d, want it", out.Repacked)
 	}
 }
