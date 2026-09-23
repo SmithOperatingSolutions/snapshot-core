@@ -331,6 +331,9 @@ Beyond the list: merging what a branch already holds changes nothing (`TestMergi
 | the write path's profile (#10) | With hashing and compression on sixteen workers a write went 1.3× faster, not 3×: three quarters of the wall time was disknexus's chunker, serial by nature | `core/cdc` cuts the same boundaries itself at 800 MB/s (`TestSlowTheChunkerOutrunsDisknexus`) |
 | the write path's profile, again (#10) | With the chunker fast the storer bound the write: appending frames to the pending pack grew and copied its buffer over and over, a third of the storer's time | The pending pack's buffer is allocated at the pack's size once |
 | the chunker's differential test (#10) | Two mutants survived: the byte that makes a chunk exactly Min long is judged by the easy mask, which random streams reach one chunk in thousands, and bytes returned together with a read error, which no `iotest` reader does | A stream drawn from the corpus so a chunk is exactly Min by the easy mask alone; a reader that hands 64 KiB over with its error |
+| the write path's profile, a third time (#10) | With the chunker fast the storer did the per-pack work on the per-chunk path: naming (SHA-256 of 32 MiB), building and uploading each full pack, half its time | Full packs are finished and uploaded beside the writer, two at a time |
+| the throughput measurement (#10) | The compressible figure stopped moving at 330 MB/s: the test's text generator wrote a byte at a time through a modulo and had become the source being measured | It copies from a page of the pattern |
+| the finisher's tests (#10) | The publish-waits test judged the order of what landed before the held pack had landed at all, so a publish that did not wait passed; the finishing-pack read test read a pack already named and held at its upload, where the ordinary path serves it | Every pack is waited for before the order is judged; a hold seam stops a finisher before it names its pack |
 | (redcheck on this branch) | Build-tagged tests unjudged; `TestMain` judged; pairs not matched by scope; contract changes invisible; environment-bound callers refused; no `main` in a new clone; a tagged backfill's mutants built without its tag; fuzz targets not counted as tests | Tool fixed each time, with a red test |
 
 ### Batch 2 (in progress)
@@ -383,7 +386,11 @@ them, each tracked as an issue:
    (`TestSlowWorkersOutrunOneWorker`, `TestTheStreamIsTheSameAtAnyWorkerCount`),
    and `core/cdc` cuts disknexus's boundaries itself three times as fast
    (`TestSlowTheChunkerOutrunsDisknexus`). On the same laptop over
-   `blob/local`: 175 MB/s writing random data (from 114), 328 compressible
-   (from 188), 321 re-snapshotting (from 203); reads and commits unchanged
-   (`TestSlowThroughputOnLocalDisk`, weekly). The storer, one goroutine
-   sealing and appending to the pack, and the backend's write bound it now.
+   `blob/local`: 262 MB/s writing random data (from 114), 485 compressible
+   (from 188), 322 re-snapshotting (from 203); in memory 441 on sixteen
+   workers against 238 on one; reads and commits unchanged
+   (`TestSlowThroughputOnLocalDisk`, weekly). Full packs are finished and
+   uploaded beside the writer, at most two at once
+   (`TestAnUploadDoesNotHoldUpTheWriter`, `TestAtMostTwoPacksAreInFlight`,
+   `TestAPublishWaitsForItsUploads`). The cutter, one goroutine by nature at
+   about 800 MB/s, and the backend's write bound it now.

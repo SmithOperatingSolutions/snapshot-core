@@ -161,10 +161,16 @@ can refuse them) and a fuzz target.
 
 ## 6. The chunk layer protocol (`core/chunk/packstore`)
 
-- **Put** adds to an in-memory pack writer. A full pack is finished, added to
-  the in-memory index, and uploaded; until the upload is confirmed its bytes
-  stay readable from memory. A failed upload is kept and retried by the next
-  CompareAndSetRoot, which refuses to publish while any pack is unstored.
+- **Put** adds to an in-memory pack writer. A full pack is handed to a
+  finisher goroutine that names it, builds it and uploads it (#10); the
+  writer moves to a fresh pack at once. Until the pack is named its chunks
+  read and deduplicate from the unfinished writer, then from its bytes kept
+  in memory until the upload is confirmed. At most two packs are finishing
+  or uploading at once: a writer with a third full pack waits, so a slow
+  backend costs time, never memory. A failed upload is kept and retried by
+  the next CompareAndSetRoot, which waits for every finisher, finishes and
+  uploads the pending pack itself, and refuses to publish while any pack is
+  unstored.
   Put is two halves (`chunk.Preparer`, #10): **Prepare**, the hash and the
   compression, on the caller's goroutine with no lock; **PutPrepared**, the
   deduplication check and the seal into the pending pack, under the lock.
@@ -174,11 +180,13 @@ can refuse them) and a fuzz target.
   the same at any worker count; at most about 2×Workers chunks and four
   read buffers are in flight. The pending pack's buffer is allocated at the
   pack's size once. Measured on an i7-1360P (`TestSlowThroughputOnLocalDisk`,
-  the weekly run): a gibibyte of random data writes to `blob/local` at 175
-  MB/s where it wrote at 114, compressible text at 328 where it wrote at
-  188, a one-byte re-snapshot deduplicates at 321; reads 0.5–1.2 GB/s and
-  commits about 100 ms are unchanged. What bounds a write now is the storer:
-  the seal and the pack's bytes on one goroutine, and the backend's write.
+  the weekly run): a gibibyte of random data writes to `blob/local` at 262
+  MB/s where it wrote at 114, compressible text at 485 where it wrote at
+  188, a one-byte re-snapshot deduplicates at 322; in memory on sixteen
+  workers 441 MB/s where one worker does 238. Reads 0.5–1.2 GB/s and
+  commits about 100 ms are unchanged. What bounds a write now is the cutter
+  (about 800 MB/s, one goroutine by nature) and, on disk, the backend's
+  write; the storer is under half the wall.
 - **CompareAndSetRoot(expected, next)** refuses a `next` that is not a stored
   chunk, uploads every pending pack, writes one index object for the session's
   packs, then swaps the manifest (root := next, index list += the session's
