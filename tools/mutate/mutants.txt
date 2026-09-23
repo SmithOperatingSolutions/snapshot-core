@@ -404,3 +404,52 @@ find: case 0xEF53:
 replace: case 0xEF54:
 pkg: ./core/blob/local
 run: ^TestFilesystemMagicNumbers$
+
+id: multivol-put-checks-every-volume
+file: core/blob/multivol/multivol.go
+find: for _, v := range ranked {\n\t\tif _, err := v.st.Stat(ctx, name); err == nil {
+replace: for _, v := range ranked[:0] {\n\t\tif _, err := v.st.Stat(ctx, name); err == nil {
+pkg: ./core/blob/multivol
+run: ^TestPutRefusesANameStoredOnAnotherVolume$
+
+id: multivol-list-refuses-when-a-volume-is-missing
+file: core/blob/multivol/multivol.go
+find: vols, err := s.snapshot()\n\tif err != nil {\n\t\treturn nil, err\n\t}\n\tseen := map[string]bool{}\n\tvar all []blob.Info\n\tfor _, v := range vols {\n\t\tinfos, err := v.st.List(ctx, prefix, after, limit)
+replace: vols, _ := s.snapshot()\n\tseen := map[string]bool{}\n\tvar all []blob.Info\n\tfor _, v := range vols {\n\t\tif v.st == nil {\n\t\t\tcontinue\n\t\t}\n\t\tinfos, err := v.st.List(ctx, prefix, after, limit)
+pkg: ./core/blob/multivol
+run: ^TestMissingSecondaryMakesTheStoreReadOnly$
+
+id: multivol-missing-is-not-not-found
+file: core/blob/multivol/multivol.go
+find: if missing {\n\t\treturn fmt.Errorf("%w: %s may be on it", ErrVolumeMissing, name)
+replace: if missing && false {\n\t\treturn fmt.Errorf("%w: %s may be on it", ErrVolumeMissing, name)
+pkg: ./core/blob/multivol
+run: ^TestMissingSecondaryMakesTheStoreReadOnly$
+
+id: multivol-swap-refuses-when-read-only
+file: core/blob/multivol/multivol.go
+find: vols, err := s.snapshot()\n\tif err != nil {\n\t\treturn blob.NoVersion, err\n\t}\n\treturn vols[0].st.SwapRoot(ctx, expected, next)
+replace: vols, _ := s.snapshot()\n\treturn vols[0].st.SwapRoot(ctx, expected, next)
+pkg: ./core/blob/multivol
+run: ^TestMissingSecondaryMakesTheStoreReadOnly$
+
+id: multivol-free-space-floor
+file: core/blob/multivol/multivol.go
+find: return float64(free)/float64(total) >= s.floor()
+replace: return float64(free)/float64(total) >= 0
+pkg: ./core/blob/multivol
+run: ^TestFreeSpaceFloor$
+
+id: multivol-volume-limit
+file: core/blob/multivol/multivol.go
+find: if 1+len(secondaries) > MaxVolumes {
+replace: if 1+len(secondaries) > MaxVolumes+1 {
+pkg: ./core/blob/multivol
+run: ^TestVolumeLimit$
+
+id: multivol-open-checks-volume-uuid
+file: core/blob/multivol/multivol.go
+find: case st.ID() != e.id:
+replace: case st.ID() != e.id && false:
+pkg: ./core/blob/multivol
+run: ^TestSwappedVolumeIsRefused$
