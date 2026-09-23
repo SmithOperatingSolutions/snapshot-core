@@ -243,7 +243,8 @@ Beyond the list: merging what a branch already holds changes nothing (`TestMergi
 - **Every format test carries its own codec**, written from the DESIGN text, so the writer is checked against the documented format and the reader against hand-built input; goldens pin what only the implementation could produce.
 - **A mutant that hangs counts as killed** at the mutation engine's per-run timeout (three minutes).
 - **Property tests prove their reach**: a property over trees fails unless enough of its cases built deep ones.
-- **The merge state is the version graph's**: `UpdateWorkingSet` changes a branch's namespaces and nothing else, checked against the stored working set; there is no merge abort in v1.
+- **The merge state is the version graph's**: `UpdateWorkingSet` changes a branch's namespaces and nothing else, checked against the stored working set; only merging, resolving, committing and abandoning change it.
+- **Abandoning a merge puts back where it started**: `Merge` merges into the working namespace as it is, so the merge state records the working and staged namespaces it started from, and `AbortMerge` restores them; edits made before the merge survive it. The two roots joined the working set's merge layout in place, before any release.
 - **Merging what a branch already holds is a no-op**, and merging a descendant is not fast-forwarded (it makes a two-parent commit).
 - **`Init` is resumable**: it claims the store by writing the config, and the next `Init` with the same key finishes one that stopped after that; `Open` reports such a store as `ErrNoRepo`.
 - **`vcs.Namespace` asks no authorizer**: it opens what a hash names, and a host holding the hash holds the chunk store.
@@ -318,7 +319,12 @@ them, each tracked as an issue:
 4. **Real S3 in the nightly run** (#4): the test is written
    (`TestContractAgainstRealS3`); a nightly job to run it, and the
    credentials it needs as CI secrets, are not there yet.
-5. **Abandoning a merge** (#5): a merge in progress ends only by resolving
-   every conflict and committing.
+5. ✅ **Abandoning a merge** (#5): `AbortMerge` puts back the working and
+   staged namespaces the merge started from
+   (`TestAnAbandonedMergeLeavesTheBranchAsItWas`,
+   `TestOnlyAMergeInProgressCanBeAbandoned`; per path,
+   `TestWritesAreAuthorizedPerPath`; GC keeps the starting namespaces,
+   `TestAWalkNamesAllTheRepositoryHolds`, and collects an abandoned merge,
+   `TestAnAbandonedMergeIsCollected`).
 6. **The index in memory** (#6): about 70 to 80 bytes per chunk to open a
    repository, and a map of every live chunk to collect one.
