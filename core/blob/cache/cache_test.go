@@ -464,3 +464,33 @@ func TestZeroMaxBytesIsTheDefault(t *testing.T) {
 		t.Fatalf("with MaxBytes 0, two reads reached the backend %d times, want 1: the default cap was not applied", n)
 	}
 }
+
+// A cache that cannot write (a full or read-only disk) still serves every
+// read, from the backend: failing to cache only means a later miss. Access
+// is denied with chmod, which root ignores.
+func TestACacheThatCannotWriteStillServesReads(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Fatal("this test denies writes with chmod, which root ignores: run the suite as an ordinary user")
+	}
+	inner := &counting{BlobStore: mem.New()}
+	c, dir := newCache(t, inner, 64<<20)
+	d := payload("read-only", 2000)
+	if err := c.Put(ctx, "packs/jj/r", bytes.NewReader(d), int64(len(d))); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(dir, 0o500); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(dir, 0o700) })
+	for i := 0; i < 2; i++ {
+		if got := read(t, c, "packs/jj/r", 0, -1); !bytes.Equal(got, d) {
+			t.Fatal("a cache that cannot write returned the wrong bytes")
+		}
+	}
+	if n := inner.gets.Load(); n != 2 {
+		t.Errorf("%d backend reads, want 2: nothing could have been cached", n)
+	}
+	if c.Used() != 0 {
+		t.Errorf("a cache that cannot write counts %d bytes", c.Used())
+	}
+}

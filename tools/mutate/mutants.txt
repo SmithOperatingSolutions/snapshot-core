@@ -1146,3 +1146,10 @@ find: if o.MaxBytes == 0 {
 replace: if o.MaxBytes == 0 && false {
 pkg: ./core/blob/cache
 run: ^TestZeroMaxBytesIsTheDefault$
+
+id: cache-store-failure-is-a-miss
+file: core/blob/cache/cache.go
+find: tmp, err := os.CreateTemp(s.dir, ".tmp-*")\n\tif err != nil {
+replace: tmp, err := os.CreateTemp(s.dir, ".tmp-*")\n\tif err != nil && false {
+pkg: ./core/blob/cache
+run: ^TestACacheThatCannotWriteStillServesReads$
