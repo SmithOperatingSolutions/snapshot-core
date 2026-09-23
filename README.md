@@ -10,7 +10,7 @@ or protocols; the table model lives in a consuming repository as a plugin.
 C0 to C4, are done: backends and encrypted packs, content-defined chunking and
 prolly trees, commits and merges over typed objects, and garbage collection.
 Every checklist item and the test that proves it: [`docs/PROGRESS.md`](docs/PROGRESS.md).
-Remaining work is tracked in the issues.
+Remaining work is tracked in the [issues](https://github.com/SmithOperatingSolutions/snapshot-core/issues).
 
 ## Using it
 
@@ -18,6 +18,9 @@ A host (an application, or the consuming repository's engine) opens a
 repository with four things: a backend, a master key, the data models its
 objects use, and an authorizer. Everything below is taken from
 [`e2e/example_test.go`](e2e/example_test.go), which runs with the tests.
+Packages are under the module `github.com/SmithOperatingSolutions/snapshot-core`:
+`local` is `core/blob/local`, and `blob` and `tree` are the models `model/blob`
+and `model/tree` ([Packages](#packages)).
 
 ```go
 store, _ := local.Create("/srv/repo", local.Options{})    // or mem.New(), s3.Open(ctx, ...), multivol.Create(...)
@@ -82,13 +85,14 @@ default), so run it on a schedule.
 
 | Layer | Packages |
 | --- | --- |
-| Backends | `core/blob` (the port) · `blob/mem`, `blob/local`, `blob/multivol`, `blob/s3`, `blob/cache` |
+| Backends | `core/blob` (the port) · `core/blob/mem`, `core/blob/local`, `core/blob/multivol`, `core/blob/s3`, `core/blob/cache` |
 | Crypto, chunking | `core/seal` (keys, key files, KMS wrapping) · `core/cdc` · `core/boundary` |
-| Chunk layer | `core/pack`, `core/dedup` · `core/chunk` (the port) · `chunk/packstore`, `chunk/memstore` |
+| Chunk layer | `core/pack`, `core/dedup` · `core/chunk` (the port) · `core/chunk/packstore`, `core/chunk/memstore` |
 | Keyed data | `core/stream` (byte streams) · `core/prolly` (the ordered map) |
 | Objects | `core/model` (the plugin port) · `core/object` (namespaces of typed objects) |
 | History | `core/vcs` (commits, branches, tags, working sets) · `core/merge` |
 | GC, entry point | `core/gc` · `core/repo` |
+| Access | `core/auth` (principals, the default-deny authorizer) |
 | Models | `model/blob` (files) · `model/tree` (folders) · `model/contract` (the suite every model passes) |
 
 Pure Go (`CGO_ENABLED=0`). Depends on
