@@ -1707,3 +1707,24 @@ find: if c.Kind != prolly.Modified || c.From.Model != c.To.Model {
 replace: if c.Kind != prolly.Modified {
 pkg: ./core/object
 run: ^TestDetailAsksTheOwningModel$
+
+id: blob-conflicts-when-both-change
+file: model/blob/blob.go
+find: return model.MergeResult{Root: ours, Conflicts: []model.Conflict{{Reason: "both sides changed the file"}}}, nil
+replace: return model.MergeResult{Root: ours}, nil
+pkg: ./model/blob
+run: ^TestBothSidesEditingIsOneConflict$
+
+id: blob-takes-theirs-change
+file: model/blob/blob.go
+find: case ours == base:\n\t\treturn model.MergeResult{Root: theirs}, nil
+replace: case ours == base:\n\t\treturn model.MergeResult{Root: ours}, nil
+pkg: ./model/blob
+run: ^TestBothSidesEditingIsOneConflict$
+
+id: blob-diff-with-itself-is-empty
+file: model/blob/blob.go
+find: if from == to {\n\t\treturn &changes{}, nil
+replace: if from == to && false {\n\t\treturn &changes{}, nil
+pkg: ./model/blob
+run: ^TestContract$
