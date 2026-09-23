@@ -49,9 +49,24 @@ behavior change and need no red.
 
 `mise run redcheck` (`tools/redcheck`) checks every `test:` commit between the
 branch and `main`: it checks the commit out in a scratch worktree, runs only
-the tests that commit added, and requires each of them to FAIL on an
-assertion. A build failure, a panic, or a pass blocks the PR. CI runs the same
+the tests that commit added or changed, and requires each of them to FAIL on
+an assertion. A build failure, a panic, a skip, or a pass blocks the PR. Every
+`feat:`/`fix:` needs a `test:` commit since the previous one. CI runs the same
 tool on every pull request.
+
+**Backfills.** A test for behavior that already exists (a guard someone argued
+for but never tested, `docs/TESTING.md` §11) cannot fail against its parent.
+Its red is a mutant instead: add the mutant to `tools/mutate/mutants.txt` in
+the same commit and name it in the commit body:
+
+```
+test(pkg): pin the stale-swap refusal
+
+Red-Check: mutants mem-swap-compares-version
+```
+
+redcheck then requires the commit's tests to pass, and each named mutant to be
+killed by those tests alone.
 
 ## Regressions
 
