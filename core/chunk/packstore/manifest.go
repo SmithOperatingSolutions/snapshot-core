@@ -29,10 +29,16 @@ type manifest struct {
 }
 
 type condemned struct {
-	kind uint8 // 1: pack, 2: index object
+	kind uint8 // condemnedPack or condemnedIndex
 	sum  [32]byte
 	at   int64 // unix nanoseconds
 }
+
+// Condemned kinds.
+const (
+	condemnedPack  = 1
+	condemnedIndex = 2
+)
 
 const (
 	manifestMagic = "SCMF"
@@ -105,7 +111,7 @@ func decodePlain(b []byte) (manifest, error) {
 		e.kind = r.U8()
 		copy(e.sum[:], r.Fixed(32))
 		e.at = int64(r.U64())
-		if r.Err() != nil || (e.kind != 1 && e.kind != 2) {
+		if r.Err() != nil || (e.kind != condemnedPack && e.kind != condemnedIndex) {
 			return manifest{}, fmt.Errorf("%w: condemned entry", ErrManifest)
 		}
 		m.condemned = append(m.condemned, e)

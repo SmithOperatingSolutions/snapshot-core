@@ -2820,3 +2820,45 @@ find: case !utf8.ValidString(t.Tagger) || !utf8.ValidString(t.Message):
 replace: case (!utf8.ValidString(t.Tagger) || !utf8.ValidString(t.Message)) && false:
 pkg: ./core/vcs
 run: ^TestForgedTagsAreCorrupt$
+
+id: packstore-round-condemns
+file: core/chunk/packstore/gc.go
+find: next = append(next, condemned{kind: condemnedPack, sum: sum, at: at})
+replace: _ = sum
+pkg: ./core/chunk/packstore
+run: ^TestARoundCondemnsWaitsThenExpires$
+
+id: packstore-round-waits-the-grace-window
+file: core/chunk/packstore/gc.go
+find: expired := func(c condemned) bool { return at-c.at >= int64(grace) }
+replace: expired := func(c condemned) bool { return at-c.at >= 0 }
+pkg: ./core/chunk/packstore
+run: ^TestARoundCondemnsWaitsThenExpires$
+
+id: packstore-round-reprieves
+file: core/chunk/packstore/gc.go
+find: case isLive(p, live):
+replace: case isLive(p, live) && !was:
+pkg: ./core/chunk/packstore
+run: ^TestAReachedPackIsReprieved$
+
+id: packstore-round-compacts-the-index
+file: core/chunk/packstore/gc.go
+find: upd.indexes = sums
+replace: _ = sums
+pkg: ./core/chunk/packstore
+run: ^TestARoundCondemnsWaitsThenExpires$
+
+id: packstore-round-condemns-replaced-indexes
+file: core/chunk/packstore/gc.go
+find: next = append(next, condemned{kind: condemnedIndex, sum: old, at: at})
+replace: _ = old
+pkg: ./core/chunk/packstore
+run: ^TestARoundCondemnsWaitsThenExpires$
+
+id: packstore-round-loses-to-writers
+file: core/chunk/packstore/gc.go
+find: if errors.Is(err, blob.ErrRootConflict) {\n\t\t\treturn Outcome{}, ErrMoved
+replace: if errors.Is(err, blob.ErrRootConflict) && false {\n\t\t\treturn Outcome{}, ErrMoved
+pkg: ./core/chunk/packstore
+run: ^TestARoundLosesToAWriterThatPublished$

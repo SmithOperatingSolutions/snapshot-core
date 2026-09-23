@@ -47,8 +47,8 @@ func PackName(sum [32]byte) string {
 	return "packs/" + h[:2] + "/" + h
 }
 
-// packSum recovers a pack name's hash, refusing anything PackName would not write.
-func packSum(name string) ([32]byte, error) {
+// PackSum recovers a pack name's hash, refusing anything PackName would not write.
+func PackSum(name string) ([32]byte, error) {
 	var sum [32]byte
 	if len(name) != len("packs/xx/")+64 {
 		return sum, fmt.Errorf("%w: pack name %q", ErrCorrupt, name)
@@ -75,7 +75,7 @@ func encodePlain(packs []pack.Info) ([]byte, error) {
 	}
 	recs := make([]record, len(packs))
 	for i, p := range packs {
-		sum, err := packSum(p.Name)
+		sum, err := PackSum(p.Name)
 		if err != nil {
 			return nil, err
 		}

@@ -164,8 +164,13 @@ func (s *Store) refresh(ctx context.Context) error {
 }
 
 func (s *Store) loadIndex(ctx context.Context, sum [32]byte) ([]pack.Info, error) {
+	return loadIndex(ctx, s.o, sum)
+}
+
+// loadIndex reads and opens one index object the manifest lists.
+func loadIndex(ctx context.Context, o Options, sum [32]byte) ([]pack.Info, error) {
 	name := indexName(sum)
-	rc, err := s.o.Blobs.Get(ctx, name, 0, -1)
+	rc, err := o.Blobs.Get(ctx, name, 0, -1)
 	if err != nil {
 		return nil, fmt.Errorf("packstore: index object %s listed by the manifest: %w", name, err)
 	}
@@ -174,7 +179,7 @@ func (s *Store) loadIndex(ctx context.Context, sum [32]byte) ([]pack.Info, error
 	if err != nil {
 		return nil, err
 	}
-	infos, err := dedup.DecodeObject(s.o.Keys, s.o.Repo, name, b)
+	infos, err := dedup.DecodeObject(o.Keys, o.Repo, name, b)
 	if err != nil {
 		return nil, fmt.Errorf("%w: %w", chunk.ErrCorrupt, err)
 	}
