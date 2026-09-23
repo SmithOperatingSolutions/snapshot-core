@@ -5,8 +5,8 @@ every "first failing test" checkbox in both specs. Updated at each milestone
 boundary and whenever a checklist item turns green; the evidence for each item
 is the named test, and the commit that added it carries its red.
 
-**Updated 2026-09-23** · branch `storage-core` (local, not pushed) · 102 commits
-· red-check clean · 181 checked-in mutants, all killed · lint clean · every
+**Updated 2026-09-23** · branch `storage-core` (local, not pushed) · 122 commits
+· red-check clean · 228 checked-in mutants, all killed · lint clean · every
 package at or above its coverage gate
 
 ## Milestones
@@ -15,8 +15,8 @@ package at or above its coverage gate
 | --- | --- | --- | --- |
 | **C0 Foundations** | ✅ Done | Repo, `mise.toml` (Go 1.27), CI (static, race on Linux+macOS, MinIO tier, red-check; nightly fuzz/crash/slow/mutants), `tools/ci` run-all, `tools/redcheck`, `tools/mutate`, `core/dnx` + `core/dnx/compat` | Compat suite green against the pinned disknexus tag ✅ |
 | **C1 Blobs and chunks** | ✅ Done | `core/hash`, `core/internal/wire`, `core/cdc`, `core/seal` (per-object HKDF keys, key files, KMS port + contract); `core/blob` port + contract, `blob/mem`, `blob/local`, `blob/multivol`, `blob/s3` (pure-Go in-process S3 server `s3fake`, startup probe, MinIO tier), `blob/cache`; `core/pack`, `core/dedup`; `core/chunk` port + contract, `chunk/memstore`, `chunk/packstore` | Blob contract green on all backends ✅ (mem, local, multivol, s3 in-process and MinIO, and through the cache); crash harness passes ✅ (local and multivol at the blob layer, packstore at the chunk layer) |
-| **C2 Keyed data** | ⏳ Next | — | Determinism and bounded-diff properties hold on 1M entries |
-| **C3 History and models** | ⏳ | — | A folder of files branches, diffs and merges end to end; model interface frozen |
+| **C2 Keyed data** | ✅ Done | `core/boundary` (the integer split rule), `core/stream` (CDC byte streams under a content-defined index tree), `core/prolly` (Map, Editor with incremental Flush, Diff) | Determinism and bounded-diff properties hold on 1M entries ✅ (`-tags slow`, about 9 s) |
+| **C3 History and models** | ⏳ Next | — | A folder of files branches, diffs and merges end to end; model interface frozen |
 | **C4 GC and hardening** | ⏳ | (per-object keys, and the manifest's gcGen and condemned list, already landed) | GC safety property holds; security table fully verified |
 
 **Closing C1** took more than the last component. The coverage gate found
@@ -29,11 +29,25 @@ it had assumed (a root read during swaps is whole). The full mutation run
 caught a mutant the crash harness cannot kill and two stale ones; the full
 red-check caught a scope mismatch in an early commit.
 
+**Closing C2** was mostly the mutation check finding tests that did not
+reach what they claimed: the split rule enforced its maximum twice (one
+copy removed); the stream reader had three guards against forgeries that
+would otherwise read back with no error at all; the rapid properties drew
+almost only single-leaf trees until they drew seeded large sets and had to
+prove they reached height 2; Flush's resync only changed cost, so a read
+bound now holds it; and every operation's store-error paths were dark
+until a store failing exactly one read or write at every point showed
+each error surfacing. One real defect: a flush that changed nothing still
+re-stored the nodes it re-chunked (now fixed). A mutant that hangs led to
+a per-mutant timeout in the mutation engine.
+
 **Coverage gate: met.** Statement coverage over the merged suite (`go run ./tools/ci -only cover`):
 
 | Package | Coverage | Gate |
 | --- | --- | --- |
 | `cdc`, `internal/wire` | 100% | 90% |
+| `stream` | 97.3% | 90% |
+| `boundary`, `prolly` | 97.1% | 90% |
 | `blob/mem`, `chunk/memstore` | 98.4% | 90% |
 | `hash` | 94.1% | 90% |
 | `blob` | 93.5% | 90% |
@@ -65,8 +79,8 @@ packages have no gate: their callers exercise them.
 - [x] `cdc` via `core/dnx`: golden boundaries for a fixed 64 MiB corpus match a checked-in list (`TestCDCGoldenBoundariesRepoGeometry64MiB`, cross-checked against an independent reference implementation)
 - [x] `cdc`: inserting 1 byte near the start of a 1 GiB file changes at most 3 chunks (`TestSlowOneByteInsertChangesAtMostThreeChunks1GiB`, `-tags slow`; 16 MiB on every run)
 - [x] `cdc`: stored bytes re-hash to their chunk id on every read path: unfinished pack, in-flight pack, cache and backend (chunk contract `IdentityIsSHA256` and `FlippedByteIsCorrupt` on every backend, `TestCachedReadsAreVerified`, `TestFailedUploadStaysReadableAndIsRetried`)
-- [ ] `prolly`: all Engine Spec L1 tests (determinism, history independence, bounded diff cost) (C2)
-- [ ] A prolly value over the inline limit is stored via `cdc` and reads back byte-identical (C2)
+- [x] `prolly`: all Engine Spec L1 tests (determinism, history independence, bounded diff cost); see the L1 list below
+- [x] A prolly value over the inline limit is stored via `cdc` and reads back byte-identical (`TestAValueOverTheInlineLimitIsAStream`)
 
 ### Object model and commit graph
 - [ ] One commit holding a table, a blob and a JSON document round-trips all three
@@ -96,10 +110,10 @@ packages have no gate: their callers exercise them.
 - [ ] AES-256-GCM for all data and metadata at rest (chunks, pack indexes, index objects and the manifest ✅; the repository config object lands with `core/repo` in C3)
 - [x] Master keys from a KMS or Argon2id passphrase; keys never stored beside data (`seal.Wrapper` + contract, key files returned to the host, never written to a backend)
 - [x] SHA-256 verified on every read, from every backend, cached or not (chunk contract on every backend, `TestCachedReadsAreVerified`; disk-cache entries carry their own SHA-256, `TestDamagedEntryIsRefetched`)
-- [ ] Hand-written, bounds-checked decoders, fuzzed (`wire`, key file, KMS envelope, local root file and marker, multivol volume map, pack, index object and manifest ✅, each sealed format also with a v1 golden file and forgery tests; the rest as they land)
+- [ ] Hand-written, bounds-checked decoders, fuzzed (`wire`, key file, KMS envelope, local root file and marker, multivol volume map, pack, index object, manifest, stream index node and prolly node ✅, each sealed format also with a v1 golden file and every format with forgery tests; the rest as they land)
 - [ ] Model ids resolved only against the compiled-in registry (C3)
 - [ ] Every public call takes a `Principal`; default-deny `Authorizer` (C3)
-- [ ] Hard limits: object size ✅, list page ✅, chunk size ✅, pack size and chunks per pack ✅, index objects per manifest ✅, path depth, conflicts per merge, `Log` length (C3)
+- [ ] Hard limits: object size ✅, list page ✅, chunk size ✅, pack size and chunks per pack ✅, index objects per manifest ✅, key size ✅, inline value size ✅, tree height ✅; path depth, conflicts per merge, `Log` length (C3)
 - [x] Supply chain: disknexus pinned by version and `go.sum`; `go mod verify`, `govulncheck` in CI
 - [x] CI: `staticcheck` (via golangci-lint), `golangci-lint` warnings as errors, `govulncheck`, red-check
 
@@ -130,8 +144,22 @@ packages have no gate: their callers exercise them.
 - [x] s3store: an endpoint that ignores `If-Match` is refused by the startup probe (`TestProbeRefusesEndpointsThatIgnoreConditionalWrites`)
 - [x] s3store: a single-row commit stays within its request budget (`TestSmallCommitRequestBudget`: at most 4 requests, 3 of them PUTs)
 
-### L1 prolly tree, L2 version graph, L3 diff and merge
-All ⏳ (C2, C3). The items are in `docs/specs/engine-spec.md`; they will be
+### L1 prolly tree (`core/prolly`; 1M-entry versions under `-tags slow`)
+- [x] Empty map has a fixed, documented root hash (`TestEmptyMapHasTheDocumentedRoot`)
+- [x] Put then Get returns the value; Get of a missing key returns `ok=false` (`TestPutThenGet`)
+- [x] IterRange yields keys in byte order and respects both bounds (`TestIterRangeRespectsOrderAndBounds`)
+- [x] Determinism (property): any shuffled order yields the same root (`TestDeterminismProperty`, `TestSlowDeterminismOn1MEntries`)
+- [x] History independence (property): insert then delete k is the same root as never inserting k (`TestHistoryIndependenceProperty`)
+- [x] Changing one value in a 1M-entry map rewrites at most tree-height + 1 nodes: exactly that many (`TestOneValueChangeRewritesHeightPlusOneNodes`, `TestSlowOneValueChangeOn1MEntries`)
+- [x] Diff of maps differing by n entries returns exactly those n and reads O(n log N) nodes: at most 4·n·(height+1) (`TestDiffReturnsExactlyTheChangesAndReadsLittle`, `TestSlowDiffOn1MEntriesReadsLittle`)
+- [x] Node sizes stay within 512 B – 16 KiB across 1M random entries (`TestNodeSizesStayWithinBounds`, `TestSlowNodeSizesOn1MRandomEntries`)
+- [x] Fuzz the node decoder (`FuzzDecodeNode`)
+- [x] Oversized key returns `ErrKeyTooLarge`; no partial write (`TestOversizedKeyIsRefusedWithoutAPartialWrite`)
+
+Beyond the list: every incremental Flush equals a bulk build (`TestIncrementalFlushEqualsBulkBuild`), a flush reads only around its edits and a no-op flush writes nothing, and every store error surfaces at every point (`TestStoreErrorsSurfaceAtEveryPoint`).
+
+### L2 version graph, L3 diff and merge
+All ⏳ (C3). The items are in `docs/specs/engine-spec.md`; they will be
 listed here with their tests as they land.
 
 ## Decisions made while building (see also `docs/DESIGN.md` §1–2, §6)
@@ -147,6 +175,10 @@ listed here with their tests as they land.
 - **Coverage is measured over the merged `-coverpkg` profile**, so `core/dnx` counts its compat suite.
 - **The 1 GiB CDC property runs under `-tags slow`**; the normal suite checks it at 16 MiB.
 - **Not mutation-provable here:** removing an `fsync`. kill -9 keeps the page cache, so only a power cut would show it.
+- **The split rule is exact integer arithmetic** (λ⁴ and a 128-bit divide), with a fresh digest window per level and two entries before an internal node may end; its golden boundaries came from an independent reimplementation.
+- **Every format test carries its own codec**, written from the DESIGN text, so the writer is checked against the documented format and the reader against hand-built input; goldens pin what only the implementation could produce.
+- **A mutant that hangs counts as killed** at the mutation engine's per-run timeout (three minutes).
+- **Property tests prove their reach**: a property over trees fails unless enough of its cases built deep ones.
 - **Equivalent mutants, not catalogued:** the cache's `Dir` check (`MkdirAll("")` fails anyway) and its `MkdirAll` error path (the `Chmod` after it fails); the pack index's per-entry read check (the reader's error is sticky and `Done` reports it); `OpenFrame`'s length check (authentication fails anyway); the manifest's count limits (the read fails at the first missing entry). Their statements are covered; no test can tell the mutant from the original.
 
 ## What testing has found so far
@@ -166,14 +198,23 @@ listed here with their tests as they land.
 | the chunk contract | Closed stores kept answering some calls, differently per implementation | Port rule and `ClosedRefusesEveryCall` |
 | mutant `local-root-written-by-rename` survived 1,000 kills | A kill almost never lands between truncate and write | Blob contract `RootReadsDuringSwapsAreWhole` catches it every run |
 | full mutation run | Two mutants whose code had moved (a lint comment, a refactor) were invalid, not killed | Re-anchored; the full run is part of closing a milestone |
+| mutant `boundary-hard-maximum` survived | The maximum was enforced twice (the threshold already clamps at Max) | The splitter's copy removed |
+| three stream mutants survived | A Ref shorter than its tree, a zero-length entry, and data read one level too deep as an index node would all read back with no error | `TestForgeriesThatWouldReadCleanly` |
+| mutant `stream-data-length-checked` hung | Without the check, a short chunk makes ReadAt copy zero bytes forever | Per-mutant timeout in the mutation engine |
+| rapid's 100 cases in 9 ms | The properties drew almost only single-leaf trees | Seeded large sets, bulk grow and collapse ops, and a height check |
+| mutant `prolly-flush-resyncs` survived | Resyncing changes only cost, which nothing measured | `TestFlushReadsOnlyAroundItsEdits` |
+| a red test | A flush that changed nothing re-stored the nodes it re-chunked | Identical nodes are named, not stored |
+| the coverage gate | Every operation's store-error paths were dark | `TestStoreErrorsSurfaceAtEveryPoint`, with a store failing exactly one read or write |
 | (redcheck on this branch) | Build-tagged tests unjudged; `TestMain` judged; pairs not matched by scope; contract changes invisible; environment-bound callers refused; no `main` in a new clone | Tool fixed each time, with a red test |
 
 ## Next
 
-1. **C2 keyed data**: `core/boundary` (the integer split threshold, DESIGN §7),
-   `core/prolly` (Map, Editor, DiffIter; every Engine L1 test, the 1M-entry
-   properties under `-tags slow`), `core/stream` (CDC byte streams under a
-   content-defined index tree; prolly values over 256 KiB).
+1. **C3 history and models** (DESIGN §8): `core/auth` (Principal, default-deny
+   Authorizer), `core/model` (the port, frozen at C3, and the registry),
+   `core/object` (object references, the path grammar, namespaces and their
+   diff), `model/contract`, `model/blob`, `model/tree`, `core/merge` (the
+   zipped three-way driver), `core/vcs` (refs, commits, tags, working sets,
+   merge base, log) and `core/repo` (Init and Open over the `config` object).
 2. **Before the PR**: this clone has no `main` (its first branch is
    `storage-core`, rooted at the scaffold commit). Opening the one PR needs a
    base branch on GitHub; to settle when the push is asked for.
