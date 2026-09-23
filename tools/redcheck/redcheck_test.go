@@ -326,6 +326,23 @@ func TestBuildTaggedTestIsRunWithItsTag(t *testing.T) {
 	}
 }
 
+// A backfill whose test carries a build tag has its mutants judged under
+// that tag too: without it the test is not in the build, so no mutant could
+// ever be seen killed by it.
+func TestTaggedBackfillIsProvenUnderItsTag(t *testing.T) {
+	f := newFixture(t)
+	f.write("calc/calc.go", addImpl)
+	f.commit("chore: implementation predates its test")
+	f.write("calc/calc_slow_test.go", "//go:build slow\n\n"+strings.Replace(addTest, "TestAdd", "TestSlowAdd", 1))
+	f.write("tools/mutate/mutants.txt", addMutants)
+	f.commitBody("test(calc): pin Add's sign, at scale", "Red-Check: mutants add-sign")
+
+	rep := f.check()
+	if len(rep.Violations) != 0 || rep.TestsRun != 1 {
+		t.Fatalf("a backfill whose //go:build slow test kills its mutant was blocked (ran %d):\n%s", rep.TestsRun, reasons(rep))
+	}
+}
+
 // Pairs may interleave across scopes: test(a), test(b), feat(b), feat(a).
 func TestInterleavedPairsAreMatchedByScope(t *testing.T) {
 	f := newFixture(t)
