@@ -1728,3 +1728,17 @@ find: if from == to {\n\t\treturn &changes{}, nil
 replace: if from == to && false {\n\t\treturn &changes{}, nil
 pkg: ./model/blob
 run: ^TestContract$
+
+id: blob-validate-reads-through
+file: model/blob/blob.go
+find: _, err = io.Copy(io.Discard, rd)
+replace: _, err = io.Copy(io.Discard, io.LimitReader(rd, 0))
+pkg: ./model/blob
+run: ^TestValidateReadsTheWholeBlob$
+
+id: blob-open-checks-the-format
+file: model/blob/blob.go
+find: if root.Format != Format {
+replace: if root.Format != Format && false {
+pkg: ./model/blob
+run: ^TestOpenRefusesAnotherFormat$

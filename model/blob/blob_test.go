@@ -4,11 +4,15 @@ import (
 	"bytes"
 	"context"
 	"crypto/sha256"
+	"errors"
 	"fmt"
 	"io"
 	"testing"
 
+	"github.com/SmithOperatingSolutions/snapshot-core/core/cdc"
+	"github.com/SmithOperatingSolutions/snapshot-core/core/chunk"
 	"github.com/SmithOperatingSolutions/snapshot-core/core/chunk/memstore"
+	"github.com/SmithOperatingSolutions/snapshot-core/core/hash"
 	"github.com/SmithOperatingSolutions/snapshot-core/core/model"
 	"github.com/SmithOperatingSolutions/snapshot-core/core/stream"
 	"github.com/SmithOperatingSolutions/snapshot-core/model/blob"
@@ -107,5 +111,56 @@ func TestABlobIsItsStream(t *testing.T) {
 	}
 	if r != (model.Root{Hash: ref.Root, Size: ref.Size, Depth: ref.Depth, Format: blob.Format}) || (blob.Model{}).ID() != 1 {
 		t.Fatalf("a blob's root is %+v, want its stream %+v in format %d (model id 1)", r, ref, blob.Format)
+	}
+}
+
+// Validate reads a blob through: damage in its last chunk is found, not only
+// in what opening it touches.
+func TestValidateReadsTheWholeBlob(t *testing.T) {
+	s := memstore.New()
+	data := content(4, 40000)
+	r, err := blob.Write(ctx, s, bytes.NewReader(data), small())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := (blob.Model{}).Validate(ctx, r, s); err != nil || r.Depth < 1 {
+		t.Fatalf("positive control: a %d-level blob validates: %v", r.Depth, err)
+	}
+	cut, err := cdc.New(bytes.NewReader(data), small().CDC) // the same cut the writer made
+	if err != nil {
+		t.Fatal(err)
+	}
+	var last []byte
+	for {
+		piece, err := cut.Next()
+		if errors.Is(err, io.EOF) {
+			break
+		}
+		if err != nil {
+			t.Fatal(err)
+		}
+		last = piece
+	}
+	if !s.Tamper(hash.Sum(last)) {
+		t.Fatal("fixture: the blob's last chunk is not in the store")
+	}
+	if err := (blob.Model{}).Validate(ctx, r, s); !errors.Is(err, chunk.ErrCorrupt) {
+		t.Fatalf("a blob whose last chunk is damaged validates as %v, want ErrCorrupt", err)
+	}
+}
+
+// A blob in a format this package does not write is not read as one.
+func TestOpenRefusesAnotherFormat(t *testing.T) {
+	s := memstore.New()
+	r, err := blob.Write(ctx, s, bytes.NewReader(content(5, 100)), small())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := blob.Open(ctx, s, r); err != nil {
+		t.Fatalf("positive control: %v", err)
+	}
+	r.Format = 2
+	if _, err := blob.Open(ctx, s, r); !errors.Is(err, model.ErrUnknownModel) {
+		t.Fatalf("Open of a format-2 blob = %v, want ErrUnknownModel", err)
 	}
 }
