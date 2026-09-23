@@ -331,7 +331,7 @@ func Walk(ctx context.Context, rd chunk.Reader, ref Ref, visit func(h hash.Hash,
 // walk visits h, a chunk at depth (0: data) whose parent says it holds want
 // bytes, and what it reaches.
 func walk(ctx context.Context, rd chunk.Reader, h hash.Hash, depth int, want uint64, top bool, visit func(h hash.Hash, leaf bool) (bool, error)) error {
-	deeper, err := visit(h, false)
+	deeper, err := visit(h, depth == 0)
 	if err != nil || !deeper || depth == 0 {
 		return err
 	}

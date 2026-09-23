@@ -2684,7 +2684,7 @@ run: ^TestATreeWalksToItsEntriesContents$
 id: tree-walk-names-contents
 file: model/tree/tree.go
 find: Depth: e.Content.Depth}, visit)
-replace: Depth: e.Content.Depth}, func(hash.Hash) (bool, error) { return false, nil })
+replace: Depth: e.Content.Depth}, func(hash.Hash, bool) (bool, error) { return false, nil })
 pkg: ./model/tree
 run: ^TestATreeWalksToItsEntriesContents$
 
@@ -2698,6 +2698,20 @@ run: ^TestContract$
 id: contract-tree-walk-names-its-map
 file: model/tree/tree.go
 find: return prolly.Walk(ctx, r, m.Config, root.Hash, visit, func(
-replace: return prolly.Walk(ctx, r, m.Config, root.Hash, func(hash.Hash) (bool, error) { return false, nil }, func(
+replace: return prolly.Walk(ctx, r, m.Config, root.Hash, func(hash.Hash, bool) (bool, error) { return false, nil }, func(
 pkg: ./model/tree
 run: ^TestContract$
+
+id: stream-walk-names-data-as-leaves
+file: core/stream/stream.go
+find: deeper, err := visit(h, depth == 0)
+replace: deeper, err := visit(h, false)
+pkg: ./core/stream
+run: ^TestWalkNamesEveryChunkAndReadsOnlyTheIndex$
+
+id: prolly-walk-nodes-are-not-leaves
+file: core/prolly/walk.go
+find: deeper, err := w.visit(e.child, false)
+replace: deeper, err := w.visit(e.child, true)
+pkg: ./core/prolly
+run: ^TestWalkNamesEveryChunkOfAMap$
