@@ -1357,3 +1357,101 @@ find: if uint64(len(b)) != want {
 replace: if uint64(len(b)) != want && false {
 pkg: ./core/stream
 run: ^TestForgedStreamsAreCorrupt$
+
+id: prolly-child-level
+file: core/prolly/prolly.go
+find: case c.level != p.level-1:
+replace: case c.level != p.level-1 && false:
+pkg: ./core/prolly
+run: ^TestForgedTreesAreCorrupt$
+
+id: prolly-child-last-key
+file: core/prolly/prolly.go
+find: case !bytes.Equal(c.lastKey(), e.key):
+replace: case !bytes.Equal(c.lastKey(), e.key) && false:
+pkg: ./core/prolly
+run: ^TestForgedTreesAreCorrupt$
+
+id: prolly-child-count
+file: core/prolly/prolly.go
+find: case c.total() != e.count:
+replace: case c.total() != e.count && false:
+pkg: ./core/prolly
+run: ^TestForgedTreesAreCorrupt$
+
+id: prolly-children-disjoint
+file: core/prolly/prolly.go
+find: case i > 0 && bytes.Compare(c.entries[0].key, p.entries[i-1].key) <= 0:
+replace: case i > 0 && bytes.Compare(c.entries[0].key, p.entries[i-1].key) <= 0 && false:
+pkg: ./core/prolly
+run: ^TestForgedTreesAreCorrupt$
+
+id: prolly-root-two-children
+file: core/prolly/prolly.go
+find: if n.level > 0 && len(n.entries) < 2 {
+replace: if n.level > 0 && len(n.entries) < 2 && false {
+pkg: ./core/prolly
+run: ^TestForgedTreesAreCorrupt$
+
+id: prolly-decode-keys-increasing
+file: core/prolly/node.go
+find: if i > 0 && bytes.Compare(n.entries[i-1].key, e.key) >= 0 {
+replace: if i > 0 && bytes.Compare(n.entries[i-1].key, e.key) >= 0 && false {
+pkg: ./core/prolly
+run: ^TestForgedTreesAreCorrupt$
+
+id: prolly-decode-stream-over-limit
+file: core/prolly/node.go
+find: if r.Err() == nil && (ref.Size <= uint64(inlineLimit) || ref.Depth > maxLevel) {
+replace: if r.Err() == nil && (ref.Size <= uint64(inlineLimit) || ref.Depth > maxLevel) && false {
+pkg: ./core/prolly
+run: ^TestForgedTreesAreCorrupt$
+
+id: prolly-decode-inline-limit
+file: core/prolly/node.go
+find: e.val.inline = r.LenBytes(inlineLimit)
+replace: e.val.inline = r.LenBytes(maxInlineLimit)
+pkg: ./core/prolly
+run: ^TestForgedTreesAreCorrupt$
+
+id: prolly-decode-key-limit
+file: core/prolly/node.go
+find: e.key = r.LenBytes(MaxKeySize)
+replace: e.key = r.LenBytes(1 << 20)
+pkg: ./core/prolly
+run: ^TestForgedTreesAreCorrupt$
+
+id: prolly-editor-key-limit
+file: core/prolly/prolly.go
+find: func (e *Editor) Put(key, val []byte) error {\n\tif len(key) > MaxKeySize {
+replace: func (e *Editor) Put(key, val []byte) error {\n\tif len(key) > MaxKeySize && false {
+pkg: ./core/prolly
+run: ^TestOversizedKeyIsRefusedWithoutAPartialWrite$
+
+id: prolly-value-inline-at-limit
+file: core/prolly/prolly.go
+find: if len(*p) > e.m.cfg.InlineLimit {
+replace: if len(*p) >= e.m.cfg.InlineLimit {
+pkg: ./core/prolly
+run: ^TestAValueOverTheInlineLimitIsAStream$
+
+id: prolly-collapse-single-child-roots
+file: core/prolly/flush.go
+find: for n.level > 0 && len(n.entries) == 1 {
+replace: for n.level > 0 && len(n.entries) == 1 && false {
+pkg: ./core/prolly
+run: ^TestIncrementalFlushEqualsBulkBuild$
+
+id: prolly-diff-skips-shared-children
+file: core/prolly/diff.go
+find: if a.parent != nil && b.parent != nil && a.parent.valid() && b.parent.valid() && equalItems(a.parent, b.parent) {
+replace: if a.parent != nil && b.parent != nil && a.parent.valid() && b.parent.valid() && equalItems(a.parent, b.parent) && false {
+pkg: ./core/prolly
+run: ^TestDiffReturnsExactlyTheChangesAndReadsLittle$
+
+id: prolly-diff-equal-roots-read-nothing
+file: core/prolly/diff.go
+find: if from.root == to.root {
+replace: if from.root == to.root && false {
+pkg: ./core/prolly
+run: ^TestDiffReturnsExactlyTheChangesAndReadsLittle$
