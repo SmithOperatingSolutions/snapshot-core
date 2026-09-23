@@ -13,7 +13,9 @@ import (
 	"github.com/SmithOperatingSolutions/snapshot-core/tools/internal/mutation"
 )
 
-func main() {
+func main() { os.Exit(run()) }
+
+func run() int {
 	file := flag.String("f", "tools/mutate/mutants.txt", "mutants file")
 	only := flag.String("only", "", "comma-separated mutant IDs to run (default: all)")
 	flag.Parse()
@@ -21,13 +23,13 @@ func main() {
 	f, err := os.Open(*file)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "mutate:", err)
-		os.Exit(2)
+		return 2
 	}
 	ms, err := mutation.Parse(f)
 	f.Close()
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "mutate:", err)
-		os.Exit(2)
+		return 2
 	}
 	if *only != "" {
 		want := map[string]bool{}
@@ -48,7 +50,7 @@ func main() {
 	outs, err := mutation.Run(ctx, mutation.Options{Root: ".", Log: os.Stderr}, ms)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "mutate:", err)
-		os.Exit(2)
+		return 2
 	}
 	bad := 0
 	for _, o := range outs {
@@ -59,6 +61,7 @@ func main() {
 	}
 	fmt.Printf("mutate: %d mutants, %d killed, %d not killed\n", len(outs), len(outs)-bad, bad)
 	if bad > 0 || len(outs) == 0 {
-		os.Exit(1)
+		return 1
 	}
+	return 0
 }

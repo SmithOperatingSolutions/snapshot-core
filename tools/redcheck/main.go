@@ -8,7 +8,9 @@ import (
 	"os/signal"
 )
 
-func main() {
+func main() { os.Exit(run()) }
+
+func run() int {
 	var o Options
 	flag.StringVar(&o.Base, "base", "main", "branch point: commits in base..head are checked")
 	flag.StringVar(&o.Head, "head", "HEAD", "last commit to check")
@@ -21,7 +23,7 @@ func main() {
 	rep, err := Check(ctx, o)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "redcheck:", err)
-		os.Exit(2)
+		return 2
 	}
 	fmt.Printf("redcheck: %d commits, %d test: commits checked, %d added tests run\n",
 		rep.Commits, rep.Checked, rep.TestsRun)
@@ -33,6 +35,7 @@ func main() {
 		}
 	}
 	if len(rep.Violations) > 0 {
-		os.Exit(1)
+		return 1
 	}
+	return 0
 }
