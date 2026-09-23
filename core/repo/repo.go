@@ -79,10 +79,6 @@ func (g Geometry) validate() error {
 	return nil
 }
 
-func (g Geometry) prolly() prolly.Config {
-	return prolly.Config{Nodes: g.Nodes, InlineLimit: g.InlineLimit, Stream: stream.Config{CDC: g.CDC, Nodes: g.Nodes}}
-}
-
 // Options configures Init and Open.
 type Options struct {
 	Blobs      blob.BlobStore
@@ -192,7 +188,7 @@ type Repo struct {
 }
 
 func (o Options) vcs(g Geometry) vcs.Options {
-	return vcs.Options{Config: g.prolly(), Registry: o.Registry, Authorizer: o.Authorizer, Clock: o.Clock}
+	return vcs.Options{Config: g.Prolly(), Registry: o.Registry, Authorizer: o.Authorizer, Clock: o.Clock}
 }
 
 // Init creates a repository in o.Blobs. Writing the config (put-if-absent)
@@ -278,11 +274,18 @@ func (r *Repo) Close() error { return r.chunks.Close() }
 
 // Chunks is the repository's chunk store, for writing and reading objects:
 // reads and writes, but no root swap, so every ref change goes through the
-// version graph.
-func (r *Repo) Chunks() chunk.ReadWriter { return nil }
+// version graph. What is written becomes durable when the version graph
+// next changes a ref (a commit, a working-set update, a branch); a
+// repository closed before then drops it.
+func (r *Repo) Chunks() chunk.ReadWriter { return readWriter{r.chunks} }
+
+// readWriter narrows a chunk store to reading and writing.
+type readWriter struct{ chunk.ReadWriter }
 
 // Prolly is the map geometry objects are written with.
-func (g Geometry) Prolly() prolly.Config { return prolly.Config{} }
+func (g Geometry) Prolly() prolly.Config {
+	return prolly.Config{Nodes: g.Nodes, InlineLimit: g.InlineLimit, Stream: g.Stream()}
+}
 
 // Stream is the stream geometry objects are written with.
-func (g Geometry) Stream() stream.Config { return stream.Config{} }
+func (g Geometry) Stream() stream.Config { return stream.Config{CDC: g.CDC, Nodes: g.Nodes} }

@@ -2043,3 +2043,10 @@ find: if g == (Geometry{}) {
 replace: if g == (Geometry{}) && false {
 pkg: ./core/repo
 run: ^TestInitThenOpen$
+
+id: repo-chunks-cannot-swap-the-root
+file: core/repo/repo.go
+find: func (r *Repo) Chunks() chunk.ReadWriter { return readWriter{r.chunks} }
+replace: func (r *Repo) Chunks() chunk.ReadWriter { return r.chunks }
+pkg: ./core/repo
+run: ^TestHostsWriteObjectsThroughTheRepository$
