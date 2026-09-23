@@ -1,0 +1,14 @@
+snapshot-core
+Copyright 2026 Smith Operating Solutions
+
+This product depends on disknexus-engine
+(github.com/SmithOperatingSolutions/disknexus-engine), used as a pinned,
+unmodified Go module dependency and imported only by core/dnx:
+
+    disknexus-engine
+    Copyright 2026 Smith Operating Solutions
+    Licensed under the Apache License, Version 2.0.
+    http://www.apache.org/licenses/LICENSE-2.0
+
+docs/TESTING.md is a verbatim copy of disknexus-engine's docs/TESTING.md
+(v0.2.11), reproduced under the same license.

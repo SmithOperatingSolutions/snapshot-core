@@ -1,0 +1,6 @@
+# Test and tool output
+*.test
+*.out
+coverage*.txt
+/tmp/
+# Fuzz caches live in GOCACHE; checked-in seeds live in testdata/fuzz and are NOT ignored.

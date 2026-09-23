@@ -1,0 +1,57 @@
+# Developer toolchain via mise (https://mise.jdx.dev). `mise install` provisions
+# the exact tools; `mise run ci` runs everything CI runs that this box can run.
+#
+# Everything here is Go: the linters are built from source with the pinned
+# toolchain (a golangci-lint built with an older Go refuses a go1.27 module),
+# and the dev tools under tools/ are Go programs, not shell scripts.
+[tools]
+go = "1.27"
+"go:github.com/golangci/golangci-lint/v2/cmd/golangci-lint" = "2.13.2"
+"go:golang.org/x/vuln/cmd/govulncheck" = "1.8.0"
+
+[env]
+CGO_ENABLED = "0"
+
+[tasks.ci]
+description = "Local run-all: fmt, vet (3 OSes), mod verify, lint, vuln, race suite, coverage gate, red-check, crash harness, fuzz smoke"
+run = "go run ./tools/ci"
+
+[tasks."ci:quick"]
+description = "The fast subset of `ci`: fmt, vet, lint, race suite"
+run = "go run ./tools/ci -quick"
+
+[tasks.test]
+description = "Unit, contract, property and golden suites"
+run = "go test -count=1 ./..."
+
+[tasks.race]
+description = "The whole suite under the race detector (what CI's test job runs)"
+run = "CGO_ENABLED=1 go test -race -count=1 ./..."
+
+[tasks.lint]
+description = "golangci-lint with warnings as errors (depguard, forbidigo, staticcheck, ...)"
+run = "golangci-lint run ./..."
+
+[tasks.vuln]
+description = "govulncheck over the module, disknexus-engine included"
+run = "govulncheck ./..."
+
+[tasks.redcheck]
+description = "Every `test:` commit on this branch fails (on an assertion) without its `feat:`/`fix:`"
+run = "go run ./tools/redcheck"
+
+[tasks.mutate]
+description = "Re-run the checked-in mutants (tools/mutate/mutants.txt) in a throwaway copy; every one must be killed"
+run = "go run ./tools/mutate"
+
+[tasks.crash]
+description = "kill -9 crash harness, full 1,000 iterations per backend (nightly in CI)"
+run = "go test -count=1 -run Crash -timeout 30m -tags crash ./core/..."
+
+[tasks.fuzz]
+description = "Every fuzz target for FUZZTIME each (default 30s; nightly CI uses 30m)"
+run = "go run ./tools/ci -only fuzz"
+
+[tasks.minio]
+description = "S3 contract + concurrency suites against a real MinIO in Docker (optional locally; required in CI)"
+run = "go run ./tools/ci -only minio"
