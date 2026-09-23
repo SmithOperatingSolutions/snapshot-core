@@ -133,9 +133,9 @@ can refuse them) and a fuzz target.
   header fetch). A hash the index does not know triggers one manifest refresh.
   Every path re-hashes what it returns.
 - Scale limit (v1): the whole index lives in memory (~70–80 bytes per chunk),
-  and the manifest lists every index object until GC compacts them (C4).
+  and the manifest lists every index object until GC compacts them (§9).
 
-*(The prolly tree, the version graph, merge and GC are added below as each lands.)*
+*(The prolly tree, the version graph and merge are §7–8; GC is §9.)*
 
 ## 7. Keyed data (`core/boundary`, `core/stream`, `core/prolly`)
 
@@ -378,3 +378,77 @@ conflict   kind u8 (1 both changed · 2 delete against edit · 3 add against add
            (present u8 · object reference [46]) × 3 (base, ours, theirs) ·
            model conflicts uvarint (≤ 10,000) · (location (≤ 4 KiB) · reason (≤ 1 KiB)) × that many
 ```
+
+## 9. Garbage collection (C4, `core/gc`)
+
+GC deletes packs nothing reaches, and nothing else. The Storage Core Spec asks
+that it mark "everything reachable from refs, working sets and a configurable
+grace window (default 7 days)" and delete "through the GC role only"; this is
+how, with any number of writers on the same backend.
+
+**The GC role.** The repository runs on `blob.NoDelete(store)`; `core/gc` is
+handed the raw store and is the only caller of `Delete`.
+
+**Reachability.** Marking starts at the manifest's root, the refs map, and
+follows: the map's nodes; `heads/<b>` to a commit; `tags/<t>` to a tag and its
+target; `work/<b>` to a working set, its working and staged namespaces, and,
+during a merge, its base and theirs commits and its conflicts map (whose
+records name objects too); a commit to its namespace and its parents; a
+namespace to its nodes and to every object it names. What an object reaches
+only its model knows (a tree entry holds its blob's root inside the model's
+bytes), so a model makes its objects collectable by implementing
+`model.Walker`, an optional interface beside the frozen port:
+
+```go
+type Walker interface {
+	// Walk calls visit for every chunk the object reaches, root first; visit
+	// says whether to go on into what that chunk reaches (no, for one already
+	// marked, so history shared between commits is walked once).
+	Walk(ctx context.Context, root Root, r chunk.Reader, visit func(hash.Hash) (bool, error)) error
+}
+```
+
+`stream.Walk` (a stream's index nodes, and its data chunks, named but never
+read) and `prolly.Walk` (a map's nodes, the streams of its long values, and
+each value handed to the caller) walk the core's own structures, so a model
+built on them walks in a few lines. GC refuses to collect a repository holding
+an object whose model is not registered or cannot walk: it fails closed,
+condemning and deleting nothing.
+
+**Sweep.** A pack is garbage when none of its chunks is marked. Packs are not
+rewritten in v1: a pack holding one live chunk is kept whole.
+
+**Condemn, wait, delete.** GC never deletes what it has just found
+unreachable. One run:
+
+1. Read the manifest (version v, root R, gcGen g, condemned list) and mark
+   from R.
+2. A condemned pack that is marked again is reprieved: something published a
+   root that reaches it. A pack condemned at least the grace window ago and
+   still unmarked expires. Any other garbage pack is condemned now.
+3. Swap the manifest from v: the condemned list updated; expired packs
+   dropped from the index objects, which are rewritten into one (the index
+   objects it replaces are condemned in turn, so readers holding an older
+   manifest can still load them for a grace window); gcGen + 1 when anything
+   expired. A swap that loses to a writer starts the run over, from a fresh
+   read and a fresh mark.
+4. Delete the expired packs and the expired index objects, then any pack or
+   index object no manifest names (left by a writer that never published)
+   once it is older than the grace window.
+
+**Writers.** Put never deduplicates against a chunk whose only copy is in a
+condemned pack; it stores it again. A writer remembers the chunks it did
+deduplicate, and when the manifest's gcGen has moved by the time it
+publishes, it first checks each is still stored; if one expired, the publish
+fails with `chunk.ErrStale`, which the version graph reports as `ErrConflict`,
+and the writer's host re-reads and writes again. A store that sees a new gcGen
+rebuilds its index from the manifest's index objects, so nothing points into
+a deleted pack.
+
+**What a host must do.** Publish what it writes, and use what it reads,
+within the grace window. A chunk is deleted only when it was unreachable at
+two marks at least a grace window apart, so a host that holds a hash, or an
+unpublished write, across that span can lose it; the check at publish covers
+deduplication, and `UpdateWorkingSet` refuses namespace roots that are not
+stored, but a host that sits on hashes for a week is outside the contract, as
+it is with git's `gc.pruneExpire`.
