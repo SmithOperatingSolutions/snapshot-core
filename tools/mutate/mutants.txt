@@ -4159,3 +4159,38 @@ find: c.rpos += end\n\t\t\treturn append([]byte(nil), c.buf...), nil
 replace: c.rpos += end\n\t\t\treturn c.buf, nil
 pkg: ./core/dnx/compat
 run: ^TestTheChunkerCutsWhereDisknexusCuts$
+
+id: stream-workers-surface-the-sources-error
+file: core/stream/stream.go
+find: if j.err != nil {\n\t\t\treturn Ref{}, j.err\n\t\t}\n\t\th, err := w.PutPrepared(b.ctx, j.p)
+replace: if j.err != nil && false {\n\t\t\treturn Ref{}, j.err\n\t\t}\n\t\th, err := w.PutPrepared(b.ctx, j.p)
+pkg: ./e2e
+run: ^TestAWorkersWriteSurfacesTheSourcesError$
+
+id: stream-workers-surface-the-stores-error
+file: core/stream/stream.go
+find: h, err := w.PutPrepared(b.ctx, j.p)\n\t\tif err != nil {\n\t\t\treturn Ref{}, err\n\t\t}
+replace: h, err := w.PutPrepared(b.ctx, j.p)\n\t\tif err != nil && false {\n\t\t\treturn Ref{}, err\n\t\t}
+pkg: ./e2e
+run: ^TestAWorkersWriteSurfacesTheStoresError$
+
+id: stream-workers-finish-at-eof
+file: core/stream/stream.go
+find: if errors.Is(j.err, io.EOF) {\n\t\t\treturn b.finish()\n\t\t}
+replace: if errors.Is(j.err, io.EOF) && false {\n\t\t\treturn b.finish()\n\t\t}
+pkg: ./e2e
+run: ^TestTheStreamIsTheSameAtAnyWorkerCount$
+
+id: stream-workers-count-each-chunks-bytes
+file: core/stream/stream.go
+find: if err := b.add(1, entry{child: h, size: uint64(len(j.data))}); err != nil {
+replace: if err := b.add(1, entry{child: h, size: uint64(len(j.data)) + 1}); err != nil {
+pkg: ./e2e
+run: ^TestTheStreamIsTheSameAtAnyWorkerCount$
+
+id: stream-read-ahead-serves-the-error-after-the-bytes
+file: core/stream/stream.go
+find: if ra.cur.err != nil {\n\t\t\terr := ra.cur.err\n\t\t\tra.cur.err = nil\n\t\t\treturn 0, err\n\t\t}
+replace: if ra.cur.err != nil {\n\t\t\tra.cur.err = nil\n\t\t\treturn 0, io.EOF\n\t\t}
+pkg: ./e2e
+run: ^TestAWorkersWriteSurfacesTheSourcesError$
