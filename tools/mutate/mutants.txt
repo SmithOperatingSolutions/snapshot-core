@@ -2044,19 +2044,12 @@ replace: if o.Blobs == nil || o.Registry == nil {
 pkg: ./core/repo
 run: ^TestThereIsNoRepositoryWithoutAConfigOrAKey$
 
-id: repo-init-refuses-an-existing-repository
+id: repo-open-reports-why-no-config-opens
 file: core/repo/repo.go
-find: if errors.Is(err, vcs.ErrExists) {\n\t\t\treturn nil, ErrExists
-replace: if errors.Is(err, vcs.ErrExists) && false {\n\t\t\treturn nil, ErrExists
+find: if len(ours) == 0 {\n\t\tif others != nil {\n\t\t\treturn Config{}, others
+replace: if len(ours) == 0 {\n\t\tif others != nil && false {\n\t\t\treturn Config{}, others
 pkg: ./core/repo
-run: ^TestInitThenOpen$
-
-id: repo-open-finds-no-repository
-file: core/repo/repo.go
-find: if errors.Is(err, blob.ErrNotFound) {\n\t\treturn Config{}, ErrNoRepo
-replace: if errors.Is(err, blob.ErrNotFound) && false {\n\t\treturn Config{}, ErrNoRepo
-pkg: ./core/repo
-run: ^TestThereIsNoRepositoryWithoutAConfigOrAKey$
+run: ^TestOpenTellsAWrongKeyFromADamagedConfig$
 
 id: repo-zero-geometry-is-the-default
 file: core/repo/repo.go
@@ -2328,15 +2321,15 @@ run: ^(TestEveryCallIsAuthorized|TestAWriteNeedsTheBranchAsWellAsItsPaths)$
 
 id: repo-init-finishes-a-stopped-init
 file: core/repo/repo.go
-find: if c, err = readConfig(ctx, o); err != nil {\n\t\t\treturn nil, fmt.Errorf("%w: %w", ErrExists, err)\n\t\t}
-replace: return nil, ErrExists
+find: if len(ours) > 0 {\n\t\tc = ours[0]
+replace: if len(ours) > 0 && false {\n\t\tc = ours[0]
 pkg: ./core/repo
 run: ^TestAnInitThatStoppedIsFinishedByTheNext$
 
 id: repo-another-key-cannot-finish
 file: core/repo/repo.go
-find: if c, err = readConfig(ctx, o); err != nil {
-replace: if c, err = readConfig(ctx, o); err != nil && false {
+find: if len(ours) == 0 && others != nil { // claimed by another key, or damaged
+replace: if len(ours) == 0 && others != nil && false { // claimed by another key, or damaged
 pkg: ./core/repo
 run: ^TestAnInitThatStoppedIsFinishedByTheNext$
 
@@ -2391,8 +2384,8 @@ run: ^TestARefusedInitWritesNothing$
 
 id: repo-init-surfaces-put-errors
 file: core/repo/repo.go
-find: if !errors.Is(err, blob.ErrExists) {\n\t\t\treturn nil, err
-replace: if !errors.Is(err, blob.ErrExists) && false {\n\t\t\treturn nil, err
+find: if err := o.Blobs.Put(ctx, configName(c.RepoID), bytes.NewReader(b), int64(len(b))); err != nil {\n\t\t\treturn nil, err
+replace: if err := o.Blobs.Put(ctx, configName(c.RepoID), bytes.NewReader(b), int64(len(b))); err != nil && false {\n\t\t\treturn nil, err
 pkg: ./core/repo
 run: ^TestEveryStoreFailureIsSurvivable$
 
@@ -3021,8 +3014,8 @@ run: ^TestAnAdminCollectsTheRepositoryOnTheRawStore$
 
 id: repo-gc-needs-a-repository
 file: core/repo/repo.go
-find: c, err := readConfig(ctx, o)\n\tif err != nil {\n\t\treturn gc.Report{}, err
-replace: c, err := readConfig(ctx, o)\n\tif err != nil && false {\n\t\treturn gc.Report{}, err
+find: c, err := current(ctx, o)\n\tif err != nil {\n\t\treturn gc.Report{}, err
+replace: c, err := current(ctx, o)\n\tif err != nil && false {\n\t\treturn gc.Report{}, err
 pkg: ./core/repo
 run: ^TestAnAdminCollectsTheRepositoryOnTheRawStore$
 
@@ -3522,3 +3515,24 @@ find: if _, own := s.unpublished[packName]; own || s.deduped[h] {
 replace: if _, own := s.unpublished[packName]; own && false || s.deduped[h] {
 pkg: ./core/chunk/packstore
 run: ^TestReadingAPromisedChunkThatIsGoneLosesTheSession$
+
+id: repo-a-foreign-root-at-init-is-exists
+file: core/repo/repo.go
+find: if errors.Is(err, packstore.ErrManifest) {\n\t\treturn nil, fmt.Errorf("%w: another Init landed first", ErrExists)
+replace: if errors.Is(err, packstore.ErrManifest) && false {\n\t\treturn nil, fmt.Errorf("%w: another Init landed first", ErrExists)
+pkg: ./core/repo
+run: ^TestInitsRacingDoNotOverwriteEachOther$
+
+id: repo-config-names-are-the-repositorys
+file: core/repo/repo.go
+find: func configName(id seal.RepoID) string { return configPrefix + hex.EncodeToString(id[:]) }
+replace: func configName(id seal.RepoID) string { return configPrefix + "one" + hex.EncodeToString(id[:0]) }
+pkg: ./core/repo
+run: ^TestInitsRacingDoNotOverwriteEachOther$
+
+id: repo-configs-surface-read-errors
+file: core/repo/repo.go
+find: default:\n\t\t\t\treturn nil, nil, err
+replace: default:
+pkg: ./core/repo
+run: ^TestEveryStoreFailureIsSurvivable$

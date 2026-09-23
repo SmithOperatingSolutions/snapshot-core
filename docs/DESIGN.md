@@ -314,7 +314,7 @@ graph"). The Engine Spec's L2 and L3 rules apply unchanged.
 | `0x04` | tag, v1 |
 | `0x05` | working set, v1 |
 
-### The repository config (`config`, in the BlobStore)
+### The repository config (`config/<repo id>`, in the BlobStore)
 
 Written once by `Init`, never changed, and read by `Open` before the chunk
 layer: it says how everything else was written.
