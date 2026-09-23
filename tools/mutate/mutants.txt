@@ -2911,3 +2911,17 @@ find: upd.gcGen++
 replace: upd.gcGen += 0
 pkg: ./core/chunk/packstore
 run: ^TestAWriterFencedWhenAPackItCountedOnExpires$
+
+id: packstore-rebuild-keeps-unpublished
+file: core/chunk/packstore/packstore.go
+find: for _, info := range s.unpublished {\n\t\t\tx.Add(info)
+replace: for _, info := range s.unpublished[""].Entries {\n\t\t\t_ = info
+pkg: ./core/chunk/packstore
+run: ^TestAStoresOwnPacksAcrossARebuild$
+
+id: packstore-publish-forgets-published-packs
+file: core/chunk/packstore/packstore.go
+find: delete(s.unpublished, name)
+replace: _ = name
+pkg: ./core/chunk/packstore
+run: ^TestAStoresOwnPacksAcrossARebuild$

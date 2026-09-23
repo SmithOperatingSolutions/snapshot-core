@@ -1,6 +1,7 @@
 package packstore_test
 
 import (
+	"bytes"
 	"errors"
 	"strings"
 	"testing"
@@ -341,5 +342,50 @@ func TestReadingAnExpiredChunkIsNotFound(t *testing.T) {
 	}
 	if _, err := r.Get(ctx, root); err != nil {
 		t.Fatalf("positive control: the root: %v", err)
+	}
+}
+
+// A store's own packs come through a rebuild of its index as they should:
+// a pack it finished but has not published stays readable, and publishes,
+// after GC expired packs elsewhere; a pack it published itself, and GC
+// later expired, is forgotten like any other.
+func TestAStoresOwnPacksAcrossARebuild(t *testing.T) {
+	bs, kr := mem.New(), keyring(t)
+	s, err := packstore.Open(ctx, packstore.WithBackoff(packstore.Options{Blobs: bs, Keys: kr, Repo: repo, PackSize: 16 << 10}, time.Millisecond))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	hs := published(t, s, "a, the root", "b, garbage") // s published b's pack itself
+	round(t, bs, kr, liveSet(hs[0]), t0)
+	c, err := s.Put(ctx, payload("own", 10<<10))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Put(ctx, payload("more", 10<<10)); err != nil { // fills the pack holding c
+		t.Fatal(err)
+	}
+	if n := len(objects(t, bs, "packs/")); n != 3 {
+		t.Fatalf("fixture: %d packs in the store, want a third: c's, finished and not published", n)
+	}
+	out := round(t, bs, kr, liveSet(hs[0]), t0.Add(time.Hour))
+	if len(out.Expired) != 1 {
+		t.Fatalf("fixture: expired %v, want b's pack", out.Expired)
+	}
+	remove(t, bs, out.Expired)
+	if _, err := s.Root(ctx); err != nil { // a refresh, and the rebuild
+		t.Fatal(err)
+	}
+	if have, err := s.Has(ctx, []hash.Hash{hs[1]}); err != nil || have[hs[1]] {
+		t.Fatalf("the store that published b still has it after its pack expired: %v (%v)", have[hs[1]], err)
+	}
+	if b, err := s.Get(ctx, c); err != nil || !bytes.Equal(b, payload("own", 10<<10)) {
+		t.Fatalf("after the rebuild, the store's own unpublished chunk reads as %d bytes, %v", len(b), err)
+	}
+	if err := s.CompareAndSetRoot(ctx, hs[0], c); err != nil {
+		t.Fatalf("publishing the store's own chunk after the rebuild: %v", err)
+	}
+	if _, err := open(t, bs, kr).Get(ctx, c); err != nil {
+		t.Fatalf("the published chunk does not read from a fresh store: %v", err)
 	}
 }
