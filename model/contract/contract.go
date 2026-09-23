@@ -1,17 +1,20 @@
 // Package contract is the suite every data model must pass, unchanged
 // (Storage Core Spec, "Data-model plugins": round-trip, determinism,
 // diff-matches-edits, merge(b, o, o) == o; each model also fuzzes its own
-// decoders).
+// decoders). A model must also walk (model.Walker), so GC can collect a
+// repository holding its objects.
 package contract
 
 import (
 	"bytes"
 	"context"
 	"crypto/sha256"
+	"errors"
 	"fmt"
 	"testing"
 
 	"github.com/SmithOperatingSolutions/snapshot-core/core/chunk"
+	"github.com/SmithOperatingSolutions/snapshot-core/core/chunk/memstore"
 	"github.com/SmithOperatingSolutions/snapshot-core/core/hash"
 	"github.com/SmithOperatingSolutions/snapshot-core/core/model"
 )
@@ -42,6 +45,7 @@ func Run(t *testing.T, newSubject Factory) {
 	t.Run("DiffMatchesEdits", func(t *testing.T) { diffMatchesEdits(t, newSubject(t)) })
 	t.Run("MergeIdentities", func(t *testing.T) { mergeIdentities(t, newSubject(t)) })
 	t.Run("ValidateRefusesGarbage", func(t *testing.T) { validateRefusesGarbage(t, newSubject(t)) })
+	t.Run("WalkHoldsTheObject", func(t *testing.T) { walkHoldsTheObject(t, newSubject(t)) })
 }
 
 func identity(t *testing.T, s Subject) {
@@ -170,6 +174,50 @@ func validateRefusesGarbage(t *testing.T, s Subject) {
 		root := model.Root{Hash: h, Size: uint64(len(b)) + 1, Depth: uint8(i % 3), Format: format}
 		if err := s.Model.Validate(ctx, root, s.Store); err == nil {
 			t.Errorf("random bytes (%d) under a root whose size disagrees validate as an object", len(b))
+		}
+	}
+}
+
+// walkHoldsTheObject: GC keeps the chunks Walk names and deletes the rest
+// (docs/DESIGN.md §9), so what Walk names must hold the object: copied alone
+// into an empty store, it validates there. The root comes first, and a model
+// that cannot walk is one GC cannot collect.
+func walkHoldsTheObject(t *testing.T, s Subject) {
+	w, ok := s.Model.(model.Walker)
+	if !ok {
+		t.Fatalf("model %d is not a model.Walker: GC refuses to collect a repository holding its objects", s.Model.ID())
+	}
+	for seed := uint64(0); seed < 4; seed++ {
+		r := s.Write(t, s.Generate(seed))
+		var order []hash.Hash
+		named := map[hash.Hash]bool{}
+		err := w.Walk(ctx, r, s.Store, func(h hash.Hash) (bool, error) {
+			order = append(order, h)
+			fresh := !named[h]
+			named[h] = true
+			return fresh, nil
+		})
+		if err != nil {
+			t.Fatalf("seed %d: Walk: %v", seed, err)
+		}
+		if len(order) == 0 || order[0] != r.Hash {
+			t.Fatalf("seed %d: Walk did not name the object's root first", seed)
+		}
+		kept := memstore.New()
+		for h := range named {
+			b, err := s.Store.Get(ctx, h)
+			if errors.Is(err, chunk.ErrNotFound) {
+				continue // named but never stored: a fixture's stand-in for content
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := kept.Put(ctx, b); err != nil {
+				t.Fatal(err)
+			}
+		}
+		if err := s.Model.Validate(ctx, r, kept); err != nil {
+			t.Fatalf("seed %d: the chunks Walk names do not hold the object: from them alone it does not validate: %v", seed, err)
 		}
 	}
 }

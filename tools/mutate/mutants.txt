@@ -2687,3 +2687,17 @@ find: Depth: e.Content.Depth}, visit)
 replace: Depth: e.Content.Depth}, func(hash.Hash) (bool, error) { return false, nil })
 pkg: ./model/tree
 run: ^TestATreeWalksToItsEntriesContents$
+
+id: contract-blob-walk-names-its-index
+file: model/blob/blob.go
+find: Size: root.Size, Depth: root.Depth}, visit)
+replace: Size: root.Size}, visit)
+pkg: ./model/blob
+run: ^TestContract$
+
+id: contract-tree-walk-names-its-map
+file: model/tree/tree.go
+find: return prolly.Walk(ctx, r, m.Config, root.Hash, visit, func(
+replace: return prolly.Walk(ctx, r, m.Config, root.Hash, func(hash.Hash) (bool, error) { return false, nil }, func(
+pkg: ./model/tree
+run: ^TestContract$
