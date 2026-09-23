@@ -39,7 +39,20 @@ type Options struct {
 	Grace    time.Duration    // 0: DefaultGrace
 	Clock    func() time.Time // nil: time.Now
 	Repack   packstore.Repack // how packs that are mostly dead are rewritten; the zero value is the default policy
+	// A collection's memory does not grow with the repository (#6): its
+	// reader indexes at most IndexInMemory published chunks in memory
+	// (0: packstore.DefaultIndexInMemory), the rest in a table under
+	// WorkDir ("": the system's temporary directory), where the mark and the
+	// round's own index go too; MarkNodes (0: DefaultMarkNodes) bounds the
+	// nodes the walk remembers to skip, past which a shared subtree is walked
+	// again, costing time and never chunks.
+	WorkDir       string
+	IndexInMemory int
+	MarkNodes     int
 }
+
+// DefaultMarkNodes is the nodes a walk remembers: about 60 MiB.
+const DefaultMarkNodes = 1 << 20
 
 // Report is what one Run did.
 type Report struct {

@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"io"
 	"math/rand"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -748,6 +750,31 @@ func TestGCIsNotSteeredByAFileThatIsANode(t *testing.T) {
 	}
 	if !w.readable()["only the old commit holds this"] {
 		t.Fatal("the object only the old commit holds is gone: GC took the node for the file")
+	}
+}
+
+// GC's work directory holds its mark and its round's index while it runs
+// and nothing after; one that is not there is Run's error, not a
+// collection that keeps everything in memory.
+func TestGCNeedsItsWorkDirectory(t *testing.T) {
+	w := newWorld(t)
+	w.put(vcs.MainBranch, "a", w.note(7, "kept"))
+	w.commit(vcs.MainBranch, "kept")
+	o := gc.Options{Blobs: w.blobs, Keys: w.keys, Repo: repo, Config: prolly.DefaultConfig(), Registry: w.reg, Grace: grace, Clock: w.now}
+	o.WorkDir = filepath.Join(t.TempDir(), "not", "here")
+	if _, err := gc.Run(ctx, o); err == nil {
+		t.Fatalf("GC ran with its work directory %s missing", o.WorkDir)
+	}
+	o.WorkDir = t.TempDir()
+	if _, err := gc.Run(ctx, o); err != nil {
+		t.Fatalf("positive control: GC with a work directory that exists: %v", err)
+	}
+	entries, err := os.ReadDir(o.WorkDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 0 {
+		t.Fatalf("after a run the work directory holds %d files, want none", len(entries))
 	}
 }
 

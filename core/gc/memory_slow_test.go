@@ -7,6 +7,7 @@ import (
 	"encoding/binary"
 	"errors"
 	"math/rand/v2"
+	"os"
 	"runtime"
 	"sync/atomic"
 	"testing"
@@ -92,12 +93,17 @@ func heap() uint64 {
 }
 
 // #6: the memory a repository of a million chunks costs to open (the chunk
-// index) and to collect (the index again, plus the mark). The figures are
-// per chunk, so they read the same at any scale; docs/DESIGN.md §6 states
-// them, and this is where they come from.
+// index) and to collect (the index again, plus the mark), under a bound of
+// 64 Ki chunks in memory: under 16 MiB to open and under 96 MiB at the
+// collection's peak, which a million chunks at the old 117 and 371 bytes
+// each would be far over. docs/DESIGN.md §6 states the figures, and this
+// is where they come from.
 func TestSlowMemoryPerChunkOn1MChunks(t *testing.T) {
 	const n = 1_000_000
 	const perGroup = 1000
+	const inMemory = 1 << 16
+	const openBound, collectBound = 16 << 20, 96 << 20
+	dir := t.TempDir()
 	bs := mem.New()
 	keys, err := seal.NewKeyring()
 	if err != nil {
@@ -107,7 +113,7 @@ func TestSlowMemoryPerChunkOn1MChunks(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	po := packstore.Options{Blobs: bs, Keys: keys, Repo: repo}
+	po := packstore.Options{Blobs: bs, Keys: keys, Repo: repo, IndexDir: dir, IndexInMemory: inMemory}
 	s, err := packstore.Open(ctx, po)
 	if err != nil {
 		t.Fatal(err)
@@ -179,8 +185,11 @@ func TestSlowMemoryPerChunkOn1MChunks(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	openCost := float64(heap()-base) / n
-	t.Logf("open: %.0f bytes per chunk", openCost)
+	openCost := heap() - base
+	t.Logf("open: %d bytes, %.0f per chunk", openCost, float64(openCost)/n)
+	if openCost > openBound {
+		t.Fatalf("opening a repository of %d chunks with %d indexed in memory costs %d bytes, want under %d: the index past the bound belongs on disk", n, inMemory, openCost, openBound)
+	}
 	if err := opened.Close(); err != nil {
 		t.Fatal(err)
 	}
@@ -207,7 +216,8 @@ func TestSlowMemoryPerChunkOn1MChunks(t *testing.T) {
 		}
 	}()
 	start = time.Now()
-	rep, err := gc.Run(ctx, gc.Options{Blobs: bs, Keys: keys, Repo: repo, Config: prolly.DefaultConfig(), Registry: reg, Grace: grace})
+	rep, err := gc.Run(ctx, gc.Options{Blobs: bs, Keys: keys, Repo: repo, Config: prolly.DefaultConfig(), Registry: reg, Grace: grace,
+		WorkDir: dir, IndexInMemory: inMemory})
 	close(stop)
 	<-done
 	if err != nil {
@@ -216,6 +226,16 @@ func TestSlowMemoryPerChunkOn1MChunks(t *testing.T) {
 	if rep.Live < n {
 		t.Fatalf("GC marked %d chunks live, want at least the %d leaves", rep.Live, n)
 	}
-	gcCost := float64(peak.Load()-base) / n
-	t.Logf("collect: %d live in %v, peak %.0f bytes per chunk", rep.Live, time.Since(start).Round(time.Millisecond), gcCost)
+	gcCost := peak.Load() - base
+	t.Logf("collect: %d live in %v, peak %d bytes, %.0f per chunk", rep.Live, time.Since(start).Round(time.Millisecond), gcCost, float64(gcCost)/n)
+	if gcCost > collectBound {
+		t.Fatalf("collecting a repository of %d chunks peaks at %d bytes, want under %d: the mark and the round's index belong on disk", n, gcCost, collectBound)
+	}
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 0 {
+		t.Fatalf("after the collection the work directory holds %d files, want none", len(entries))
+	}
 }
