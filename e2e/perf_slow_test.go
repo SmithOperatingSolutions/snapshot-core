@@ -45,10 +45,14 @@ func (s *randomStream) Read(p []byte) (int, error) {
 	return len(p), nil
 }
 
-// textStream is n bytes of repeating text: what zstd compresses well.
+// textStream is n bytes of repeating text: what zstd compresses well. It
+// copies from a page of the pattern, so the source itself is never what
+// bounds the write being measured.
 type textStream struct{ left, at int64 }
 
 const textPattern = "the quick brown fox jumps over the lazy dog 0123456789\n"
+
+var textPage = bytes.Repeat([]byte(textPattern), 1024)
 
 func (s *textStream) Read(p []byte) (int, error) {
 	if s.left <= 0 {
@@ -57,8 +61,11 @@ func (s *textStream) Read(p []byte) (int, error) {
 	if int64(len(p)) > s.left {
 		p = p[:s.left]
 	}
-	for i := range p {
-		p[i] = textPattern[int(s.at+int64(i))%len(textPattern)]
+	n := 0
+	for n < len(p) { // from the page, in the stream's phase
+
+		off := int((s.at + int64(n)) % int64(len(textPattern)))
+		n += copy(p[n:], textPage[off:])
 	}
 	s.at += int64(len(p))
 	s.left -= int64(len(p))
