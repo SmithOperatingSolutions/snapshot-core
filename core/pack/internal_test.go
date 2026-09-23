@@ -69,3 +69,19 @@ func TestHostileFramesAreRefused(t *testing.T) {
 		t.Errorf("a frame whose bytes do not hash to its identity opened (err=%v)", err)
 	}
 }
+
+// Whatever decodes as an index re-encodes to the same bytes: the index has
+// one encoding per value.
+func FuzzDecodeIndex(f *testing.F) {
+	f.Add(encodeIndex([]Entry{{Hash: hash.Sum([]byte("a")), Offset: HeaderSize, StoredLen: 40, RawLen: 12, Codec: CodecRaw}}), uint64(1000))
+	f.Add([]byte("SCPI"), uint64(0))
+	f.Fuzz(func(t *testing.T, b []byte, indexOffset uint64) {
+		es, err := decodeIndex(b, indexOffset)
+		if err != nil {
+			return
+		}
+		if !bytes.Equal(encodeIndex(es), b) {
+			t.Fatal("an index decoded that does not re-encode to itself")
+		}
+	})
+}

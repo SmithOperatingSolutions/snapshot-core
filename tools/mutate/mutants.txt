@@ -691,3 +691,52 @@ find: if !aws.ToBool(page.IsTruncated) || page.NextContinuationToken == nil {
 replace: if true {
 pkg: ./core/blob/s3
 run: ^TestListFillsPagesAcrossShortServerPages$
+
+id: pack-refuses-oversized-chunks
+file: core/pack/pack.go
+find: case len(data) > MaxChunkSize:
+replace: case len(data) > MaxChunkSize+1:
+pkg: ./core/pack
+run: ^TestWriterLimits$
+
+id: pack-refuses-duplicates
+file: core/pack/pack.go
+find: if _, ok := w.entries[h]; ok {\n\t\treturn ErrDup
+replace: if _, ok := w.entries[h]; ok && false {\n\t\treturn ErrDup
+pkg: ./core/pack
+run: ^TestWriterLimits$
+
+id: pack-respects-its-size-limit
+file: core/pack/pack.go
+find: if len(w.entries) > 0 && len(w.buf)+len(sealed)+indexBound(len(w.entries)+1)+TrailerSize > w.maxSize {
+replace: if false {
+pkg: ./core/pack
+run: ^TestWriterLimits$
+
+id: pack-compresses-only-when-smaller
+file: core/pack/pack.go
+find: if z := w.codec.enc.EncodeAll(data, nil); len(z) < len(data) {
+replace: if z := w.codec.enc.EncodeAll(data, nil); len(z) < len(data)+1<<20 {
+pkg: ./core/pack
+run: ^TestCompressesOnlyWhenItHelps$
+
+id: pack-bytes-must-hash-to-name
+file: core/pack/pack.go
+find: if Name(b) != name {
+replace: if Name(b) != name && false {
+pkg: ./core/pack
+run: ^TestTamperingAnywhereIsCorrupt$
+
+id: pack-frame-rehashed-on-read
+file: core/pack/pack.go
+find: if hash.Sum(data) != e.Hash {
+replace: if hash.Sum(data) != e.Hash && false {
+pkg: ./core/pack
+run: ^TestHostileFramesAreRefused$
+
+id: pack-frame-length-checked
+file: core/pack/pack.go
+find: if len(data) != int(e.RawLen) {
+replace: if len(data) != int(e.RawLen) && false {
+pkg: ./core/pack
+run: ^TestHostileFramesAreRefused$
