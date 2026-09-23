@@ -5,7 +5,7 @@ every "first failing test" checkbox in both specs. Updated at each milestone
 boundary and whenever a checklist item turns green; the evidence for each item
 is the named test, and the commit that added it carries its red.
 
-**Updated 2026-09-23** · branch `storage-core` (local, not pushed) · 216 commits
+**Updated 2026-09-23** · branch `storage-core`, one PR into `main` · 219 commits
 · red-check clean · 452 checked-in mutants, all killed · lint clean · every
 package at or above its coverage gate
 
@@ -173,7 +173,7 @@ packages have no gate: their callers exercise them.
 - [x] (port rule) A closed store refuses every call with `ErrClosed` (`ClosedRefusesEveryCall`)
 
 ### L0 backends
-- [ ] Every backend runs the full contract suite in CI (S3 against MinIO per push; nightly real S3): mem, local, multivol, s3 against MinIO ✅; the nightly real-S3 run needs credentials configured as CI secrets
+- [ ] Every backend runs the full contract suite in CI (S3 against MinIO per push; nightly real S3): mem, local, multivol, s3 against MinIO ✅; real S3 nightly: the test is written, the job and its credentials are not (#4)
 - [x] filestore: starting on an SMB, NFS, or unrecognized filesystem fails (`TestOnlyAllowlistedFilesystems`)
 - [x] multistore: 4 volumes × 10,000 files, each 25% ± 3% (`TestPlacementIsEvenAcrossFourVolumes`)
 - [x] multistore: adding a 5th volume moves no existing files, ~20% of new files go to it (`TestAddingAVolumeMovesNothingAndTakesAFifth`)
@@ -302,21 +302,20 @@ Beyond the list: merging what a branch already holds changes nothing (`TestMergi
 ## Next
 
 The storage core's milestones, C0 to C4, are done. What remains is outside
-them:
+them, each tracked as an issue:
 
-1. **The PR**, when asked for.
-2. **Reclaiming space in mixed packs**: GC frees whole packs; rewriting
-   mostly-dead ones (their live chunks copied out, the pack condemned) is the
-   step after v1.
-3. **Reading tags**: tags are written and kept alive by GC, but the version
-   graph has no call to list or resolve them yet.
-4. **A slow writer's unpublished packs**: the contract has hosts publish
-   within the grace window; a check at publish (a pack uploaded over an
-   hour ago must still be there) would turn a breach into `ErrStale` rather
-   than a root naming a deleted pack.
-5. **Real S3 in the nightly run**: the workflow is there; it needs S3
-   credentials configured as CI secrets, which only the repository's owner
-   can add.
-6. **Before the PR**: this clone has no `main` (its first branch is
-   `storage-core`, rooted at the scaffold commit). Opening the one PR needs a
-   base branch on GitHub; to settle when the push is asked for.
+1. **Reclaiming space in mixed packs** (#1): GC frees whole packs;
+   rewriting mostly-dead ones (their live chunks copied out, the pack
+   condemned) is the step after v1.
+2. **Reading and deleting tags** (#2): tags are written and kept alive by
+   GC, but the version graph has no call to list, read or delete them.
+3. **A slow writer's unpublished packs** (#3): the contract has hosts
+   publish within the grace window; a check at publish would turn a breach
+   into `ErrStale` rather than a root naming a deleted pack.
+4. **Real S3 in the nightly run** (#4): the test is written
+   (`TestContractAgainstRealS3`); a nightly job to run it, and the
+   credentials it needs as CI secrets, are not there yet.
+5. **Abandoning a merge** (#5): a merge in progress ends only by resolving
+   every conflict and committing.
+6. **The index in memory** (#6): about 70 to 80 bytes per chunk to open a
+   repository, and a map of every live chunk to collect one.
