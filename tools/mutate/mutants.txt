@@ -95,3 +95,31 @@ find: if err := g.Validate(); err != nil {\n\t\treturn nil, err\n\t}\n\treturn &
 replace: return &Chunker
 pkg: ./core/cdc
 run: ^TestValidateRefusesUnusableGeometry$
+
+id: wire-varint-minimal
+file: core/internal/wire/wire.go
+find: case n > 1 && r.b[r.off+n-1] == 0:
+replace: case n > 1 && r.b[r.off+n-1] == 0 && false:
+pkg: ./core/internal/wire
+run: ^TestVarintsMustBeMinimalAndBounded$
+
+id: wire-lenbytes-limit
+file: core/internal/wire/wire.go
+find: if n > uint64(max) {
+replace: if n > uint64(max)+1 {
+pkg: ./core/internal/wire
+run: ^TestLenBytesHonorsTheCallersLimit$
+
+id: wire-done-refuses-trailing
+file: core/internal/wire/wire.go
+find: if r.off != len(r.b) {
+replace: if r.off != len(r.b) && false {
+pkg: ./core/internal/wire
+run: ^TestDoneRefusesTrailingBytes$
+
+id: wire-errors-sticky
+file: core/internal/wire/wire.go
+find: if r.err != nil {\n\t\treturn nil\n\t}\n\tif n < 0 {
+replace: if n < 0 {
+pkg: ./core/internal/wire
+run: ^TestErrorsAreSticky$
