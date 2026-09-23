@@ -964,3 +964,17 @@ find: for attempt := 0; attempt < MaxSwapAttempts; attempt++ {
 replace: for attempt := 0; attempt < MaxSwapAttempts+5; attempt++ {
 pkg: ./core/chunk/packstore
 run: ^TestManifestConflictsRetryThenGiveUp$
+
+id: packstore-refreshes-a-stale-view
+file: core/chunk/packstore/packstore.go
+find: if m.root != expected && attempt == 0 {
+replace: if false && m.root != expected && attempt == 0 {
+pkg: ./core/chunk/packstore
+run: ^TestStaleViewIsRefreshedBeforeAConflict$
+
+id: packstore-verifies-cache-hits
+file: core/chunk/packstore/packstore.go
+find: return verified(h, bytes.Clone(data))
+replace: return bytes.Clone(data), nil
+pkg: ./core/chunk/packstore
+run: ^TestCachedReadsAreVerified$
