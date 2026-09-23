@@ -244,6 +244,40 @@ func (r *Repo) branchCheck(ctx context.Context, p auth.Principal, a auth.Action,
 	return validName(branch)
 }
 
+// pathResource names one path of a branch to the Authorizer; a branch name
+// cannot hold a colon, so the two never run together.
+func pathResource(branch, path string) string { return "path:" + branch + ":" + path }
+
+// checkPaths asks for write on every path that differs between two
+// namespaces of a branch (the Storage Core Spec: "per branch and per path
+// prefix").
+func (r *Repo) checkPaths(ctx context.Context, p auth.Principal, branch string, from, to hash.Hash) error {
+	if from == to {
+		return nil
+	}
+	f, err := r.Namespace(ctx, from)
+	if err != nil {
+		return err
+	}
+	t, err := r.Namespace(ctx, to)
+	if err != nil {
+		return err
+	}
+	d, err := object.Diff(ctx, f, t)
+	if err != nil {
+		return err
+	}
+	for {
+		c, ok, err := d.Next()
+		if err != nil || !ok {
+			return err
+		}
+		if err := r.check(ctx, p, auth.Write, pathResource(branch, c.Path)); err != nil {
+			return err
+		}
+	}
+}
+
 func (r *Repo) readCommit(ctx context.Context, h hash.Hash) (Commit, error) {
 	b, err := r.s.Get(ctx, h)
 	if err != nil {
@@ -358,6 +392,18 @@ func (r *Repo) UpdateWorkingSet(ctx context.Context, p auth.Principal, branch st
 	if err := r.branchCheck(ctx, p, auth.Write, branch); err != nil {
 		return WorkingSet{}, err
 	}
+	// The paths changed are checked against the working set stored under
+	// prev.Hash, never prev's own fields; the swap below lands only if that
+	// is still the branch's working set.
+	stored, err := r.readWorkingSet(ctx, prev.Hash)
+	if err != nil {
+		return WorkingSet{}, err
+	}
+	for _, ns := range [][2]hash.Hash{{stored.Working, next.Working}, {stored.Staged, next.Staged}} {
+		if err := r.checkPaths(ctx, p, branch, ns[0], ns[1]); err != nil {
+			return WorkingSet{}, err
+		}
+	}
 	return r.setWorkingSet(ctx, branch, prev, next, true)
 }
 
@@ -442,6 +488,9 @@ func (r *Repo) CommitWorkingSet(ctx context.Context, p auth.Principal, branch, m
 		}
 		head, err := r.readCommit(ctx, headHash)
 		if err != nil {
+			return err
+		}
+		if err := r.checkPaths(ctx, p, branch, head.Namespace, ws.Staged); err != nil {
 			return err
 		}
 		c := Commit{Parents: []hash.Hash{head.Hash}, Namespace: ws.Staged, Height: head.Height + 1,
@@ -727,6 +776,9 @@ func (r *Repo) Merge(ctx context.Context, p auth.Principal, branch string, their
 	if err != nil {
 		return merge.Result{}, err
 	}
+	if err := r.checkPaths(ctx, p, branch, ws.Working, res.Merged.Root()); err != nil {
+		return merge.Result{}, err
+	}
 	conflicts, err := prolly.Empty(ctx, r.s, r.o.Config)
 	if err != nil {
 		return merge.Result{}, err
@@ -780,6 +832,9 @@ func (r *Repo) Conflicts(ctx context.Context, p auth.Principal, branch string) (
 // and staged namespaces, and drops its conflict.
 func (r *Repo) ResolveConflict(ctx context.Context, p auth.Principal, branch, path string, to *object.Ref) error {
 	if err := r.branchCheck(ctx, p, auth.Write, branch); err != nil {
+		return err
+	}
+	if err := r.check(ctx, p, auth.Write, pathResource(branch, path)); err != nil {
 		return err
 	}
 	for attempt := 0; attempt < maxAttempts; attempt++ {

@@ -3079,3 +3079,45 @@ find: if len(b) < headerLen {
 replace: if len(b) < headerLen && false {
 pkg: ./core/repo
 run: ^FuzzOpenConfig$
+
+id: vcs-update-checks-paths
+file: core/vcs/vcs.go
+find: for _, ns := range [][2]hash.Hash{{stored.Working, next.Working}, {stored.Staged, next.Staged}} {
+replace: for _, ns := range [][2]hash.Hash{{stored.Working, stored.Working}} {
+pkg: ./core/vcs
+run: ^TestWritesAreAuthorizedPerPath$
+
+id: vcs-update-checks-against-the-store
+file: core/vcs/vcs.go
+find: stored, err := r.readWorkingSet(ctx, prev.Hash)
+replace: stored, err := prev, error(nil)
+pkg: ./core/vcs
+run: ^TestWritesAreAuthorizedPerPath$
+
+id: vcs-commit-checks-paths
+file: core/vcs/vcs.go
+find: if err := r.checkPaths(ctx, p, branch, head.Namespace, ws.Staged); err != nil {
+replace: if err := r.checkPaths(ctx, p, branch, head.Namespace, ws.Staged); err != nil && false {
+pkg: ./core/vcs
+run: ^TestWritesAreAuthorizedPerPath$
+
+id: vcs-merge-checks-paths
+file: core/vcs/vcs.go
+find: if err := r.checkPaths(ctx, p, branch, ws.Working, res.Merged.Root()); err != nil {
+replace: if err := r.checkPaths(ctx, p, branch, ws.Working, res.Merged.Root()); err != nil && false {
+pkg: ./core/vcs
+run: ^TestWritesAreAuthorizedPerPath$
+
+id: vcs-resolve-checks-the-path
+file: core/vcs/vcs.go
+find: if err := r.check(ctx, p, auth.Write, pathResource(branch, path)); err != nil {
+replace: if err := r.check(ctx, p, auth.Write, pathResource(branch, path)); err != nil && false {
+pkg: ./core/vcs
+run: ^TestWritesAreAuthorizedPerPath$
+
+id: vcs-paths-are-asked-one-by-one
+file: core/vcs/vcs.go
+find: if err := r.check(ctx, p, auth.Write, pathResource(branch, c.Path)); err != nil {
+replace: if err := r.check(ctx, p, auth.Write, pathResource(branch, c.Path)); err != nil && false {
+pkg: ./core/vcs
+run: ^TestWritesAreAuthorizedPerPath$
