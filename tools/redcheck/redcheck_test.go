@@ -343,6 +343,24 @@ func TestTaggedBackfillIsProvenUnderItsTag(t *testing.T) {
 	}
 }
 
+// A fuzz target is a test too: under -run it runs its seed corpus. A
+// backfill that adds one is judged on it, and its mutants are proven by
+// the seeds.
+func TestAFuzzTargetIsJudgedLikeATest(t *testing.T) {
+	f := newFixture(t)
+	f.write("calc/calc.go", addImpl)
+	f.commit("chore: implementation predates its test")
+	f.write("calc/calc_fuzz_test.go", "package calc\n\nimport \"testing\"\n\nfunc FuzzAdd(f *testing.F) {\n\tf.Add(2, 3)\n"+
+		"\tf.Fuzz(func(t *testing.T, a, b int) {\n\t\tif got := Add(a, b); got != a+b {\n\t\t\tt.Fatalf(\"Add(%d, %d) = %d\", a, b, got)\n\t\t}\n\t})\n}\n")
+	f.write("tools/mutate/mutants.txt", addMutants)
+	f.commitBody("test(calc): fuzz Add", "Red-Check: mutants add-sign")
+
+	rep := f.check()
+	if len(rep.Violations) != 0 || rep.TestsRun != 1 {
+		t.Fatalf("a backfill adding a fuzz target whose seeds kill its mutant was blocked (ran %d):\n%s", rep.TestsRun, reasons(rep))
+	}
+}
+
 // Pairs may interleave across scopes: test(a), test(b), feat(b), feat(a).
 func TestInterleavedPairsAreMatchedByScope(t *testing.T) {
 	f := newFixture(t)
