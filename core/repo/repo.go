@@ -181,7 +181,8 @@ func openConfig(b []byte, kr *seal.Keyring) (Config, error) {
 	return c, nil
 }
 
-// Repo is an open repository: the version graph over the chunk layer.
+// Repo is an open repository: the version graph over the chunk layer, which
+// runs on blob.NoDelete(o.Blobs): only GC, handed the raw store, deletes.
 type Repo struct {
 	*vcs.Repo
 	Config Config
@@ -227,7 +228,7 @@ func Init(ctx context.Context, p auth.Principal, o Options) (*Repo, error) {
 			return nil, fmt.Errorf("%w: %w", ErrExists, err)
 		}
 	}
-	chunks, err := packstore.Open(ctx, packstore.Options{Blobs: o.Blobs, Keys: o.Keys, Repo: c.RepoID, PackSize: c.Geometry.PackSize})
+	chunks, err := packstore.Open(ctx, packstore.Options{Blobs: blob.NoDelete(o.Blobs), Keys: o.Keys, Repo: c.RepoID, PackSize: c.Geometry.PackSize})
 	if err != nil {
 		return nil, err
 	}
@@ -272,7 +273,7 @@ func Open(ctx context.Context, o Options) (*Repo, error) {
 	if err != nil {
 		return nil, err
 	}
-	chunks, err := packstore.Open(ctx, packstore.Options{Blobs: o.Blobs, Keys: o.Keys, Repo: c.RepoID, PackSize: c.Geometry.PackSize})
+	chunks, err := packstore.Open(ctx, packstore.Options{Blobs: blob.NoDelete(o.Blobs), Keys: o.Keys, Repo: c.RepoID, PackSize: c.Geometry.PackSize})
 	if err != nil {
 		return nil, err
 	}
