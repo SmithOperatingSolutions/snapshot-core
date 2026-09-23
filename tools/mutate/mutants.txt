@@ -1188,3 +1188,17 @@ find: if err := r.Done(); err != nil {\n\t\treturn manifest{}, fmt.Errorf("%w: %
 replace: if err := r.Err(); err != nil {\n\t\treturn manifest{}, fmt.Errorf("%w: %w", ErrManifest, err)
 pkg: ./core/chunk/packstore
 run: ^TestForgedManifestsAreRefused$
+
+id: packstore-open-requires-blobs-and-keys
+file: core/chunk/packstore/packstore.go
+find: if o.Blobs == nil || o.Keys == nil {
+replace: if (o.Blobs == nil || o.Keys == nil) && false {
+pkg: ./core/chunk/packstore
+run: ^TestOpenRefusesUnusableOptions$
+
+id: packstore-pack-size-bounds
+file: core/chunk/packstore/packstore.go
+find: if o.PackSize < pack.HeaderSize+pack.TrailerSize || o.PackSize > pack.MaxPackSize {
+replace: if (o.PackSize < pack.HeaderSize+pack.TrailerSize || o.PackSize > pack.MaxPackSize) && false {
+pkg: ./core/chunk/packstore
+run: ^TestOpenRefusesUnusableOptions$
