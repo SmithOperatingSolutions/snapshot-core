@@ -453,3 +453,10 @@ find: case st.ID() != e.id:
 replace: case st.ID() != e.id && false:
 pkg: ./core/blob/multivol
 run: ^TestSwappedVolumeIsRefused$
+
+id: multivol-verify-compares-identity
+file: core/blob/multivol/multivol.go
+find: if err != nil || dev != v.dev || ino != v.ino {
+replace: if err != nil || (dev != v.dev || ino != v.ino) && false {
+pkg: ./core/blob/multivol
+run: ^TestVolumeSwappedWhileOpenGoesReadOnly$

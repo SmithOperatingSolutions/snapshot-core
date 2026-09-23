@@ -395,3 +395,37 @@ func TestCrashDuringPutLeavesNothingPartial(t *testing.T) {
 	_, f := newFixture(t, 3)
 	crashtest.Put(t, f.primary, openStore)
 }
+
+// A volume swapped for another store's while the store is open has a vol/
+// directory, so only its identity gives it away. The store must go read-only
+// rather than serve the other store's objects or report ours as not found.
+func TestVolumeSwappedWhileOpenGoesReadOnly(t *testing.T) {
+	s, a := newFixture(t, 2)
+	_, b := newFixture(t, 2)
+	var onSecondary string
+	for i := 0; i < 200 && onSecondary == ""; i++ {
+		n := packName(700000 + i)
+		put(t, s, n, []byte(n))
+		if a.holder(t, n) == 1 {
+			onSecondary = n
+		}
+	}
+	if onSecondary == "" {
+		t.Fatal("no object landed on the secondary")
+	}
+	if got, err := read(t, s, onSecondary); err != nil || string(got) != onSecondary {
+		t.Fatalf("positive control: %v", err)
+	}
+	if err := os.Rename(a.vols[1], a.vols[1]+".real"); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Rename(b.vols[1], a.vols[1]); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := read(t, s, onSecondary); !errors.Is(err, multivol.ErrVolumeMissing) {
+		t.Fatalf("after the secondary was swapped, reading its object = %v, want ErrVolumeMissing", err)
+	}
+	if err := s.Put(ctx, packName(800000), strings.NewReader("x"), 1); !errors.Is(err, multivol.ErrVolumeMissing) {
+		t.Fatalf("Put after a swap = %v, want ErrVolumeMissing", err)
+	}
+}
