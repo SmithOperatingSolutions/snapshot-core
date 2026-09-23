@@ -460,3 +460,17 @@ find: if err != nil || dev != v.dev || ino != v.ino {
 replace: if err != nil || (dev != v.dev || ino != v.ino) && false {
 pkg: ./core/blob/multivol
 run: ^TestVolumeSwappedWhileOpenGoesReadOnly$
+
+id: redcheck-pairs-by-scope
+file: tools/redcheck/redcheck.go
+find: pending[m[1]] = false
+replace: clear(pending)
+pkg: ./tools/redcheck
+run: ^TestInterleavedPairsAreMatchedByScope$
+
+id: redcheck-skips-testmain
+file: tools/redcheck/redcheck.go
+find:  || fd.Name.Name == "TestMain" {
+replace:  {
+pkg: ./tools/redcheck
+run: ^TestTestMainIsNotJudged$

@@ -64,8 +64,8 @@ type Report struct {
 }
 
 var (
-	testSubject = regexp.MustCompile(`^test(\([^)]*\))?!?:`)
-	featSubject = regexp.MustCompile(`^(feat|fix)(\([^)]*\))?!?:`)
+	testSubject = regexp.MustCompile(`^test(?:\(([^)]*)\))?!?:`)
+	featSubject = regexp.MustCompile(`^(?:feat|fix)(?:\(([^)]*)\))?!?:`)
 	testFunc    = regexp.MustCompile(`^Test([^a-z].*)?$`)
 	redTrailer  = regexp.MustCompile(`(?m)^Red-Check:\s*mutants\s+(.+)$`)
 )
@@ -91,7 +91,9 @@ func Check(ctx context.Context, o Options) (Report, error) {
 		return Report{}, err
 	}
 	var rep Report
-	sawTest := false
+	// pending[scope] is true once a test(scope) commit has been seen since
+	// the last feat(scope)/fix(scope); "" is the unscoped pool.
+	pending := map[string]bool{}
 	for _, commit := range strings.Fields(out) {
 		rep.Commits++
 		subject, err := c.git("log", "-1", "--format=%s", commit)
@@ -100,9 +102,8 @@ func Check(ctx context.Context, o Options) (Report, error) {
 		}
 		subject = strings.TrimSpace(subject)
 		short := commit[:min(len(commit), 9)]
-		switch {
-		case testSubject.MatchString(subject):
-			sawTest = true
+		if m := testSubject.FindStringSubmatch(subject); m != nil {
+			pending[m[1]] = true
 			rep.Checked++
 			body, err := c.git("log", "-1", "--format=%B", commit)
 			if err != nil {
@@ -117,12 +118,13 @@ func Check(ctx context.Context, o Options) (Report, error) {
 				v.Commit, v.Subject = short, subject
 				rep.Violations = append(rep.Violations, v)
 			}
-		case featSubject.MatchString(subject):
-			if !sawTest {
+		} else if m := featSubject.FindStringSubmatch(subject); m != nil {
+			if !pending[m[1]] {
 				rep.Violations = append(rep.Violations, Violation{Commit: short, Subject: subject,
-					Reason: "no test: commit since the previous feat:/fix: — behavior must arrive behind a test that failed first"})
+					Reason: fmt.Sprintf("no test: commit for scope %q since the previous feat:/fix: of that scope — "+
+						"behavior must arrive behind a test that failed first", m[1])})
 			}
-			sawTest = false
+			pending[m[1]] = false
 		}
 	}
 	return rep, nil
@@ -265,7 +267,7 @@ func testBodies(name, src string) (map[string]string, error) {
 	}
 	for _, d := range f.Decls {
 		fd, ok := d.(*ast.FuncDecl)
-		if !ok || fd.Recv != nil || !testFunc.MatchString(fd.Name.Name) {
+		if !ok || fd.Recv != nil || !testFunc.MatchString(fd.Name.Name) || fd.Name.Name == "TestMain" {
 			continue
 		}
 		fns[fd.Name.Name] = src[fset.Position(fd.Pos()).Offset:fset.Position(fd.End()).Offset]
