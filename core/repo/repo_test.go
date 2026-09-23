@@ -287,3 +287,71 @@ func TestHostsWriteObjectsThroughTheRepository(t *testing.T) {
 		t.Fatalf("Stream() = %+v", s)
 	}
 }
+
+var errBackend = errors.New("injected: the backend went away")
+
+// failingSwap is a blob store whose root swaps fail while fail is set.
+type failingSwap struct {
+	blob.BlobStore
+	fail bool
+}
+
+func (s *failingSwap) SwapRoot(ctx context.Context, expected blob.Version, next []byte) (blob.Version, error) {
+	if s.fail {
+		return blob.NoVersion, errBackend
+	}
+	return s.BlobStore.SwapRoot(ctx, expected, next)
+}
+
+// An Init that stops after it has claimed the store with its config, but
+// before the version graph is written (a crash, a backend gone away),
+// leaves a store that Open reports as holding no repository and that the
+// next Init with the same key finishes, on the geometry and repo id the
+// config records. Another key cannot take it over. Before, the next Init
+// found the config and called the store taken, while Open found no refs:
+// the store was stuck for good.
+func TestAnInitThatStoppedIsFinishedByTheNext(t *testing.T) {
+	blobs := &failingSwap{BlobStore: mem.New(), fail: true}
+	o := options(t, blobs, keyring(t))
+	o.Geometry = repo.Geometry{CDC: cdc.DefaultGeometry(), Nodes: boundary.Geometry{Min: 256, Target: 2048, Max: 8192},
+		InlineLimit: 1000, PackSize: 1 << 20}
+	if _, err := repo.Init(ctx, alice, o); !errors.Is(err, errBackend) {
+		t.Fatalf("fixture: an Init whose root swap fails = %v, want the backend's error", err)
+	}
+	var id seal.RepoID
+	copy(id[:], readConfig(t, blobs)[6:22])
+	blobs.fail = false
+	if _, err := repo.Open(ctx, o); !errors.Is(err, repo.ErrNoRepo) {
+		t.Errorf("Open after an Init that stopped = %v, want ErrNoRepo", err)
+	}
+	if _, err := repo.Init(ctx, alice, options(t, blobs, keyring(t))); !errors.Is(err, repo.ErrExists) {
+		t.Errorf("an Init with another key, after one that stopped = %v, want ErrExists", err)
+	}
+	again := o
+	again.Geometry = repo.Geometry{}
+	r, err := repo.Init(ctx, alice, again)
+	if err != nil {
+		t.Fatalf("the Init after one that stopped = %v, want it to finish the repository", err)
+	}
+	if r.Config.Geometry != o.Geometry || r.Config.RepoID != id {
+		t.Fatalf("the finished repository has geometry %+v and id %x, want the config's %+v and %x", r.Config.Geometry, r.Config.RepoID, o.Geometry, id)
+	}
+	head, err := r.Head(ctx, alice, vcs.MainBranch)
+	if err != nil || head.Hash.IsZero() {
+		t.Fatalf("the finished repository's main is %v (%v)", head.Hash, err)
+	}
+	if err := r.Close(); err != nil {
+		t.Fatal(err)
+	}
+	re, err := repo.Open(ctx, o)
+	if err != nil {
+		t.Fatalf("opening the finished repository: %v", err)
+	}
+	defer re.Close()
+	if got, err := re.Head(ctx, alice, vcs.MainBranch); err != nil || got.Hash != head.Hash {
+		t.Fatalf("reopened, main is %v (%v), want %v", got.Hash, err, head.Hash)
+	}
+	if _, err := repo.Init(ctx, alice, o); !errors.Is(err, repo.ErrExists) {
+		t.Fatalf("an Init of the finished repository = %v, want ErrExists", err)
+	}
+}
