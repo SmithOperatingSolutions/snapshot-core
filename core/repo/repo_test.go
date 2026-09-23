@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/binary"
 	"errors"
+	"fmt"
 	"io"
 	"testing"
 	"time"
@@ -15,9 +16,11 @@ import (
 	"github.com/SmithOperatingSolutions/snapshot-core/core/boundary"
 	"github.com/SmithOperatingSolutions/snapshot-core/core/cdc"
 	"github.com/SmithOperatingSolutions/snapshot-core/core/chunk"
+	"github.com/SmithOperatingSolutions/snapshot-core/core/chunk/memstore"
 	"github.com/SmithOperatingSolutions/snapshot-core/core/chunk/packstore"
 	"github.com/SmithOperatingSolutions/snapshot-core/core/hash"
 	"github.com/SmithOperatingSolutions/snapshot-core/core/model"
+	"github.com/SmithOperatingSolutions/snapshot-core/core/object"
 	"github.com/SmithOperatingSolutions/snapshot-core/core/repo"
 	"github.com/SmithOperatingSolutions/snapshot-core/core/seal"
 	"github.com/SmithOperatingSolutions/snapshot-core/core/vcs"
@@ -340,6 +343,9 @@ func TestAnInitThatStoppedIsFinishedByTheNext(t *testing.T) {
 	if err != nil || head.Hash.IsZero() {
 		t.Fatalf("the finished repository's main is %v (%v)", head.Hash, err)
 	}
+	if got, want := namespaceOf(t, r, head.Namespace), namespaceOf(t, nil, head.Namespace); got != want {
+		t.Fatalf("the finished repository writes a namespace as %s, want %s: the geometry its config records", got, want)
+	}
 	if err := r.Close(); err != nil {
 		t.Fatal(err)
 	}
@@ -354,4 +360,34 @@ func TestAnInitThatStoppedIsFinishedByTheNext(t *testing.T) {
 	if _, err := repo.Init(ctx, alice, o); !errors.Is(err, repo.ErrExists) {
 		t.Fatalf("an Init of the finished repository = %v, want ErrExists", err)
 	}
+}
+
+// namespaceOf writes 500 objects into the namespace at root through r, or
+// with nil through a fresh store with the geometry of the stopped Init's
+// config, and returns the new root: it depends on the node geometry used.
+func namespaceOf(t *testing.T, r *repo.Repo, root hash.Hash) hash.Hash {
+	t.Helper()
+	var n *object.Namespace
+	var err error
+	if r != nil {
+		n, err = r.Namespace(ctx, root)
+	} else {
+		g := repo.Geometry{CDC: cdc.DefaultGeometry(), Nodes: boundary.Geometry{Min: 256, Target: 2048, Max: 8192},
+			InlineLimit: 1000, PackSize: 1 << 20}
+		n, err = object.New(ctx, memstore.New(), g.Prolly(), options(t, nil, nil).Registry)
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	e := n.Editor()
+	for i := range 500 {
+		ref := object.Ref{Model: 1, Root: model.Root{Hash: hash.Sum([]byte{byte(i), byte(i >> 8)}), Size: uint64(i), Format: 1}}
+		if err := e.Put(fmt.Sprintf("objects/%04d", i), ref); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if n, err = e.Flush(ctx); err != nil {
+		t.Fatal(err)
+	}
+	return n.Root()
 }

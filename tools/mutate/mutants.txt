@@ -2337,3 +2337,10 @@ find: if errors.Is(err, vcs.ErrNoRepo) {
 replace: if errors.Is(err, vcs.ErrNoRepo) && false {
 pkg: ./core/repo
 run: ^TestAnInitThatStoppedIsFinishedByTheNext$
+
+id: repo-init-finishes-on-the-configs-geometry
+file: core/repo/repo.go
+find: v, err := vcs.Init(ctx, chunks, p, o.vcs(c.Geometry))
+replace: v, err := vcs.Init(ctx, chunks, p, o.vcs(g))
+pkg: ./core/repo
+run: ^TestAnInitThatStoppedIsFinishedByTheNext$
