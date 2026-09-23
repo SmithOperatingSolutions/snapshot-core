@@ -6,14 +6,114 @@ mount points, S3), records commits, branches and tags, and diffs and merges by
 delegating meaning to data-model plugins. It knows nothing about tables, SQL
 or protocols; the table model lives in a consuming repository as a plugin.
 
-- Spec: [`docs/specs/storage-core-spec.md`](docs/specs/storage-core-spec.md)
-- How the spec became code, formats, protocols: [`docs/DESIGN.md`](docs/DESIGN.md)
-- Testing standard: [`docs/TESTING.md`](docs/TESTING.md) · process: [`CONTRIBUTING.md`](CONTRIBUTING.md)
+**Status:** the milestones of the [Storage Core Spec](docs/specs/storage-core-spec.md),
+C0 to C4, are done: backends and encrypted packs, content-defined chunking and
+prolly trees, commits and merges over typed objects, and garbage collection.
+Every checklist item and the test that proves it: [`docs/PROGRESS.md`](docs/PROGRESS.md).
+Remaining work is tracked in the issues.
 
+## Using it
+
+A host (an application, or the consuming repository's engine) opens a
+repository with four things: a backend, a master key, the data models its
+objects use, and an authorizer. Everything below is taken from
+[`e2e/example_test.go`](e2e/example_test.go), which runs with the tests.
+
+```go
+store, _ := local.Create("/srv/repo", local.Options{})    // or mem.New(), s3.Open(ctx, ...), multivol.Create(...)
+keys, _ := seal.NewKeyring()                               // keep it with seal.NewKeyFile (a passphrase) or seal.WrapKeyring (a KMS)
+models, _ := model.NewRegistry(blob.Model{}, tree.Model{Config: repo.DefaultGeometry().Prolly()})
+me := auth.Principal{ID: "user:me"}
+o := repo.Options{Blobs: store, Keys: keys, Registry: models, Authorizer: auth.AllowAll{}}
+
+r, _ := repo.Init(ctx, me, o)   // a new repository: main, at an empty first commit
+// r, _ := repo.Open(ctx, o)    // an existing one
+defer r.Close()
 ```
-mise install && mise run ci
+
+**Write and commit.** Objects are written into the repository's chunk store
+through their model, named by a path in the branch's working set, and
+committed:
+
+```go
+root, _ := blob.Write(ctx, r.Chunks(), strings.NewReader("hello\n"), r.Config.Geometry.Stream())
+
+ws, _ := r.WorkingSet(ctx, me, vcs.MainBranch)
+n, _ := r.Namespace(ctx, ws.Working)
+e := n.Editor()
+e.Put("notes/hello.txt", object.Ref{Model: blob.ID, Root: root})
+n, _ = e.Flush(ctx)
+next := ws
+next.Working, next.Staged = n.Root(), n.Root()
+_, err := r.UpdateWorkingSet(ctx, me, vcs.MainBranch, ws, next) // vcs.ErrConflict: read again, write again
+
+commit, _ := r.CommitWorkingSet(ctx, me, vcs.MainBranch, "add a note")
 ```
+
+**Branch and merge.** `CreateBranch`, `Merge` (conflicts are recorded in the
+working set, and a commit is refused until they are resolved), `Conflicts`,
+`ResolveConflict`, then `CommitWorkingSet`, which makes a commit with two
+parents. `Log`, `MergeBase`, `Head`, `Branches` and `CreateTag` read and name
+history.
+
+**Read.** Open a commit's namespace, `Get` a path, and read the object through
+its model (`blob.Open`, `tree.Read`).
+
+**Collect.** `repo.GC(ctx, admin, o, grace)` deletes what nothing reaches: it
+needs admin and the raw store (the repository itself runs on one that cannot
+delete). It condemns first and deletes a grace window later (seven days by
+default), so run it on a schedule.
+
+### What a host must do
+
+- **Retry on `vcs.ErrConflict`** by reading again and writing again: another
+  writer got in first, or GC collected a chunk the write counted on.
+- **Publish within the grace window** what it writes, and use within it the
+  hashes it reads. GC deletes only what was unreachable at two marks a window
+  apart (docs/DESIGN.md §9).
+- **Register every model its objects use.** An object of an unknown model is
+  refused, and GC will not collect a repository holding an object whose model
+  cannot walk (`model.Walker`). New models must pass [`model/contract`](model/contract).
+- **Authorize.** Every call takes a `Principal` and asks the `Authorizer`
+  about `repo`, `branch:<name>`, `tag:<name>` and, for writes, every
+  `path:<branch>:<path>` it changes. A nil authorizer denies everything.
+
+## Packages
+
+| Layer | Packages |
+| --- | --- |
+| Backends | `core/blob` (the port) · `blob/mem`, `blob/local`, `blob/multivol`, `blob/s3`, `blob/cache` |
+| Crypto, chunking | `core/seal` (keys, key files, KMS wrapping) · `core/cdc` · `core/boundary` |
+| Chunk layer | `core/pack`, `core/dedup` · `core/chunk` (the port) · `chunk/packstore`, `chunk/memstore` |
+| Keyed data | `core/stream` (byte streams) · `core/prolly` (the ordered map) |
+| Objects | `core/model` (the plugin port) · `core/object` (namespaces of typed objects) |
+| History | `core/vcs` (commits, branches, tags, working sets) · `core/merge` |
+| GC, entry point | `core/gc` · `core/repo` |
+| Models | `model/blob` (files) · `model/tree` (folders) · `model/contract` (the suite every model passes) |
 
 Pure Go (`CGO_ENABLED=0`). Depends on
 [disknexus-engine](https://github.com/SmithOperatingSolutions/disknexus-engine)
 as a pinned, unmodified module, imported only by `core/dnx`.
+
+## Developing
+
+```
+mise install          # Go 1.27, golangci-lint, govulncheck, built from source
+mise run ci           # what CI runs: fmt, vet, lint, vuln, race, coverage gate,
+                      # red-check, crash harness, scale guards, fuzz, mutants, MinIO
+mise run ci:quick     # fmt, vet, lint, race
+mise run redcheck     # every test: commit fails without its feat:/fix:
+mise run mutate       # every checked-in mutant is killed
+```
+
+Changes land test-first: a `test(pkg):` commit that fails on assertions, then
+the `feat(pkg):` or `fix(pkg):` that makes it pass; a test for behavior that
+already exists names the mutant it kills. See [`CONTRIBUTING.md`](CONTRIBUTING.md)
+and the testing standard, [`docs/TESTING.md`](docs/TESTING.md).
+
+## Documents
+
+- [`docs/specs/storage-core-spec.md`](docs/specs/storage-core-spec.md): the spec this repository implements
+- [`docs/DESIGN.md`](docs/DESIGN.md): how the spec became code, on-disk formats, protocols, GC
+- [`docs/PROGRESS.md`](docs/PROGRESS.md): milestones, checklists and their tests, what testing found
+- [`docs/specs/engine-spec.md`](docs/specs/engine-spec.md): the consuming engine's spec; its L0 to L3 rules apply here
