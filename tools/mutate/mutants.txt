@@ -2176,3 +2176,45 @@ find: if len(message) > MaxMessageLen || !utf8.ValidString(message) {\n\t\tretur
 replace: if (len(message) > MaxMessageLen || !utf8.ValidString(message)) && false {\n\t\treturn Tag{}
 pkg: ./core/vcs
 run: ^TestMessagesAreBoundedUTF8$
+
+id: vcs-delete-needs-the-branch
+file: core/vcs/vcs.go
+find: if _, _, err := branchRefs(ctx, m, name); err != nil {
+replace: if _, _, err := branchRefs(ctx, m, name); err != nil && false {
+pkg: ./core/vcs
+run: ^TestMissingBranchesAreNotFound$
+
+id: vcs-checkout-needs-the-branch
+file: core/vcs/vcs.go
+find: if _, err := r.Head(ctx, p, branch); err != nil {
+replace: if _, err := r.Head(ctx, p, branch); err != nil && false {
+pkg: ./core/vcs
+run: ^TestMissingBranchesAreNotFound$
+
+id: vcs-merge-base-needs-shared-history
+file: core/vcs/vcs.go
+find: return hash.Hash{}, fmt.Errorf("vcs: %s and %s share no history", a.Short(), b.Short())
+replace: return hash.Hash{}, nil
+pkg: ./core/vcs
+run: ^TestMergesOutOfTurnAreRefused$
+
+id: vcs-one-merge-at-a-time
+file: core/vcs/vcs.go
+find: if ws.Merge != nil {\n\t\treturn merge.Result{}
+replace: if ws.Merge != nil && false {\n\t\treturn merge.Result{}
+pkg: ./core/vcs
+run: ^TestMergesOutOfTurnAreRefused$
+
+id: vcs-resolve-needs-a-conflict
+file: core/vcs/vcs.go
+find: } else if !ok {\n\t\t\treturn fmt.Errorf("vcs: no conflict at %s on %s", path, branch)
+replace: } else if !ok && false {\n\t\t\treturn fmt.Errorf("vcs: no conflict at %s on %s", path, branch)
+pkg: ./core/vcs
+run: ^TestMergesOutOfTurnAreRefused$
+
+id: vcs-resolve-by-deleting
+file: core/vcs/vcs.go
+find: err = e.Delete(path)
+replace: err = nil
+pkg: ./core/vcs
+run: ^TestMergesOutOfTurnAreRefused$
