@@ -4068,3 +4068,94 @@ find: n += s.disk.len() // a chunk in both is counted twice: about, not exactly
 replace: n += 0
 pkg: ./core/chunk/packstore
 run: ^TestAStoreSpillsItsIndexToDisk$
+
+id: cdc-hash-rotates-by-one
+file: core/cdc/cdc.go
+find: hash = bits.RotateLeft64(hash, 1) ^ outTable[win[pos]] ^ table[b]\n\t\twin[pos] = b\n\t\tif pos++; pos == window {\n\t\t\tpos = 0\n\t\t}\n\t\tif hash&c.hard == 0 {
+replace: hash = bits.RotateLeft64(hash, 2) ^ outTable[win[pos]] ^ table[b]\n\t\twin[pos] = b\n\t\tif pos++; pos == window {\n\t\t\tpos = 0\n\t\t}\n\t\tif hash&c.hard == 0 {
+pkg: ./core/dnx/compat
+run: ^TestTheChunkerCutsWhereDisknexusCuts$
+
+id: cdc-window-leaves-by-the-out-table
+file: core/cdc/cdc.go
+find: hash = bits.RotateLeft64(hash, 1) ^ outTable[win[pos]] ^ table[b]\n\t\twin[pos] = b\n\t\tif pos++; pos == window {\n\t\t\tpos = 0\n\t\t}\n\t\tif hash&c.easy == 0 {
+replace: hash = bits.RotateLeft64(hash, 1) ^ table[win[pos]] ^ table[b]\n\t\twin[pos] = b\n\t\tif pos++; pos == window {\n\t\t\tpos = 0\n\t\t}\n\t\tif hash&c.easy == 0 {
+pkg: ./core/dnx/compat
+run: ^TestTheChunkerCutsWhereDisknexusCuts$
+
+id: cdc-hard-mask-below-min
+file: core/cdc/cdc.go
+find: hard: g.Mask<<2 | g.Mask, easy: g.Mask >> 2,
+replace: hard: g.Mask << 2, easy: g.Mask >> 2,
+pkg: ./core/dnx/compat
+run: ^TestTheChunkerCutsWhereDisknexusCuts$
+
+id: cdc-easy-mask-from-min
+file: core/cdc/cdc.go
+find: hard: g.Mask<<2 | g.Mask, easy: g.Mask >> 2,
+replace: hard: g.Mask<<2 | g.Mask, easy: g.Mask >> 1,
+pkg: ./core/dnx/compat
+run: ^TestTheChunkerCutsWhereDisknexusCuts$
+
+id: cdc-min-is-exclusive
+file: core/cdc/cdc.go
+find: for lim := min(c.g.Min-n-1, len(p)); i < lim; i++ {
+replace: for lim := min(c.g.Min-n, len(p)); i < lim; i++ {
+pkg: ./core/dnx/compat
+run: ^TestTheChunkerCutsWhereDisknexusCuts$
+
+id: cdc-cuts-at-max
+file: core/cdc/cdc.go
+find: for lim := min(c.g.Max-n-1, len(p)); i < lim; i++ {
+replace: for lim := min(c.g.Max-n, len(p)); i < lim; i++ {
+pkg: ./core/dnx/compat
+run: ^TestTheChunkerCutsWhereDisknexusCuts$
+
+id: cdc-hash-carries-across-chunks
+file: core/cdc/cdc.go
+find: func (c *Chunker) Next() ([]byte, error) {\n\tc.buf = c.buf[:0]
+replace: func (c *Chunker) Next() ([]byte, error) {\n\tc.buf = c.buf[:0]\n\tc.hash, c.pos, c.win = zeroWindowHash, 0, [window]byte{}
+pkg: ./core/dnx/compat
+run: ^TestTheChunkerCutsWhereDisknexusCuts$
+
+id: cdc-starts-from-the-zero-window
+file: core/cdc/buzhash.go
+find: h ^= bits.RotateLeft64(table[0], window-1-i)
+replace: h ^= bits.RotateLeft64(table[0], window-i)
+pkg: ./core/dnx/compat
+run: ^TestTheChunkerCutsWhereDisknexusCuts$
+
+id: cdc-table-is-little-endian
+file: core/cdc/buzhash.go
+find: in[i] = binary.LittleEndian.Uint64(h[:8])
+replace: in[i] = binary.BigEndian.Uint64(h[:8])
+pkg: ./core/dnx/compat
+run: ^TestTheChunkerCutsWhereDisknexusCuts$
+
+id: cdc-returns-the-rest-at-eof
+file: core/cdc/cdc.go
+find: if errors.Is(err, io.EOF) && len(c.buf) > 0 {
+replace: if false {
+pkg: ./core/dnx/compat
+run: ^TestTheChunkerCutsWhereDisknexusCuts$
+
+id: cdc-serves-bytes-before-the-error
+file: core/cdc/cdc.go
+find: case err != nil:\n\t\t\tc.rerr = err
+replace: case err != nil:\n\t\t\treturn err
+pkg: ./core/dnx/compat
+run: ^TestTheChunkerCutsWhereDisknexusCuts$
+
+id: cdc-gives-up-on-no-progress
+file: core/cdc/cdc.go
+find: if empty++; empty >= maxConsecutiveEmptyReads {
+replace: if empty++; false {
+pkg: ./core/dnx/compat
+run: ^TestTheChunkerCutsWhereDisknexusCuts$
+
+id: cdc-chunks-are-the-callers
+file: core/cdc/cdc.go
+find: c.rpos += end\n\t\t\treturn append([]byte(nil), c.buf...), nil
+replace: c.rpos += end\n\t\t\treturn c.buf, nil
+pkg: ./core/dnx/compat
+run: ^TestTheChunkerCutsWhereDisknexusCuts$
