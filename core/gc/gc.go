@@ -88,6 +88,15 @@ func Run(ctx context.Context, o Options) (Report, error) {
 		if err != nil {
 			return rep, err
 		}
+		now, err := backendNow(ctx, o.Blobs)
+		if err != nil {
+			return rep, err
+		}
+		old, probes, err := orphans(ctx, o.Blobs, now, grace)
+		if err != nil {
+			return rep, err
+		}
+		r.Orphans(old) // recorded in the swap, deleted only once it lands
 		out, err := r.Apply(ctx, func(h hash.Hash) bool { return live[h] }, clock(), grace)
 		if errors.Is(err, packstore.ErrMoved) {
 			continue
@@ -96,15 +105,7 @@ func Run(ctx context.Context, o Options) (Report, error) {
 			return rep, err
 		}
 		rep.Live, rep.Condemned, rep.Reprieved = len(live), out.Condemned, out.Reprieved
-		now, err := backendNow(ctx, o.Blobs)
-		if err != nil {
-			return rep, err
-		}
-		stale, err := orphans(ctx, o.Blobs, out.Named, now, grace)
-		if err != nil {
-			return rep, err
-		}
-		for _, name := range append(out.Expired, stale...) {
+		for _, name := range append(append(out.Expired, out.Orphans...), probes...) {
 			if err := o.Blobs.Delete(ctx, name); err != nil {
 				return rep, err
 			}
@@ -154,22 +155,26 @@ func backendNow(ctx context.Context, bs blob.BlobStore) (time.Time, error) {
 
 const probePrefix = "gc/clock-"
 
-// orphans lists the packs and index objects the manifest does not name that
-// are older than the grace window by the backend's clock: left by writers
-// that never published, or by a run that stopped between its swap and its
-// deletions; and probes a stopped run left behind.
-func orphans(ctx context.Context, bs blob.BlobStore, named map[string]bool, now time.Time, grace time.Duration) ([]string, error) {
-	var out []string
+// orphans lists the packs and index objects older than the grace window by
+// the backend's clock, for the round to keep those its manifest names and
+// record the rest (left by writers that never published, or by a run that
+// stopped between its swap and its deletions); and, apart, the probes a
+// stopped run left behind.
+func orphans(ctx context.Context, bs blob.BlobStore, now time.Time, grace time.Duration) (old, probes []string, err error) {
 	for _, prefix := range []string{"packs/", "index/", probePrefix} {
 		after := ""
 		for {
 			page, err := bs.List(ctx, prefix, after, blob.MaxListPage)
 			if err != nil {
-				return nil, err
+				return nil, nil, err
 			}
 			for _, info := range page {
-				if !named[info.Name] && now.Sub(info.ModTime) >= grace {
-					out = append(out, info.Name)
+				switch {
+				case now.Sub(info.ModTime) < grace:
+				case prefix == probePrefix:
+					probes = append(probes, info.Name)
+				default:
+					old = append(old, info.Name)
 				}
 			}
 			if len(page) < blob.MaxListPage {
@@ -178,5 +183,5 @@ func orphans(ctx context.Context, bs blob.BlobStore, named map[string]bool, now 
 			after = page[len(page)-1].Name
 		}
 	}
-	return out, nil
+	return old, probes, nil
 }

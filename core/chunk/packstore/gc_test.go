@@ -265,9 +265,11 @@ func TestWritersDoNotDeduplicateAgainstCondemnedPacks(t *testing.T) {
 	}
 }
 
-// A writer that counted on a pack GC then expired publishes nothing: it
-// fails with chunk.ErrStale, and the root stays where it was. A writer
-// whose chunks all survived the same collection publishes as usual.
+// A writer that counted on a pack GC then expired publishes nothing: its
+// session is lost (chunk.ErrSessionLost), the root stays where it was, and
+// the store refuses every later write while it still reads. Reopened, it
+// publishes. A writer whose chunks all survived the same collection
+// publishes as usual.
 func TestAWriterFencedWhenAPackItCountedOnExpires(t *testing.T) {
 	bs, kr := mem.New(), keyring(t)
 	hs := published(t, open(t, bs, kr), "a, the root", "b, garbage")
@@ -284,14 +286,31 @@ func TestAWriterFencedWhenAPackItCountedOnExpires(t *testing.T) {
 		t.Fatalf("fixture: expired %v, want b's pack", out.Expired)
 	}
 	remove(t, bs, out.Expired)
-	if err := stale.CompareAndSetRoot(ctx, hs[0], hs[1]); !errors.Is(err, chunk.ErrStale) {
-		t.Fatalf("publishing a root on a chunk whose pack expired = %v, want ErrStale", err)
+	if err := stale.CompareAndSetRoot(ctx, hs[0], hs[1]); !errors.Is(err, chunk.ErrSessionLost) {
+		t.Fatalf("publishing a root on a chunk whose pack expired = %v, want ErrSessionLost", err)
 	}
 	if root, err := open(t, bs, kr).Root(ctx); err != nil || root != hs[0] {
 		t.Fatalf("after the fenced publish the root is %s (%v), want %s", root.Short(), err, hs[0].Short())
 	}
+	if _, err := stale.Put(ctx, []byte("b, garbage")); !errors.Is(err, chunk.ErrSessionLost) {
+		t.Fatalf("writing the lost chunk again on the same store = %v, want ErrSessionLost: the store must be reopened", err)
+	}
+	if err := stale.CompareAndSetRoot(ctx, hs[0], hs[0]); !errors.Is(err, chunk.ErrSessionLost) {
+		t.Fatalf("a second publish on the store whose session was lost = %v, want ErrSessionLost", err)
+	}
+	if b, err := stale.Get(ctx, hs[0]); err != nil || string(b) != "a, the root" {
+		t.Fatalf("the store whose session was lost reads the root as %q, %v; reads must go on", b, err)
+	}
 	if err := kept.CompareAndSetRoot(ctx, hs[0], hs[0]); err != nil {
 		t.Fatalf("positive control: a writer whose chunks survived the collection: %v", err)
+	}
+	reopened := open(t, bs, kr)
+	b, err := reopened.Put(ctx, []byte("b, garbage"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := reopened.CompareAndSetRoot(ctx, hs[0], b); err != nil {
+		t.Fatalf("reopened, the store does not publish the chunk written again: %v", err)
 	}
 }
 

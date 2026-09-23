@@ -531,9 +531,13 @@ func TestEveryCallIsAuthorized(t *testing.T) {
 		}},
 		{"user:bob 3 branch:feature", func(r *vcs.Repo) error { return r.DeleteBranch(ctx, bob, "feature") }},
 		{"user:bob 3 tag:v1", func(r *vcs.Repo) error { _, err := r.CreateTag(ctx, bob, "v1", head, "t"); return err }},
+		{"user:bob 1 tag:v1", func(r *vcs.Repo) error { _, err := r.Tag(ctx, bob, "v1"); return err }},
+		{"user:bob 1 repo", func(r *vcs.Repo) error { _, err := r.Tags(ctx, bob); return err }},
+		{"user:bob 3 tag:v1", func(r *vcs.Repo) error { return r.DeleteTag(ctx, bob, "v1") }},
 		{"user:bob 2 branch:main", func(r *vcs.Repo) error { _, err := r.Merge(ctx, bob, "main", theirs); return err }},
 		{"user:bob 1 branch:main", func(r *vcs.Repo) error { _, err := r.Conflicts(ctx, bob, "main"); return err }},
 		{"user:bob 2 branch:main", func(r *vcs.Repo) error { return r.ResolveConflict(ctx, bob, "main", "doc", &resolved) }},
+		{"user:bob 2 branch:main", func(r *vcs.Repo) error { return r.AbortMerge(ctx, bob, "main") }},
 	}
 	for _, c := range calls {
 		rec.calls = nil
@@ -581,6 +585,32 @@ func TestTheAuthorIsThePrincipal(t *testing.T) {
 	}
 	if _, err := f.r.CommitWorkingSet(ctx, auth.Principal{ID: ""}, vcs.MainBranch, "anonymous"); !errors.Is(err, auth.ErrInvalidPrincipal) {
 		t.Fatalf("a commit by an invalid principal = %v, want ErrInvalidPrincipal", err)
+	}
+}
+
+// putWorking puts ref at path in branch's working namespace only, leaving
+// what is staged as it was.
+func (f *fixture) putWorking(branch, path string, ref object.Ref) {
+	f.t.Helper()
+	ws, err := f.r.WorkingSet(ctx, alice, branch)
+	if err != nil {
+		f.t.Fatal(err)
+	}
+	n, err := f.r.Namespace(ctx, ws.Working)
+	if err != nil {
+		f.t.Fatal(err)
+	}
+	e := n.Editor()
+	if err := e.Put(path, ref); err != nil {
+		f.t.Fatal(err)
+	}
+	if n, err = e.Flush(ctx); err != nil {
+		f.t.Fatal(err)
+	}
+	next := ws
+	next.Working = n.Root()
+	if _, err := f.r.UpdateWorkingSet(ctx, alice, branch, ws, next); err != nil {
+		f.t.Fatal(err)
 	}
 }
 
@@ -808,5 +838,159 @@ func TestTagsNameCommits(t *testing.T) {
 	}
 	if _, err := f.r.CreateTag(ctx, alice, "bad..name", head.Hash, "x"); !errors.Is(err, vcs.ErrInvalidName) {
 		t.Fatalf("an invalid tag name = %v, want ErrInvalidName", err)
+	}
+}
+
+// Abandoning a merge puts back what the branch had before it began: the
+// uncommitted edits made before the merge stay, staged or not, and what the
+// merge brought in, its resolution and an edit made during it are gone. The branch then
+// commits with one parent, and can merge again (issue #5).
+func TestAnAbandonedMergeLeavesTheBranchAsItWas(t *testing.T) {
+	f := newFixture(t)
+	main := vcs.MainBranch
+	f.put(main, "doc", f.obj(8, "base"))
+	f.commit(main, "base")
+	f.branchFrom("dev")
+	f.put("dev", "doc", f.obj(8, "dev"))
+	f.put("dev", "from-dev", f.obj(7, "brought in by the merge"))
+	theirs := f.commit("dev", "dev work")
+	f.put(main, "doc", f.obj(8, "main"))
+	head := f.commit(main, "main work")
+	f.put(main, "draft", f.obj(7, "an edit made before the merge"))
+	f.putWorking(main, "unstaged", f.obj(7, "an edit not staged before the merge"))
+	before, err := f.r.WorkingSet(ctx, alice, main)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res, err := f.r.Merge(ctx, alice, main, theirs.Hash); err != nil || len(res.Conflicts) != 1 {
+		t.Fatalf("fixture: the merge found %d conflicts (%v), want 1 at doc", len(res.Conflicts), err)
+	}
+	f.put(main, "during", f.obj(7, "an edit made during the merge"))
+	resolved := f.obj(8, "resolved")
+	if err := f.r.ResolveConflict(ctx, alice, main, "doc", &resolved); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := f.r.AbortMerge(ctx, alice, main); err != nil {
+		t.Fatalf("AbortMerge = %v", err)
+	}
+	ws, err := f.r.WorkingSet(ctx, alice, main)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ws.Merge != nil || ws.Working != before.Working || ws.Staged != before.Staged {
+		t.Fatalf("after the abort the working set holds working %s, staged %s, merge %+v; want working %s and staged %s from before the merge, and no merge",
+			ws.Working.Short(), ws.Staged.Short(), ws.Merge, before.Working.Short(), before.Staged.Short())
+	}
+	if cs, err := f.r.Conflicts(ctx, alice, main); err != nil || len(cs) != 0 {
+		t.Fatalf("after the abort the branch lists conflicts %v (%v)", cs, err)
+	}
+	c := f.commit(main, "after the abort")
+	if len(c.Parents) != 1 || c.Parents[0] != head.Hash || c.Namespace != before.Staged {
+		t.Fatalf("the commit after the abort has parents %v and namespace %s; want the head %s alone and what was staged before the merge",
+			c.Parents, c.Namespace.Short(), head.Hash.Short())
+	}
+	if res, err := f.r.Merge(ctx, alice, main, theirs.Hash); err != nil || len(res.Conflicts) != 1 {
+		t.Fatalf("merging again after the abort found %d conflicts (%v), want the same one", len(res.Conflicts), err)
+	}
+}
+
+// Only a merge in progress can be abandoned: on a branch with none it is
+// ErrNoMerge and changes nothing, on a branch that is not there
+// ErrBranchNotFound, and on an invalid name ErrInvalidName (issue #5).
+func TestOnlyAMergeInProgressCanBeAbandoned(t *testing.T) {
+	f := newFixture(t)
+	main := vcs.MainBranch
+	f.put(main, "draft", f.obj(7, "uncommitted"))
+	before, err := f.r.WorkingSet(ctx, alice, main)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := f.r.AbortMerge(ctx, alice, main); !errors.Is(err, vcs.ErrNoMerge) {
+		t.Fatalf("abandoning a merge on a branch with none = %v, want ErrNoMerge", err)
+	}
+	if now, _ := f.r.WorkingSet(ctx, alice, main); now.Hash != before.Hash {
+		t.Fatal("a refused abort changed the working set")
+	}
+	if err := f.r.AbortMerge(ctx, alice, "nope"); !errors.Is(err, vcs.ErrBranchNotFound) {
+		t.Fatalf("abandoning a merge on a missing branch = %v, want ErrBranchNotFound", err)
+	}
+	if err := f.r.AbortMerge(ctx, alice, "bad..name"); !errors.Is(err, vcs.ErrInvalidName) {
+		t.Fatalf("abandoning a merge on an invalid branch name = %v, want ErrInvalidName", err)
+	}
+}
+
+// Tags are listed in order and read back by name as they were created
+// (issue #2).
+func TestTagsAreListedAndReadBack(t *testing.T) {
+	f := newFixture(t)
+	if tags, err := f.r.Tags(ctx, alice); err != nil || len(tags) != 0 {
+		t.Fatalf("a new repository lists tags %q (%v), want none", tags, err)
+	}
+	head := f.head(vcs.MainBranch).Hash
+	created := map[string]vcs.Tag{}
+	for _, c := range []struct {
+		name, message string
+		by            auth.Principal
+	}{{"v1.0", "first release", alice}, {"v0.9", "a preview", bob}, {"nightly/2026-09-23", "", alice}} {
+		tag, err := f.r.CreateTag(ctx, c.by, c.name, head, c.message)
+		if err != nil {
+			t.Fatal(err)
+		}
+		created[c.name] = tag
+	}
+	tags, err := f.r.Tags(ctx, alice)
+	if want := "nightly/2026-09-23 v0.9 v1.0"; err != nil || strings.Join(tags, " ") != want {
+		t.Fatalf("Tags = %q (%v), want %q", tags, err, want)
+	}
+	for name, want := range created {
+		got, err := f.r.Tag(ctx, bob, name)
+		if err != nil {
+			t.Fatalf("Tag(%q) = %v", name, err)
+		}
+		if got.Hash != want.Hash || got.Target != want.Target || !got.Time.Equal(want.Time) || got.Tagger != want.Tagger || got.Message != want.Message {
+			t.Errorf("Tag(%q) reads back %+v, created as %+v", name, got, want)
+		}
+	}
+}
+
+// A tag the refs do not hold is not found, to read or to delete; a deleted
+// tag is gone, and its name takes a new tag (issue #2).
+func TestAMissingOrDeletedTagIsNotFound(t *testing.T) {
+	f := newFixture(t)
+	if _, err := f.r.Tag(ctx, alice, "v9"); !errors.Is(err, vcs.ErrTagNotFound) {
+		t.Fatalf("reading a tag never created = %v, want ErrTagNotFound", err)
+	}
+	if err := f.r.DeleteTag(ctx, alice, "v9"); !errors.Is(err, vcs.ErrTagNotFound) {
+		t.Fatalf("deleting a tag never created = %v, want ErrTagNotFound", err)
+	}
+	if _, err := f.r.Tag(ctx, alice, "bad..name"); !errors.Is(err, vcs.ErrInvalidName) {
+		t.Fatalf("reading an invalid tag name = %v, want ErrInvalidName", err)
+	}
+	if err := f.r.DeleteTag(ctx, alice, "bad..name"); !errors.Is(err, vcs.ErrInvalidName) {
+		t.Fatalf("deleting an invalid tag name = %v, want ErrInvalidName", err)
+	}
+	head := f.head(vcs.MainBranch).Hash
+	first, err := f.r.CreateTag(ctx, alice, "v1", head, "first")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := f.r.DeleteTag(ctx, alice, "v1"); err != nil {
+		t.Fatalf("DeleteTag = %v", err)
+	}
+	if _, err := f.r.Tag(ctx, alice, "v1"); !errors.Is(err, vcs.ErrTagNotFound) {
+		t.Fatalf("a deleted tag reads as %v, want ErrTagNotFound", err)
+	}
+	if tags, err := f.r.Tags(ctx, alice); err != nil || len(tags) != 0 {
+		t.Fatalf("after its one tag was deleted the repository lists %q (%v)", tags, err)
+	}
+	f.put(vcs.MainBranch, "doc", f.obj(8, "later"))
+	later := f.commit(vcs.MainBranch, "later").Hash
+	again, err := f.r.CreateTag(ctx, alice, "v1", later, "second")
+	if err != nil {
+		t.Fatalf("a deleted tag's name does not take a new tag: %v", err)
+	}
+	if got, err := f.r.Tag(ctx, alice, "v1"); err != nil || got.Target != later || got.Hash == first.Hash || got.Hash != again.Hash {
+		t.Fatalf("the name's new tag reads as %+v (%v), want the one naming the later commit", got, err)
 	}
 }

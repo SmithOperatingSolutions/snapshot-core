@@ -16,7 +16,8 @@ import (
 
 // history is a repository driven the way a host following the contract
 // drives one (DESIGN §9): every operation reads afresh and publishes at
-// once, and on ErrConflict reads again and does it again.
+// once, on ErrConflict reads again and does it again, and when its session
+// is lost (ErrSessionLost) reopens the repository and does it again.
 type history struct {
 	w        *world
 	branches []string
@@ -24,6 +25,8 @@ type history struct {
 	names    int
 	deleted  int
 	merges   int // merges in progress read back after a collection
+	lost     int // sessions lost to GC and reopened
+	slow     int // slow writers so far
 }
 
 var (
@@ -31,10 +34,16 @@ var (
 	contents = []string{"c0", "c1", "c2", "c3", "c4", "c5", "c6", "c7"} // few, so bytes come back after GC condemns them
 )
 
-// retry runs op until it is not a conflict.
+// retry runs op until it is neither a conflict nor a lost session.
 func (h *history) retry(what string, op func() error) error {
 	for range 10 {
-		if err := op(); !errors.Is(err, vcs.ErrConflict) {
+		err := op()
+		if errors.Is(err, vcs.ErrSessionLost) {
+			h.lost++
+			h.w.reopen()
+			continue
+		}
+		if !errors.Is(err, vcs.ErrConflict) {
 			return err
 		}
 	}
@@ -79,7 +88,7 @@ func (h *history) head(branch string) vcs.Commit {
 
 func (h *history) step(rt *rapid.T) {
 	b := rapid.SampledFrom(h.branches).Draw(rt, "branch")
-	switch rapid.IntRange(0, 12).Draw(rt, "op") {
+	switch rapid.IntRange(0, 13).Draw(rt, "op") {
 	case 0, 1, 2:
 		path, content := rapid.SampledFrom(paths).Draw(rt, "path"), rapid.SampledFrom(contents).Draw(rt, "content")
 		h.edit(b, func(e *object.Editor) error { return e.Put(path, h.w.note(7, content)) })
@@ -153,6 +162,26 @@ func (h *history) step(rt *rapid.T) {
 		h.collect()
 	case 12:
 		h.diverge(rt, b)
+	case 13:
+		// A slow writer: the pack it uploads sits unpublished past the grace
+		// window, GC deletes it as an orphan, and the publish loses the
+		// session; the host reopens and edits again.
+		path := rapid.SampledFrom(paths).Draw(rt, "path")
+		h.slow++
+		note := incompressible(int64(h.slow), 1500)
+		first := true
+		h.edit(b, func(e *object.Editor) error {
+			ref := h.w.note(7, note)
+			for i := range 2 { // the second fills the pack holding the note: uploaded, not published
+				h.w.note(7, incompressible(int64(h.slow)<<8|int64(i), 1500))
+			}
+			if first {
+				first = false
+				h.w.jump += grace + time.Minute
+				h.collect()
+			}
+			return e.Put(path, ref)
+		})
 	case 11:
 		// An edit that spans two collections a grace window apart: what its
 		// put counted on may be condemned and expire before it publishes.
@@ -323,9 +352,11 @@ func (h *history) readsWhole() {
 // run the whole repository reads. And it does delete what nothing reaches:
 // once grace windows pass with no writer, a run finds nothing left to
 // condemn and nothing to delete. The run proves its reach: GC deleted
-// something in most histories, and merges in progress were read back.
+// something in most histories, merges in progress were read back, and
+// slow writers (and fenced edits) lost their sessions and did their work
+// again on a reopened repository.
 func TestGCSafetyProperty(t *testing.T) {
-	var cases, collected, merges atomic.Int64
+	var cases, collected, merges, lost atomic.Int64
 	rapid.Check(t, func(rt *rapid.T) {
 		cases.Add(1)
 		w := worldFor(rt)
@@ -346,11 +377,15 @@ func TestGCSafetyProperty(t *testing.T) {
 			collected.Add(1)
 		}
 		merges.Add(int64(h.merges))
+		lost.Add(int64(h.lost))
 	})
 	if n := cases.Load(); collected.Load()*2 < n {
 		t.Fatalf("GC deleted something in %d of %d histories: the property did not reach collection", collected.Load(), n)
 	}
 	if merges.Load() == 0 {
 		t.Fatal("no merge in progress was ever read back after a collection: the property did not reach merges")
+	}
+	if lost.Load() == 0 {
+		t.Fatal("no history lost a session to GC and reopened: the property did not reach a lost session")
 	}
 }

@@ -23,10 +23,11 @@ var (
 	ErrRootConflict = errors.New("chunk: root changed since it was read")
 	ErrRootMissing  = errors.New("chunk: a root must name a stored chunk")
 	ErrClosed       = errors.New("chunk: store is closed")
-	// ErrStale: GC deleted a chunk this writer counted on while it wrote
-	// (docs/DESIGN.md §9); nothing was published, and the writer must read
-	// again and write again.
-	ErrStale = errors.New("chunk: a chunk this write counted on was collected")
+	// ErrSessionLost: GC deleted writes this store had not published, or a
+	// chunk it counted on, because the host outlasted the grace window
+	// (docs/DESIGN.md §9). Nothing was published, the store refuses every
+	// later write, and the host must reopen the repository and write again.
+	ErrSessionLost = errors.New("chunk: GC deleted writes this store had not published")
 )
 
 // MaxChunkSize is the Engine Spec's chunk limit.
