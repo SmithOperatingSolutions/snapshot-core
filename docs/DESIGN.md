@@ -331,7 +331,8 @@ commit       0x03 · parents u8 (0–2) · parent [32] × parents · namespace [
              time i64 (UTC, unix ns) · author (uvarint length ≤ 256, UTF-8) · message (≤ 64 KiB, UTF-8)
 tag          0x04 · target [32] · time i64 · tagger (≤ 256) · message (≤ 64 KiB)
 working set  0x05 · working [32] · staged [32] · merging u8 (0 or 1) ·
-             [base [32] · theirs [32] · conflicts [32]]   (when merging)
+             [base [32] · theirs [32] · conflicts [32] ·
+              working before [32] · staged before [32]]   (when merging)
 ```
 
 - **Height** is 0 for a root commit and one more than the higher parent
@@ -350,9 +351,16 @@ working set  0x05 · working [32] · staged [32] · merging u8 (0 or 1) ·
 - A working set names stored namespaces, and a branch or tag a stored
   commit. `UpdateWorkingSet` changes the namespaces only: the merge state
   it is handed must be the stored one (`ErrMergeState`), since only
-  `Merge`, `ResolveConflict` and `CommitWorkingSet` change it. There is no
-  abort in v1: a merge in progress ends by resolving every conflict and
-  committing.
+  `Merge`, `ResolveConflict`, `CommitWorkingSet` and `AbortMerge` change it.
+- **Abandoning a merge.** `Merge` merges into the working namespace as it
+  is, uncommitted edits and all, so the merge state records the working and
+  staged namespaces it started from. `AbortMerge` drops the merge state and
+  puts those two back: what the merge brought in, its resolutions and every
+  edit made since it began are discarded, and edits made before it are
+  not. It asks for write on the branch and on every path it changes, and a
+  branch with no merge in progress is `ErrNoMerge`. (The two roots joined
+  the working set's merge layout before any release; no repository held
+  the shorter one.)
 - A writer that loses the root swap re-reads and re-applies, up to 1,000
   times in a row, then gives up with an error; nothing it did reaches the
   root. A store error anywhere is the call's error, and leaves the refs as
@@ -407,8 +415,8 @@ handed the raw store and is the only caller of `Delete`.
 **Reachability.** Marking starts at the manifest's root, the refs map, and
 follows: the map's nodes; `heads/<b>` to a commit; `tags/<t>` to a tag and its
 target; `work/<b>` to a working set, its working and staged namespaces, and,
-during a merge, its base and theirs commits and its conflicts map (whose
-records name objects too); a commit to its namespace and its parents; a
+during a merge, its base and theirs commits, its conflicts map (whose
+records name objects too) and the namespaces it started from; a commit to its namespace and its parents; a
 namespace to its nodes and to every object it names. What an object reaches
 only its model knows (a tree entry holds its blob's root inside the model's
 bytes), so a model makes its objects collectable by implementing
