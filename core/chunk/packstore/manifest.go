@@ -40,6 +40,7 @@ const (
 	condemnedIndex = 2
 	deletedPack    = 3 // an orphan pack GC deleted
 	deletedIndex   = 4 // an orphan index object GC deleted
+	repackedPack   = 5 // a pack whose live chunks were copied into new packs
 )
 
 const (

@@ -9,6 +9,8 @@ import (
 
 	"pgregory.net/rapid"
 
+	"github.com/SmithOperatingSolutions/snapshot-core/core/blob"
+	"github.com/SmithOperatingSolutions/snapshot-core/core/gc"
 	"github.com/SmithOperatingSolutions/snapshot-core/core/object"
 	"github.com/SmithOperatingSolutions/snapshot-core/core/prolly"
 	"github.com/SmithOperatingSolutions/snapshot-core/core/vcs"
@@ -27,6 +29,7 @@ type history struct {
 	merges   int // merges in progress read back after a collection
 	lost     int // sessions lost to GC and reopened
 	slow     int // slow writers so far
+	repacked int // packs repacked by collections
 }
 
 var (
@@ -246,6 +249,7 @@ func (h *history) collect() gcReport {
 		h.w.t.Fatalf("GC: %v", err)
 	}
 	h.deleted += len(rep.Deleted)
+	h.repacked += rep.Repacked
 	h.readsWhole()
 	return gcReport{condemned: rep.Condemned, deleted: len(rep.Deleted)}
 }
@@ -351,12 +355,15 @@ func (h *history) readsWhole() {
 // one, GC never deletes a chunk any ref or working set reaches: after every
 // run the whole repository reads. And it does delete what nothing reaches:
 // once grace windows pass with no writer, a run finds nothing left to
-// condemn and nothing to delete. The run proves its reach: GC deleted
-// something in most histories, merges in progress were read back, and
-// slow writers (and fenced edits) lost their sessions and did their work
-// again on a reopened repository.
+// condemn and nothing to delete, and what the store holds has converged on
+// what is reachable: every pack at least half live, so the packs' bytes are
+// at most twice the live bytes and a pack's overhead each (#1). The run
+// proves its reach: GC deleted something in most histories, merges in
+// progress were read back, slow writers (and fenced edits) lost their
+// sessions and did their work again on a reopened repository, and packs
+// were repacked.
 func TestGCSafetyProperty(t *testing.T) {
-	var cases, collected, merges, lost atomic.Int64
+	var cases, collected, merges, lost, repacked atomic.Int64
 	rapid.Check(t, func(rt *rapid.T) {
 		cases.Add(1)
 		w := worldFor(rt)
@@ -373,11 +380,13 @@ func TestGCSafetyProperty(t *testing.T) {
 		if last := h.collect(); last.condemned != 0 || last.deleted != 0 {
 			rt.Fatalf("grace windows after the last write, GC still condemned %d packs and deleted %d objects", last.condemned, last.deleted)
 		}
+		h.converged(rt)
 		if h.deleted > 0 {
 			collected.Add(1)
 		}
 		merges.Add(int64(h.merges))
 		lost.Add(int64(h.lost))
+		repacked.Add(int64(h.repacked))
 	})
 	if n := cases.Load(); collected.Load()*2 < n {
 		t.Fatalf("GC deleted something in %d of %d histories: the property did not reach collection", collected.Load(), n)
@@ -387,5 +396,51 @@ func TestGCSafetyProperty(t *testing.T) {
 	}
 	if lost.Load() == 0 {
 		t.Fatal("no history lost a session to GC and reopened: the property did not reach a lost session")
+	}
+	if repacked.Load() == 0 {
+		t.Fatal("no history repacked a pack: the property did not reach repacking")
+	}
+}
+
+// converged checks that, with nothing left to collect, the packs' bytes are
+// at most twice what the repository reaches plus a pack's overhead each:
+// no kept pack is less than half live.
+func (h *history) converged(rt *rapid.T) {
+	w := h.w
+	s := w.store()
+	root, err := s.Root(ctx)
+	if err != nil {
+		rt.Fatal(err)
+	}
+	live, err := gc.Mark(ctx, s, gc.Options{Blobs: w.blobs, Keys: w.keys, Repo: repo, Config: prolly.DefaultConfig(), Registry: w.reg}, root)
+	if err != nil {
+		rt.Fatal(err)
+	}
+	var liveBytes int64
+	for hh := range live {
+		_, _, n, ok := s.Location(hh)
+		if !ok {
+			rt.Fatalf("live chunk %s is not located", hh.Short())
+		}
+		liveBytes += n
+	}
+	var packBytes, packs int64
+	after := ""
+	for {
+		page, err := w.blobs.List(ctx, "packs/", after, blob.MaxListPage)
+		if err != nil {
+			rt.Fatal(err)
+		}
+		for _, info := range page {
+			packBytes += info.Size
+			packs++
+		}
+		if len(page) < blob.MaxListPage {
+			break
+		}
+		after = page[len(page)-1].Name
+	}
+	if slack := 512 * packs; packBytes > 2*liveBytes+slack {
+		rt.Fatalf("with nothing left to collect the store holds %d bytes of packs for %d live bytes in %d packs: over twice the live bytes and %d of overhead, so a pack that is mostly dead was kept", packBytes, liveBytes, packs, slack)
 	}
 }

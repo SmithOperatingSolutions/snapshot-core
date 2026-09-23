@@ -58,3 +58,24 @@ func Recorded(ctx context.Context, o Options) ([]string, error) {
 	sort.Strings(out)
 	return out, nil
 }
+
+// RepackedNames lists, in order, the packs the store's manifest records as
+// repacked.
+func RepackedNames(ctx context.Context, o Options) ([]string, error) {
+	r, err := o.Blobs.Root(ctx)
+	if err != nil || len(r.Value) == 0 {
+		return nil, err
+	}
+	m, err := openManifest(r.Value, o.Keys, o.Repo)
+	if err != nil {
+		return nil, err
+	}
+	var out []string
+	for _, c := range m.condemned {
+		if c.kind == repackedPack {
+			out = append(out, dedup.PackName(c.sum))
+		}
+	}
+	sort.Strings(out)
+	return out, nil
+}

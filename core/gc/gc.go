@@ -38,6 +38,7 @@ type Options struct {
 	Registry *model.Registry  // every model its objects use; each must walk
 	Grace    time.Duration    // 0: DefaultGrace
 	Clock    func() time.Time // nil: time.Now
+	Repack   packstore.Repack // how packs that are mostly dead are rewritten; the zero value is the default policy
 }
 
 // Report is what one Run did.
@@ -46,6 +47,8 @@ type Report struct {
 	Live                 int      // chunks marked
 	Condemned, Reprieved int      // packs
 	Deleted              []string // expired packs and index objects, then orphans
+	Repacked             int      // packs whose live chunks were copied into new packs
+	Copied               int64    // bytes of frames copied by repacking
 }
 
 // maxRounds bounds the rounds one Run takes while writers keep publishing.

@@ -18,6 +18,23 @@ import (
 // published, the round's mark is stale, and a new round must start.
 var ErrMoved = errors.New("packstore: the manifest moved during the GC round")
 
+// Repack is a round's policy for rewriting packs that are mostly dead
+// (docs/DESIGN.md §9): a kept pack whose live bytes are under MaxLive of
+// its size is a candidate, and candidates are repacked emptiest first until
+// Budget bytes have been copied. The zero value is the default policy: half,
+// and a GiB per round.
+type Repack struct {
+	MaxLive float64 // 0: 0.5
+	Budget  int64   // bytes copied per round; 0: 1 GiB
+	Off     bool
+}
+
+// Repack defaults.
+const (
+	DefaultMaxLive = 0.5
+	DefaultBudget  = 1 << 30
+)
+
 // Round is one GC decision taken against one manifest (docs/DESIGN.md §9):
 // Begin reads it, GC marks from its root, and Apply condemns, reprieves and
 // expires against it, losing to any writer that published in between.
@@ -27,7 +44,11 @@ type Round struct {
 	ver     blob.Version
 	packs   []pack.Info // every pack the manifest's index objects list
 	orphans []string
+	repack  Repack
 }
+
+// Repack sets the round's repacking policy (the zero value is the default).
+func (r *Round) Repack(p Repack) { r.repack = p }
 
 // Orphans hands the round the packs and index objects GC found older than
 // the grace window by the backend's clock. Apply records each its manifest
@@ -76,6 +97,8 @@ type Outcome struct {
 	Expired              []string        // packs and index objects the manifest no longer names: the GC role deletes them
 	Named                map[string]bool // every pack and index object the manifest now names, live or condemned
 	Orphans              []string        // packs and index objects no manifest names, recorded as deleted: the GC role deletes them
+	Repacked             int             // packs whose live chunks were copied into new packs
+	Copied               int64           // bytes of frames copied by repacking
 }
 
 // Apply decides against the round's manifest and swaps it: a pack none of
