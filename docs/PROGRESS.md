@@ -16,7 +16,7 @@ lint clean · every package at or above its coverage gate
 | **C1 Blobs and chunks** | ✅ Done | `core/hash`, `core/internal/wire`, `core/cdc`, `core/seal` (per-object HKDF keys, key files, KMS port + contract); `core/blob` port + contract, `blob/mem`, `blob/local`, `blob/multivol`, `blob/s3` (pure-Go in-process S3 server `s3fake`, startup probe, MinIO tier), `blob/cache`; `core/pack`, `core/dedup`; `core/chunk` port + contract, `chunk/memstore`, `chunk/packstore` | Blob contract green on all backends ✅ (mem, local, multivol, s3 in-process and MinIO, and through the cache); crash harness passes ✅ (local and multivol at the blob layer, packstore at the chunk layer) |
 | **C2 Keyed data** | ✅ Done | `core/boundary` (the integer split rule), `core/stream` (CDC byte streams under a content-defined index tree), `core/prolly` (Map, Editor with incremental Flush, Diff) | Determinism and bounded-diff properties hold on 1M entries ✅ (`-tags slow`, about 9 s) |
 | **C3 History and models** | ✅ Done | `core/auth` (Principal, default-deny Authorizer), `core/model` (the port, frozen, and the registry), `core/object` (46-byte object references, the path grammar, namespaces and their diff), `model/contract`, `model/blob`, `model/tree`, `core/merge` (the zipped three-way driver), `core/vcs` (refs, commits, tags, working sets, merge base, log, merge and conflicts), `core/repo` (Init and Open over the sealed config object) | A folder of files branches, diffs and merges end to end ✅ (`TestAFolderBranchesDiffsAndMerges`, on a local disk store through encrypted packs); model interface frozen ✅ (`core/model`, port version 1) |
-| **C4 GC and hardening** | ✅ Done | Walks: `stream.Walk`, `prolly.Walk`, `object.Walk`, `vcs.Walk`, and `model.Walker` (optional, beside the frozen port) in `model/blob` and `model/tree`; packstore's GC rounds (condemn, reprieve, expire, compact) and the writer's fence (`chunk.ErrStale`); `core/gc` (mark, apply, delete, orphans by the backend's clock); `repo.GC`; the repository on `NoDelete`; writes authorized per path; fuzz targets for every decoder | GC safety property holds ✅ (`TestGCSafetyProperty` over random histories; `TestAFoldersHistoryComesThroughGC` end to end); security table fully verified ✅ (below) |
+| **C4 GC and hardening** | ✅ Done | Walks: `stream.Walk`, `prolly.Walk`, `object.Walk`, `vcs.Walk`, and `model.Walker` (optional, beside the frozen port) in `model/blob` and `model/tree`; packstore's GC rounds (condemn, reprieve, expire, compact) and the writer's fence (a lost session, `chunk.ErrSessionLost`, since #3); `core/gc` (mark, apply, delete, orphans by the backend's clock); `repo.GC`; the repository on `NoDelete`; writes authorized per path; fuzz targets for every decoder | GC safety property holds ✅ (`TestGCSafetyProperty` over random histories; `TestAFoldersHistoryComesThroughGC` end to end); security table fully verified ✅ (below) |
 
 **Closing C1** took more than the last component. The coverage gate found
 guards nothing executed, each now backfilled with a test and the mutant it
@@ -251,7 +251,9 @@ Beyond the list: merging what a branch already holds changes nothing (`TestMergi
 - **Store errors are swept, not sampled**: every package with a store under it has a test that fails exactly one store call at every point an operation makes one (chunk layer, keyed data, objects, trees, the version graph and, at the blob level, `Init` and `Open`).
 - **GC's reachability comes from the models**: `model.Walker` is optional, beside the frozen port, and the model contract requires it (what a model names must hold its object); GC refuses to collect a repository holding an object it cannot walk.
 - **A walk says which chunks are leaves**, and the marker prunes only nodes it has gone into, so bytes that are a file in one place and a node in another cannot steer it.
-- **GC condemns, waits, re-marks, deletes**; writers never deduplicate against a condemned pack and are fenced (`chunk.ErrStale`, reported as `vcs.ErrConflict`) when a pack they counted on expired; a store rebuilds its index when gcGen moves.
+- **GC condemns, waits, re-marks, deletes**; writers never deduplicate against a condemned pack; a store rebuilds its index when gcGen moves.
+- **GC records the orphans it deletes**, in the swap before the deletion, for a grace window and an hour (condemned kinds 3 and 4); a writer's publish is refused when the manifest records one of its unpublished uploads, or when one over an hour old is gone.
+- **A lost session, not a conflict**: a store that finds writes it promised gone (a chunk a put counted on in a pack GC expired, an upload GC deleted as an orphan, found at publish or on a read) fails with `chunk.ErrSessionLost` and refuses every later write; the host reopens the repository. Retrying on the same store could keep failing, and fencing only counted-on chunks would miss chunks written into a deleted pack.
 - **Expiry by GC's clock, orphan ages by the backend's**, read from a probe object.
 - **The repository runs on `blob.NoDelete`**; `repo.GC`, with admin and the raw store, is the one path that deletes.
 - **Writes are authorized per path, reads per branch.**
@@ -299,6 +301,10 @@ Beyond the list: merging what a branch already holds changes nothing (`TestMergi
 | the full gates, closing C4 | A commit changing a signature mechanically across tests was blocked (each changed test judged); a stored-namespace check the path checks made dead; a branch check the path checks masked | The commit split into a refactor and a red; the check removed; a test granting paths and not the branch |
 | the PR's first CI run | Docker Hub no longer serves `minio/minio`: the MinIO tier had passed locally on a copy cached a year before, and the failure said only "exit status 125" | The tier runs MinIO's release from quay.io, pinned by digest; a failed command's error carries what it printed |
 | the PR's second CI run | On a cold runner `docker run -d` writes its pull progress on stderr and the container id on stdout; `tools/ci` merged the two, so `docker port` was handed an id that began with the progress | `output()` returns stdout alone; stderr only says why a command failed |
+| the design of #3 | A writer's session index objects are as exposed as its packs, and worse: a manifest naming a deleted index object opens nowhere | Index objects are recorded and checked like packs |
+| the design of #3 | Answering a lost write with a conflict to retry on the same store could fail forever (a lost chunk the retry no longer writes), and a fence on counted-on chunks misses chunks written into a deleted pack | A lost session: `ErrSessionLost`, writes refused, the host reopens (the fence on expired packs too) |
+| the GC property, run 150 times | A host reading back what it had just written found a chunk its put had deduplicated against a pack GC expired meanwhile: a plain `ErrNotFound`, before any publish could be fenced (one run in about 120) | A read of a promised chunk that is gone ends the session (`TestReadingAPromisedChunkThatIsGoneLosesTheSession`) |
+| the GC property's reach | The spanning edit lost a session in only about 94% of runs, so a check that one did was flaky | A slow-writer step, whose pack GC deletes as an orphan before it publishes |
 | (redcheck on this branch) | Build-tagged tests unjudged; `TestMain` judged; pairs not matched by scope; contract changes invisible; environment-bound callers refused; no `main` in a new clone; a tagged backfill's mutants built without its tag; fuzz targets not counted as tests | Tool fixed each time, with a red test |
 
 ## Next
@@ -313,9 +319,14 @@ them, each tracked as an issue:
    (`TestTagsAreListedAndReadBack`, `TestAMissingOrDeletedTagIsNotFound`,
    `TestForgedTagRefsAreCorrupt`; what only a deleted tag reached is
    collected, `TestADeletedTagsHistoryIsCollected`).
-3. **A slow writer's unpublished packs** (#3): the contract has hosts
-   publish within the grace window; a check at publish would turn a breach
-   into `ErrStale` rather than a root naming a deleted pack.
+3. ✅ **A slow writer's unpublished packs** (#3): GC records the orphans it
+   deletes, a writer checks its uploads at publish, and a lost write ends
+   the session (`TestARoundRecordsTheOrphansItDeletes`,
+   `TestAPublishFailsOnAPackRecordedAsADeletedOrphan`,
+   `TestAPublishFailsOnAnOldUploadThatIsGone`, the index-object pair,
+   `TestReadingAPromisedChunkThatIsGoneLosesTheSession`; end to end,
+   `TestAWriterCannotPublishAPackGCDeletedAsAnOrphan`; slow writers in
+   `TestGCSafetyProperty`).
 4. **Real S3 in the nightly run** (#4): the test is written
    (`TestContractAgainstRealS3`); a nightly job to run it, and the
    credentials it needs as CI secrets, are not there yet.
