@@ -740,3 +740,87 @@ find: if len(data) != int(e.RawLen) {
 replace: if len(data) != int(e.RawLen) && false {
 pkg: ./core/pack
 run: ^TestHostileFramesAreRefused$
+
+id: pack-format-header-magic
+file: core/pack/pack.go
+find: headerMagic  = "SCPK"
+replace: headerMagic  = "SCPX"
+pkg: ./core/pack
+run: ^TestAV1PackStillReads$
+
+id: pack-format-trailer-magic
+file: core/pack/pack.go
+find: trailerMagic = "SCPE"
+replace: trailerMagic = "SCPX"
+pkg: ./core/pack
+run: ^TestAV1PackStillReads$
+
+id: pack-format-index-magic
+file: core/pack/pack.go
+find: indexMagic   = "SCPI"
+replace: indexMagic   = "SCPX"
+pkg: ./core/pack
+run: ^TestAV1PackStillReads$
+
+id: pack-format-version
+file: core/pack/pack.go
+find: version      = 1
+replace: version      = 2
+pkg: ./core/pack
+run: ^TestAV1PackStillReads$
+
+id: pack-trailer-bounded-by-the-pack
+file: core/pack/pack.go
+find: indexOffset < HeaderSize ||\n\t\tindexOffset+indexLen+TrailerSize != uint64(len(b)) {
+replace: indexOffset < HeaderSize {
+pkg: ./core/pack
+run: ^TestTrailerCannotPointOutsideThePack$
+
+id: pack-index-refuses-overlap
+file: core/pack/pack.go
+find: if uint64(e.Offset) < end {
+replace: if uint64(e.Offset) < end && false {
+pkg: ./core/pack
+run: ^TestForgedIndexesAreRefused$
+
+id: pack-index-strictly-sorted
+file: core/pack/pack.go
+find: case i > 0 && entries[i-1].Hash.Compare(e.Hash) >= 0:
+replace: case i > 0 && entries[i-1].Hash.Compare(e.Hash) > 0:
+pkg: ./core/pack
+run: ^TestForgedIndexesAreRefused$
+
+id: pack-index-frames-in-region
+file: core/pack/pack.go
+find: case stored < sealOverhead || off+stored > indexOffset:
+replace: case stored < sealOverhead:
+pkg: ./core/pack
+run: ^TestForgedIndexesAreRefused$
+
+id: pack-index-frames-clear-the-header
+file: core/pack/pack.go
+find: end := uint64(HeaderSize)
+replace: end := uint64(0)
+pkg: ./core/pack
+run: ^TestForgedIndexesAreRefused$
+
+id: pack-index-raw-length-consistent
+file: core/pack/pack.go
+find: case e.Codec == CodecRaw && stored != raw+sealOverhead:
+replace: case e.Codec == CodecRaw && false:
+pkg: ./core/pack
+run: ^TestForgedIndexesAreRefused$
+
+id: pack-index-zstd-smaller
+file: core/pack/pack.go
+find: case e.Codec == CodecZstd && stored-sealOverhead >= raw:
+replace: case e.Codec == CodecZstd && false:
+pkg: ./core/pack
+run: ^TestForgedIndexesAreRefused$
+
+id: pack-decoder-memory-bounded
+file: core/pack/pack.go
+find: zstd.WithDecoderMaxMemory(MaxChunkSize)
+replace: zstd.WithDecoderMaxMemory(1<<40)
+pkg: ./core/pack
+run: ^TestDecompressionIsBoundedInMemory$

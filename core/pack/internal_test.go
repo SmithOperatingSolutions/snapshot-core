@@ -2,7 +2,9 @@ package pack
 
 import (
 	"bytes"
+	"encoding/binary"
 	"errors"
+	"runtime"
 	"testing"
 
 	"github.com/klauspost/compress/zstd"
@@ -84,4 +86,129 @@ func FuzzDecodeIndex(f *testing.F) {
 			t.Fatal("an index decoded that does not re-encode to itself")
 		}
 	})
+}
+
+// reseal replaces a pack's index with entries sealed properly under the
+// pack's own index key: the forgery authenticates, so only the index's own
+// validation can refuse it.
+func reseal(t *testing.T, kr *seal.Keyring, repo seal.RepoID, b Built, entries []Entry) []byte {
+	t.Helper()
+	keys, err := DeriveKeys(kr, repo, b.Info.Salt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	indexOffset := binary.LittleEndian.Uint64(b.Bytes[len(b.Bytes)-TrailerSize:])
+	out := bytes.Clone(b.Bytes[:indexOffset])
+	sealed, err := keys.index.Seal(out[:HeaderSize], encodeIndex(entries))
+	if err != nil {
+		t.Fatal(err)
+	}
+	out = append(out, sealed...)
+	out = binary.LittleEndian.AppendUint64(out, indexOffset)
+	out = binary.LittleEndian.AppendUint32(out, uint32(len(sealed)))
+	return append(out, trailerMagic...)
+}
+
+func TestForgedIndexesAreRefused(t *testing.T) {
+	kr, _ := seal.NewKeyring()
+	c, _ := NewCodec()
+	defer c.Close()
+	repo := seal.RepoID{2}
+	w, err := NewWriter(kr, repo, c, 1<<20)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, d := range [][]byte{bytes.Repeat([]byte("x"), 3000), []byte("small one"), []byte("another")} {
+		if err := w.Add(hash.Sum(d), d); err != nil {
+			t.Fatal(err)
+		}
+	}
+	b, err := w.Finish()
+	if err != nil {
+		t.Fatal(err)
+	}
+	good := b.Info.Entries
+	if again := reseal(t, kr, repo, b, good); true {
+		if _, err := ReadInfo(Name(again), again, kr, repo); err != nil {
+			t.Fatalf("positive control: a resealed honest index is refused: %v", err)
+		}
+	}
+	forge := func(f func(es []Entry) []Entry) []byte {
+		es := append([]Entry(nil), good...)
+		return reseal(t, kr, repo, b, f(es))
+	}
+	var zstdIdx, rawIdx, smallest int
+	for i, e := range good {
+		if e.Codec == CodecZstd {
+			zstdIdx = i
+		} else {
+			rawIdx = i
+		}
+		if e.StoredLen < good[smallest].StoredLen {
+			smallest = i
+		}
+	}
+	if good[smallest].StoredLen > HeaderSize {
+		t.Fatalf("the smallest frame is %d bytes; it cannot fit inside the header to forge", good[smallest].StoredLen)
+	}
+	indexOffset := binary.LittleEndian.Uint64(b.Bytes[len(b.Bytes)-TrailerSize:])
+	for name, bad := range map[string][]byte{
+		"overlapping frames": forge(func(es []Entry) []Entry { es[1].Offset = es[0].Offset + 1; return es }),
+		// Lengths stay consistent with each codec, so only the placement
+		// checks can refuse these: a frame wholly inside the header, and one
+		// that starts past the index.
+		"frame in the header": forge(func(es []Entry) []Entry {
+			es[smallest].Offset = 0
+			return es
+		}),
+		"frame past the index": forge(func(es []Entry) []Entry { es[0].Offset = uint32(indexOffset) + 1; return es }),
+		"unsorted": forge(func(es []Entry) []Entry {
+			es[0], es[1] = es[1], es[0]
+			return es
+		}),
+		"duplicate hash":         forge(func(es []Entry) []Entry { es[1].Hash = es[0].Hash; return es }),
+		"raw length lie":         forge(func(es []Entry) []Entry { es[rawIdx].RawLen++; return es }),
+		"zstd not smaller":       forge(func(es []Entry) []Entry { es[zstdIdx].RawLen = es[zstdIdx].StoredLen - 28; return es }),
+		"chunk over the limit":   forge(func(es []Entry) []Entry { es[zstdIdx].RawLen = MaxChunkSize + 1; return es }),
+		"unknown codec":          forge(func(es []Entry) []Entry { es[0].Codec = 7; return es }),
+		"frame shorter than tag": forge(func(es []Entry) []Entry { es[rawIdx].StoredLen = 10; return es }),
+	} {
+		if _, err := ReadInfo(Name(bad), bad, kr, repo); !errors.Is(err, ErrCorrupt) {
+			t.Errorf("%s: ReadInfo accepted a forged index (err=%v)", name, err)
+		}
+	}
+}
+
+// The decoder's memory bound is what stops a bomb, not the length check
+// after it: measured in bytes allocated.
+func TestDecompressionIsBoundedInMemory(t *testing.T) {
+	kr, _ := seal.NewKeyring()
+	c, _ := NewCodec()
+	defer c.Close()
+	salt, _ := seal.NewSalt()
+	keys, err := DeriveKeys(kr, seal.RepoID{3}, salt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	enc, _ := zstd.NewWriter(nil)
+	zeros := make([]byte, 64<<20)
+	bomb := enc.EncodeAll(zeros, nil)
+	h := hash.Sum(zeros[:MaxChunkSize])
+	sealed, err := keys.chunk.Seal(h[:], bomb)
+	if err != nil {
+		t.Fatal(err)
+	}
+	zeros = nil
+	e := Entry{Hash: h, RawLen: MaxChunkSize, Codec: CodecZstd, StoredLen: uint32(len(sealed))}
+	var before, after runtime.MemStats
+	runtime.GC()
+	runtime.ReadMemStats(&before)
+	_, err = OpenFrame(keys, c, e, sealed)
+	runtime.ReadMemStats(&after)
+	if !errors.Is(err, ErrCorrupt) {
+		t.Fatalf("a 64 MiB bomb opened (err=%v)", err)
+	}
+	if grew := after.TotalAlloc - before.TotalAlloc; grew > 16<<20 {
+		t.Fatalf("opening a 64 MiB decompression bomb allocated %d MiB: the decoder is not bounded", grew>>20)
+	}
 }
