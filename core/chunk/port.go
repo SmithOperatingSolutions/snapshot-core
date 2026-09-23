@@ -23,6 +23,10 @@ var (
 	ErrRootConflict = errors.New("chunk: root changed since it was read")
 	ErrRootMissing  = errors.New("chunk: a root must name a stored chunk")
 	ErrClosed       = errors.New("chunk: store is closed")
+	// ErrStale: GC deleted a chunk this writer counted on while it wrote
+	// (docs/DESIGN.md §9); nothing was published, and the writer must read
+	// again and write again.
+	ErrStale = errors.New("chunk: a chunk this write counted on was collected")
 )
 
 // MaxChunkSize is the Engine Spec's chunk limit.

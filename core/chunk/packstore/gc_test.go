@@ -220,3 +220,126 @@ func TestARoundRefusesALiveSetWithoutTheRoot(t *testing.T) {
 		t.Fatalf("after the refused round: condemned %d, expired %v; the refused round decided something", out.Condemned, out.Expired)
 	}
 }
+
+// condemnedAt publishes a root and a garbage chunk, each in a pack of its
+// own, and condemns the garbage chunk's pack at t0.
+func condemnedAt(t *testing.T, bs blob.BlobStore, kr *seal.Keyring) (root, garbage hash.Hash) {
+	t.Helper()
+	hs := published(t, open(t, bs, kr), "a, the root", "b, garbage")
+	if out := round(t, bs, kr, liveSet(hs[0]), t0); out.Condemned != 1 {
+		t.Fatalf("fixture: condemned %d packs, want 1", out.Condemned)
+	}
+	return hs[0], hs[1]
+}
+
+// A writer that knows a pack is condemned never counts on it: putting
+// bytes a condemned pack holds stores them again. (Before condemnation, the
+// positive control, a put of stored bytes stores nothing.)
+func TestWritersDoNotDeduplicateAgainstCondemnedPacks(t *testing.T) {
+	bs, kr := mem.New(), keyring(t)
+	hs := published(t, open(t, bs, kr), "a, the root", "b, garbage")
+	w := open(t, bs, kr)
+	if _, err := w.Put(ctx, []byte("b, garbage")); err != nil {
+		t.Fatal(err)
+	}
+	if err := w.CompareAndSetRoot(ctx, hs[0], hs[0]); err != nil {
+		t.Fatal(err)
+	}
+	if n := len(objects(t, bs, "packs/")); n != 2 {
+		t.Fatalf("positive control: putting stored bytes left %d packs, want the 2 already there", n)
+	}
+	if out := round(t, bs, kr, liveSet(hs[0]), t0); out.Condemned != 1 {
+		t.Fatalf("fixture: condemned %d packs, want 1", out.Condemned)
+	}
+	w = open(t, bs, kr)
+	h, err := w.Put(ctx, []byte("b, garbage"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := w.CompareAndSetRoot(ctx, hs[0], h); err != nil {
+		t.Fatal(err)
+	}
+	if n := len(objects(t, bs, "packs/")); n != 3 {
+		t.Fatalf("after its pack was condemned, putting the bytes again left %d packs, want a third holding a fresh copy", n)
+	}
+}
+
+// A writer that counted on a pack GC then expired publishes nothing: it
+// fails with chunk.ErrStale, and the root stays where it was. A writer
+// whose chunks all survived the same collection publishes as usual.
+func TestAWriterFencedWhenAPackItCountedOnExpires(t *testing.T) {
+	bs, kr := mem.New(), keyring(t)
+	hs := published(t, open(t, bs, kr), "a, the root", "b, garbage")
+	stale, kept := open(t, bs, kr), open(t, bs, kr)
+	if _, err := stale.Put(ctx, []byte("b, garbage")); err != nil { // counts on b's pack
+		t.Fatal(err)
+	}
+	if _, err := kept.Put(ctx, []byte("a, the root")); err != nil { // counts on a's pack
+		t.Fatal(err)
+	}
+	round(t, bs, kr, liveSet(hs[0]), t0)
+	out := round(t, bs, kr, liveSet(hs[0]), t0.Add(time.Hour))
+	if len(out.Expired) != 1 {
+		t.Fatalf("fixture: expired %v, want b's pack", out.Expired)
+	}
+	remove(t, bs, out.Expired)
+	if err := stale.CompareAndSetRoot(ctx, hs[0], hs[1]); !errors.Is(err, chunk.ErrStale) {
+		t.Fatalf("publishing a root on a chunk whose pack expired = %v, want ErrStale", err)
+	}
+	if root, err := open(t, bs, kr).Root(ctx); err != nil || root != hs[0] {
+		t.Fatalf("after the fenced publish the root is %s (%v), want %s", root.Short(), err, hs[0].Short())
+	}
+	if err := kept.CompareAndSetRoot(ctx, hs[0], hs[0]); err != nil {
+		t.Fatalf("positive control: a writer whose chunks survived the collection: %v", err)
+	}
+}
+
+// A store that learns packs expired forgets their chunks: its index is
+// rebuilt from the manifest, so it neither vouches for them (Has) nor
+// reads them as corrupt (Get is ErrNotFound), and putting them again
+// stores them.
+func TestAStoreForgetsChunksWhosePacksExpired(t *testing.T) {
+	bs, kr := mem.New(), keyring(t)
+	root, garbage := condemnedAt(t, bs, kr)
+	r := open(t, bs, kr) // knows b's pack
+	if have, err := r.Has(ctx, []hash.Hash{garbage}); err != nil || !have[garbage] {
+		t.Fatalf("fixture: a store opened before the expiry has b: %v, %v", have, err)
+	}
+	out := round(t, bs, kr, liveSet(root), t0.Add(time.Hour))
+	remove(t, bs, out.Expired)
+	if _, err := r.Root(ctx); err != nil { // a refresh
+		t.Fatal(err)
+	}
+	if have, err := r.Has(ctx, []hash.Hash{garbage, root}); err != nil || have[garbage] || !have[root] {
+		t.Fatalf("after the expiry the store has b: %v and the root: %v (%v); want b forgotten, the root kept", have[garbage], have[root], err)
+	}
+	if _, err := r.Get(ctx, garbage); !errors.Is(err, chunk.ErrNotFound) {
+		t.Fatalf("reading the expired chunk = %v, want ErrNotFound", err)
+	}
+	before := len(objects(t, bs, "packs/"))
+	if _, err := r.Put(ctx, []byte("b, garbage")); err != nil {
+		t.Fatal(err)
+	}
+	if err := r.CompareAndSetRoot(ctx, root, root); err != nil {
+		t.Fatal(err)
+	}
+	if after := len(objects(t, bs, "packs/")); after != before+1 {
+		t.Fatalf("putting the expired bytes again left %d packs, want %d: they were counted as stored", after, before+1)
+	}
+}
+
+// A store opened before an expiry that reads an expired chunk learns of
+// the expiry from the missing pack: ErrNotFound, not corruption.
+func TestReadingAnExpiredChunkIsNotFound(t *testing.T) {
+	bs, kr := mem.New(), keyring(t)
+	root, garbage := condemnedAt(t, bs, kr)
+	r := open(t, bs, kr)
+	out := round(t, bs, kr, liveSet(root), t0.Add(time.Hour))
+	remove(t, bs, out.Expired)
+	if _, err := r.Get(ctx, garbage); !errors.Is(err, chunk.ErrNotFound) {
+		t.Fatalf("a store opened before the expiry reads the expired chunk as %v, want ErrNotFound", err)
+	}
+	if _, err := r.Get(ctx, root); err != nil {
+		t.Fatalf("positive control: the root: %v", err)
+	}
+}
