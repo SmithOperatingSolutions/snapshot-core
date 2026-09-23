@@ -1,0 +1,3174 @@
+# Checked-in mutants: each severs a load-bearing guard, and the named test must
+# go red. `mise run mutate` re-runs them all (nightly in CI). A backfilled test
+# names its mutant in a "Red-Check: mutants <id>" trailer (CONTRIBUTING.md).
+#
+# Format: stanzas of key: value, separated by blank lines. In find/replace,
+# \n, \t and \\ are escapes. `find` must occur exactly once in `file`.
+
+id: redcheck-judges-changed-bodies
+file: tools/redcheck/redcheck.go
+find: if prev, ok := beforeFns[name]; !ok || prev != body {
+replace: if prev, ok := beforeFns[name]; !ok || (prev != body && false) {
+pkg: ./tools/redcheck
+run: ^TestChangedTestIsJudged$
+
+id: redcheck-judges-fuzz-targets
+file: tools/redcheck/redcheck.go
+find: testFunc    = regexp.MustCompile(`^(Test|Fuzz)([^a-z].*)?$`)
+replace: testFunc    = regexp.MustCompile(`^Test([^a-z].*)?$`)
+pkg: ./tools/redcheck
+run: ^TestAFuzzTargetIsJudgedLikeATest$
+
+id: redcheck-fuzz-beside-a-red-may-pass
+file: tools/redcheck/redcheck.go
+find: case !backfill && r.action == "pass" && strings.HasPrefix(name, "Fuzz"):
+replace: case !backfill && r.action == "pass" && strings.HasPrefix(name, "Fuzz") && false:
+pkg: ./tools/redcheck
+run: ^TestAFuzzTargetNeedNotFailBesideARedTest$
+
+id: redcheck-fuzz-alone-must-fail
+file: tools/redcheck/redcheck.go
+find: if mutants == nil && ran > 0 && failed == 0 && len(vs) == 0 {
+replace: if mutants == nil && ran > 0 && failed == 0 && len(vs) == 0 && false {
+pkg: ./tools/redcheck
+run: ^TestAFuzzTargetNeedNotFailBesideARedTest$
+
+id: dnx-seal-requires-tag
+file: core/dnx/dnx.go
+find: if len(aad) == 0 {\n\t\treturn nil, ErrUntagged\n\t}\n\treturn a.mk.EncryptWithAAD(plaintext, aad)
+replace: return a.mk.EncryptWithAAD(plaintext, aad)
+pkg: ./core/dnx/compat
+run: ^TestAEADBindsTheDomainTag$
+
+id: dnx-geometry-mask-passed
+file: core/dnx/dnx.go
+find: chunker.WithMask(g.Mask)
+replace: chunker.WithMask(g.Mask>>1)
+pkg: ./core/dnx/compat
+run: ^TestCDCGolden
+
+id: dnx-geometry-min-passed
+file: core/dnx/dnx.go
+find: chunker.WithMinSize(g.Min)
+replace: chunker.WithMinSize(g.Min/2)
+pkg: ./core/dnx/compat
+run: ^TestCDCGolden
+
+id: dnx-argon2-validated
+file: core/dnx/dnx.go
+find: if err := cp.Validate(); err != nil {
+replace: if err := cp.Validate(); err != nil && false {
+pkg: ./core/dnx/compat
+run: ^TestArgon2RefusesUnusableParams$
+
+id: dnx-identity-is-strong-hash
+file: core/dnx/dnx.go
+find: return ChunkID{Strong: id.StrongHash, FilterHint: id.WeakHash}
+replace: return ChunkID{Strong: [32]byte(append([]byte{1}, id.StrongHash[1:]...)), FilterHint: id.WeakHash}
+pkg: ./core/dnx/compat
+run: ^TestChunkIdentityIsSHA256OfExactBytes$
+
+id: dnx-open-requires-tag
+file: core/dnx/dnx.go
+find: if len(aad) == 0 {\n\t\treturn nil, ErrUntagged\n\t}\n\treturn a.mk.DecryptWithAAD(sealed, aad)
+replace: return a.mk.DecryptWithAAD(sealed, aad)
+pkg: ./core/dnx/compat
+run: ^TestAEADBindsTheDomainTag$
+
+id: hash-parse-lowercase-only
+file: core/hash/hash.go
+find: (c < 'a' || c > 'f')
+replace: (c < 'a' || c > 'f') && (c < 'A' || c > 'F')
+pkg: ./core/hash
+run: ^TestParseAcceptsOnlyCanonicalHex$
+
+id: hash-frombytes-length
+file: core/hash/hash.go
+find: if len(b) != Size {
+replace: if len(b) < Size {
+pkg: ./core/hash
+run: ^TestFromBytesRequiresExactlyThirtyTwo$
+
+id: cdc-max-within-chunk-limit
+file: core/cdc/cdc.go
+find: case g.Max > MaxChunkSize:
+replace: case g.Max > 2*MaxChunkSize:
+pkg: ./core/cdc
+run: ^TestValidateRefusesUnusableGeometry$
+
+id: cdc-mask-is-2n-minus-1
+file: core/cdc/cdc.go
+find: case g.Mask == 0 || g.Mask&(g.Mask+1) != 0:
+replace: case g.Mask == 0:
+pkg: ./core/cdc
+run: ^TestValidateRefusesUnusableGeometry$
+
+id: cdc-max-exceeds-min
+file: core/cdc/cdc.go
+find: case g.Max <= g.Min:
+replace: case g.Max < g.Min:
+pkg: ./core/cdc
+run: ^TestValidateRefusesUnusableGeometry$
+
+id: cdc-new-validates
+file: core/cdc/cdc.go
+find: if err := g.Validate(); err != nil {\n\t\treturn nil, err\n\t}\n\treturn &Chunker
+replace: return &Chunker
+pkg: ./core/cdc
+run: ^TestValidateRefusesUnusableGeometry$
+
+id: wire-varint-minimal
+file: core/internal/wire/wire.go
+find: case n > 1 && r.b[r.off+n-1] == 0:
+replace: case n > 1 && r.b[r.off+n-1] == 0 && false:
+pkg: ./core/internal/wire
+run: ^TestVarintsMustBeMinimalAndBounded$
+
+id: wire-lenbytes-limit
+file: core/internal/wire/wire.go
+find: if n > uint64(max) {
+replace: if n > uint64(max)+1 {
+pkg: ./core/internal/wire
+run: ^TestLenBytesHonorsTheCallersLimit$
+
+id: wire-done-refuses-trailing
+file: core/internal/wire/wire.go
+find: if r.off != len(r.b) {
+replace: if r.off != len(r.b) && false {
+pkg: ./core/internal/wire
+run: ^TestDoneRefusesTrailingBytes$
+
+id: wire-errors-sticky
+file: core/internal/wire/wire.go
+find: if r.err != nil {\n\t\treturn nil\n\t}\n\tif n < 0 {
+replace: if n < 0 {
+pkg: ./core/internal/wire
+run: ^TestErrorsAreSticky$
+
+id: seal-domain-validated
+file: core/seal/seal.go
+find: if tag == "" {
+replace: if tag == "" && false {
+pkg: ./core/seal
+run: ^TestInvalidDomainsAreRefused$
+
+id: seal-hkdf-uses-salt
+file: core/seal/seal.go
+find: raw, err := hkdf.Key(sha256.New, master, salt[:], info, dnx.KeySize)
+replace: raw, err := hkdf.Key(sha256.New, master, nil, info, dnx.KeySize)
+pkg: ./core/seal
+run: ^TestKeysAreBoundToMasterRepoAndSalt$
+
+id: seal-hkdf-binds-repo
+file: core/seal/seal.go
+find: info := "snapshot-core/object-key/v1\x00" + tag + "\x00" + string(repo[:])
+replace: info := "snapshot-core/object-key/v1\x00" + tag + "\x00"
+pkg: ./core/seal
+run: ^TestKeysAreBoundToMasterRepoAndSalt$
+
+id: seal-budget-enforced
+file: core/seal/seal.go
+find: case k.seals >= k.limit:
+replace: case k.seals > k.limit:
+pkg: ./core/seal
+run: ^TestAKeyRefusesPastItsBudget$
+
+id: seal-destroyed-key-refuses
+file: core/seal/seal.go
+find: case k.destroyed:\n\t\tk.mu.Unlock()\n\t\treturn nil, ErrDestroyed
+replace: case false:
+pkg: ./core/seal
+run: ^TestDestroyedKeysRefuse$
+
+id: seal-argon-time-floor
+file: core/seal/keyfile.go
+find: case p.Time < minArgonTime || p.Time > maxArgonTime:
+replace: case p.Time < 1 || p.Time > maxArgonTime:
+pkg: ./core/seal
+run: ^TestKeyFileParameterBounds$
+
+id: seal-argon-time-ceiling
+file: core/seal/keyfile.go
+find: case p.Time < minArgonTime || p.Time > maxArgonTime:
+replace: case p.Time < minArgonTime:
+pkg: ./core/seal
+run: ^TestKeyFileParameterBounds$
+
+id: seal-argon-memory-floor
+file: core/seal/keyfile.go
+find: case p.Memory < minArgonMemory || p.Memory > maxArgonMemory:
+replace: case p.Memory < 8 || p.Memory > maxArgonMemory:
+pkg: ./core/seal
+run: ^TestKeyFileParameterBounds$
+
+id: seal-open-validates-before-deriving
+file: core/seal/keyfile.go
+find: if err := p.validate(); err != nil {\n\t\treturn nil, err // before derivation: a crafted file cannot demand 4 TiB\n\t}
+replace: _ = 0
+pkg: ./core/seal
+run: ^TestKeyFileParameterBounds$
+
+id: seal-passphrase-bounds
+file: core/seal/keyfile.go
+find: if len(p) == 0 || len(p) > maxPassphrase {
+replace: if len(p) > 2*maxPassphrase {
+pkg: ./core/seal
+run: ^TestPassphraseBounds$
+
+id: seal-envelope-checks-key-id
+file: core/seal/keyfile.go
+find: if kid := kr.ID(); !bytes.Equal(kid[:], id) {\n\t\tkr.Destroy()
+replace: if kid := kr.ID(); !bytes.Equal(kid[:], id) && false {\n\t\tkr.Destroy()
+pkg: ./core/seal
+run: ^TestWrapKeyringRoundTripAndWrongKMS$
+
+id: seal-x25519-wrap-only
+file: core/seal/x25519.go
+find: if w.priv == nil {
+replace: if w.priv == nil && false {
+pkg: ./core/seal
+run: ^TestX25519WrapOnlyWithoutPrivateKey$
+
+id: seal-hkdf-binds-domain
+file: core/seal/seal.go
+find: info := "snapshot-core/object-key/v1\x00" + tag + "\x00" + string(repo[:])
+replace: info := "snapshot-core/object-key/v1\x00" + "\x00" + string(repo[:])
+pkg: ./core/seal
+run: ^TestObjectKeyDerivationAndAssociatedDataArePinned$
+
+id: seal-aad-has-tag
+file: core/seal/seal.go
+find: a = append(a, k.tag...)
+replace: a = append(a, ""...)
+pkg: ./core/seal
+run: ^TestObjectKeyDerivationAndAssociatedDataArePinned$
+
+id: seal-key-id-derivation
+file: core/seal/seal.go
+find: "snapshot-core/key-id/v1"
+replace: "snapshot-core/key-id/v2"
+pkg: ./core/seal
+run: ^TestObjectKeyDerivationAndAssociatedDataArePinned$
+
+id: seal-keyfile-aad-binds-header
+file: core/seal/keyfile.go
+find: return append(append([]byte(keyFileTag), 0), header...)
+replace: return append([]byte(keyFileTag), 0)
+pkg: ./core/seal
+run: ^TestKeyFileFormatIsPinned$
+
+id: redcheck-passes-build-tags
+file: tools/redcheck/redcheck.go
+find: args = append(args, "-tags", strings.Join(tags, ","))
+replace: _ = tags
+pkg: ./tools/redcheck
+run: ^TestBuildTaggedTestIsRunWithItsTag$
+
+id: blob-name-no-dot-segments
+file: core/blob/port.go
+find: if seg[0] == '.' {
+replace: if seg[0] == '.' && false {
+pkg: ./core/blob
+run: ^TestValidName$
+
+id: blob-name-charset
+file: core/blob/port.go
+find: if (c < 'a' || c > 'z') && (c < '0' || c > '9')
+replace: if (c < 'A' || c > 'z') && (c < '0' || c > '9')
+pkg: ./core/blob
+run: ^TestValidName$
+
+id: blob-name-depth
+file: core/blob/port.go
+find: if len(segs) > MaxDepth {
+replace: if len(segs) > MaxDepth+1 {
+pkg: ./core/blob
+run: ^TestValidName$
+
+id: blob-nodelete-forbids
+file: core/blob/port.go
+find: func (noDelete) Delete(context.Context, string) error { return ErrDeleteForbidden }
+replace: func (noDelete) unused() {}
+pkg: ./core/blob
+run: ^TestNoDeleteForbidsOnlyDelete$
+
+id: blob-copyexact-refuses-long-body
+file: core/blob/helpers.go
+find: if m > 0 {
+replace: if m > 1 {
+pkg: ./core/blob/mem
+run: ^TestContract$/^PutSizeMismatchLeavesNothing$
+
+id: blob-list-limit-cap
+file: core/blob/helpers.go
+find: if limit < 1 || limit > MaxListPage {
+replace: if limit < 1 {
+pkg: ./core/blob/mem
+run: ^TestContract$/^ListLimits$
+
+id: blob-root-refuses-empty
+file: core/blob/helpers.go
+find: if len(next) == 0 {\n\t\treturn ErrEmptyRoot
+replace: if false {\n\t\treturn ErrEmptyRoot
+pkg: ./core/blob/mem
+run: ^TestContract$/^RootValueLimits$
+
+id: mem-put-if-absent
+file: core/blob/mem/mem.go
+find: if _, ok := s.objects[name]; ok {
+replace: if _, ok := s.objects[name]; ok && false {
+pkg: ./core/blob/mem
+run: ^TestContract$/^PutExistingRefused$
+
+id: mem-swap-compares-version
+file: core/blob/mem/mem.go
+find: if s.version != expected {
+replace: if s.version != expected && false {
+pkg: ./core/blob/mem
+run: ^TestContract$/^StaleSwapRefused$
+
+id: mem-versions-are-fresh
+file: core/blob/mem/mem.go
+find: s.root, s.version = bytes.Clone(next), v
+replace: v = blob.Version(next)\n\ts.root, s.version = bytes.Clone(next), v
+pkg: ./core/blob/mem
+run: ^TestContract$/^VersionsNeverRepeat$
+
+id: mutation-env-reaches-test
+file: tools/internal/mutation/mutation.go
+find: cmd.Env = append(os.Environ(), env...)
+replace: cmd.Env = os.Environ()
+pkg: ./tools/internal/mutation
+run: ^TestParseAndRunHonorEnv$
+
+id: local-put-links-never-overwrites
+file: core/blob/local/local.go
+find: if err := os.Link(tmpName, final); err != nil {
+replace: if err := os.Rename(tmpName, final); err != nil {
+pkg: ./core/blob/local
+run: ^TestContract$/^PutExistingRefused$
+
+id: local-swap-compares-version
+file: core/blob/local/local.go
+find: if cur.Version != expected {
+replace: if cur.Version != expected && false {
+pkg: ./core/blob/local
+run: ^TestContract$/^StaleSwapRefused$
+
+id: local-root-checksum-verified
+file: core/blob/local/local.go
+find: if want := sha256.Sum256(body); !bytes.Equal(sum, want[:]) {
+replace: if want := sha256.Sum256(body); !bytes.Equal(sum, want[:]) && false {
+pkg: ./core/blob/local
+run: ^TestRootFileCorruptionIsDetected$
+
+id: local-root-written-by-rename
+file: core/blob/local/local.go
+find: if err := os.Rename(tmpName, filepath.Join(s.dir, rootName)); err != nil {
+replace: if err := os.WriteFile(filepath.Join(s.dir, rootName), encodeRoot(v, next), filePerm); err != nil {
+pkg: ./core/blob/local
+run: ^TestContract$/^RootReadsDuringSwapsAreWhole$
+
+id: local-list-dirs-sort-as-slash
+file: core/blob/local/local.go
+find: entries = append(entries, listEntry{key: base + de.Name() + "/", isDir: true})
+replace: entries = append(entries, listEntry{key: base + de.Name(), isDir: true})
+pkg: ./core/blob/local
+run: ^TestContract$/^ListPaging$
+
+id: local-filesystem-allowlist
+file: core/blob/local/local.go
+find: if !slices.Contains(AllowedFilesystems, name) {
+replace: if !slices.Contains(AllowedFilesystems, name) && false {
+pkg: ./core/blob/local
+run: ^TestOnlyAllowlistedFilesystems$
+
+id: local-open-checks-permissions
+file: core/blob/local/local.go
+find: if info.Mode().Perm()&0o077 != 0 {
+replace: if info.Mode().Perm()&0o077 != 0 && false {
+pkg: ./core/blob/local
+run: ^TestOpenRefusesAStoreOthersCanRead$
+
+id: local-open-requires-marker
+file: core/blob/local/local.go
+find: if errors.Is(err, fs.ErrNotExist) {\n\t\treturn nil, fmt.Errorf("%w: %s", ErrNotAStore, dir)\n\t}
+replace: if errors.Is(err, fs.ErrNotExist) {\n\t\tb, err = nil, nil\n\t}
+pkg: ./core/blob/local
+run: ^TestOpenRefusesADirectoryThatIsNotAStore$
+
+id: local-create-refuses-nonempty
+file: core/blob/local/local.go
+find: if len(entries) > 0 {
+replace: if len(entries) > 1000 {
+pkg: ./core/blob/local
+run: ^TestCreateRefusesANonEmptyDirectory$
+
+id: local-dirs-owner-only
+file: core/blob/internal/fsutil/fsutil.go
+find: DirPerm  = 0o700
+replace: DirPerm  = 0o755
+pkg: ./core/blob/local
+run: ^TestNothingIsWiderThanOwnerOnly$
+
+id: local-files-owner-only
+file: core/blob/internal/fsutil/fsutil.go
+find: FilePerm = 0o600
+replace: FilePerm = 0o644
+pkg: ./core/blob/local
+run: ^TestNothingIsWiderThanOwnerOnly$
+
+id: local-magic-ext4
+file: core/blob/local/local.go
+find: case 0xEF53:
+replace: case 0xEF54:
+pkg: ./core/blob/local
+run: ^TestFilesystemMagicNumbers$
+
+id: multivol-put-checks-every-volume
+file: core/blob/multivol/multivol.go
+find: for _, v := range ranked {\n\t\tif _, err := v.st.Stat(ctx, name); err == nil {
+replace: for _, v := range ranked[:0] {\n\t\tif _, err := v.st.Stat(ctx, name); err == nil {
+pkg: ./core/blob/multivol
+run: ^TestPutRefusesANameStoredOnAnotherVolume$
+
+id: multivol-list-refuses-when-a-volume-is-missing
+file: core/blob/multivol/multivol.go
+find: vols, err := s.snapshot()\n\tif err != nil {\n\t\treturn nil, err\n\t}\n\tseen := map[string]bool{}\n\tvar all []blob.Info\n\tfor _, v := range vols {\n\t\tinfos, err := v.st.List(ctx, prefix, after, limit)
+replace: vols, _ := s.snapshot()\n\tseen := map[string]bool{}\n\tvar all []blob.Info\n\tfor _, v := range vols {\n\t\tif v.st == nil {\n\t\t\tcontinue\n\t\t}\n\t\tinfos, err := v.st.List(ctx, prefix, after, limit)
+pkg: ./core/blob/multivol
+run: ^TestMissingSecondaryMakesTheStoreReadOnly$
+
+id: multivol-missing-is-not-not-found
+file: core/blob/multivol/multivol.go
+find: if missing {\n\t\treturn fmt.Errorf("%w: %s may be on it", ErrVolumeMissing, name)
+replace: if missing && false {\n\t\treturn fmt.Errorf("%w: %s may be on it", ErrVolumeMissing, name)
+pkg: ./core/blob/multivol
+run: ^TestMissingSecondaryMakesTheStoreReadOnly$
+
+id: multivol-swap-refuses-when-read-only
+file: core/blob/multivol/multivol.go
+find: vols, err := s.snapshot()\n\tif err != nil {\n\t\treturn blob.NoVersion, err\n\t}\n\treturn vols[0].st.SwapRoot(ctx, expected, next)
+replace: vols, _ := s.snapshot()\n\treturn vols[0].st.SwapRoot(ctx, expected, next)
+pkg: ./core/blob/multivol
+run: ^TestMissingSecondaryMakesTheStoreReadOnly$
+
+id: multivol-free-space-floor
+file: core/blob/multivol/multivol.go
+find: return float64(free)/float64(total) >= s.floor()
+replace: return float64(free)/float64(total) >= 0
+pkg: ./core/blob/multivol
+run: ^TestFreeSpaceFloor$
+
+id: multivol-volume-limit
+file: core/blob/multivol/multivol.go
+find: if 1+len(secondaries) > MaxVolumes {
+replace: if 1+len(secondaries) > MaxVolumes+1 {
+pkg: ./core/blob/multivol
+run: ^TestVolumeLimit$
+
+id: multivol-open-checks-volume-uuid
+file: core/blob/multivol/multivol.go
+find: case st.ID() != e.id:
+replace: case st.ID() != e.id && false:
+pkg: ./core/blob/multivol
+run: ^TestSwappedVolumeIsRefused$
+
+id: multivol-verify-compares-identity
+file: core/blob/multivol/multivol.go
+find: if err != nil || dev != v.dev || ino != v.ino {
+replace: if err != nil || (dev != v.dev || ino != v.ino) && false {
+pkg: ./core/blob/multivol
+run: ^TestVolumeSwappedWhileOpenGoesReadOnly$
+
+id: redcheck-pairs-by-scope
+file: tools/redcheck/redcheck.go
+find: pending[m[1]] = false
+replace: clear(pending)
+pkg: ./tools/redcheck
+run: ^TestInterleavedPairsAreMatchedByScope$
+
+id: redcheck-skips-testmain
+file: tools/redcheck/redcheck.go
+find: return fd.Recv == nil && testFunc.MatchString(fd.Name.Name) && fd.Name.Name != "TestMain"
+replace: return fd.Recv == nil && testFunc.MatchString(fd.Name.Name)
+pkg: ./tools/redcheck
+run: ^TestTestMainIsNotJudged$
+
+id: fsutil-lock-is-exclusive
+file: core/blob/internal/fsutil/fsutil_unix.go
+find: if err := unix.Flock(int(f.Fd()), unix.LOCK_EX); err != nil {
+replace: if err := unix.Flock(int(f.Fd()), unix.LOCK_SH); err != nil {
+pkg: ./core/blob/internal/fsutil
+run: ^TestLockIsExclusiveUntilReleased$
+
+id: fsutil-unlock-releases
+file: core/blob/internal/fsutil/fsutil_unix.go
+find: _ = unix.Flock(int(f.Fd()), unix.LOCK_UN)\n\t\t_ = f.Close()
+replace: _ = unix.LOCK_UN
+pkg: ./core/blob/internal/fsutil
+run: ^TestLockIsExclusiveUntilReleased$
+
+id: fsutil-identity-includes-inode
+file: core/blob/internal/fsutil/fsutil_unix.go
+find: return uint64(st.Dev), st.Ino, nil
+replace: return uint64(st.Dev), 0, nil
+pkg: ./core/blob/internal/fsutil
+run: ^TestIdentityTellsDirectoriesApart$
+
+id: fsutil-atomic-write-cleans-temp
+file: core/blob/internal/fsutil/fsutil.go
+find: defer os.Remove(name) // no-op after the rename
+replace: _ = name
+pkg: ./core/blob/internal/fsutil
+run: ^TestWriteFileAtomicFailureAfterTempCleansUp$
+
+id: local-put-cleans-its-temp
+file: core/blob/local/local.go
+find: defer os.Remove(tmpName) // after a successful link it is just a second name; CreateTemp makes it 0600
+replace: _ = tmpName
+pkg: ./core/blob/local
+run: ^TestPutFailureAfterTheBodyCleansItsTemp$
+
+id: local-unreadable-is-not-not-found
+file: core/blob/local/local.go
+find: f, err := os.Open(s.objectPath(name))\n\tif errors.Is(err, fs.ErrNotExist) {\n\t\treturn nil, blob.ErrNotFound\n\t}\n\tif err != nil {\n\t\treturn nil, err\n\t}
+replace: f, err := os.Open(s.objectPath(name))\n\tif err != nil {\n\t\treturn nil, blob.ErrNotFound\n\t}
+pkg: ./core/blob/local
+run: ^TestUnreadableObjectIsAnErrorNotNotFound$
+
+id: local-delete-reports-failure
+file: core/blob/local/local.go
+find: if errors.Is(err, fs.ErrNotExist) {\n\t\t\treturn nil\n\t\t}\n\t\treturn err
+replace: return nil
+pkg: ./core/blob/local
+run: ^TestDeleteReportsFailures$
+
+id: local-sweep-keeps-young-temps
+file: core/blob/local/local.go
+find: time.Since(info.ModTime()) > staleTemp
+replace: time.Since(info.ModTime()) > 0
+pkg: ./core/blob/local
+run: ^TestStaleTempFilesAreSweptAtOpen$
+
+id: local-sweep-removes-old-temps
+file: core/blob/local/local.go
+find: time.Since(info.ModTime()) > staleTemp
+replace: time.Since(info.ModTime()) < 0
+pkg: ./core/blob/local
+run: ^TestStaleTempFilesAreSweptAtOpen$
+
+id: local-root-checks-magic
+file: core/blob/local/local.go
+find: if err := r.Done(); err != nil || string(magic) != rootMagic || len(v) == 0 {
+replace: if err := r.Done(); err != nil || (string(magic) != rootMagic && false) || len(v) == 0 {
+pkg: ./core/blob/local
+run: ^TestRootFileForgeriesAreCorrupt$
+
+id: multivol-map-checksum-verified
+file: core/blob/multivol/multivol.go
+find: if want := sha256.Sum256(body); !bytes.Equal(sum, want[:]) {
+replace: if want := sha256.Sum256(body); !bytes.Equal(sum, want[:]) && false {
+pkg: ./core/blob/multivol
+run: ^TestCorruptOrForgedVolumeMapIsRefused$
+
+id: multivol-map-count-bounded
+file: core/blob/multivol/multivol.go
+find: if string(magic) != mapMagic || version != mapV1 || n == 0 || n > MaxVolumes {
+replace: if string(magic) != mapMagic || version != mapV1 {
+pkg: ./core/blob/multivol
+run: ^TestCorruptOrForgedVolumeMapIsRefused$
+
+id: multivol-add-volume-rolls-back
+file: core/blob/multivol/multivol.go
+find: s.vols = append(s.vols, v)\n\tif err := s.writeMap(); err != nil {\n\t\ts.vols = s.vols[:len(s.vols)-1]
+replace: s.vols = append(s.vols, v)\n\tif err := s.writeMap(); err != nil {\n\t\t_ = 0
+pkg: ./core/blob/multivol
+run: ^TestAddVolumeWhenReadOnlyOrFailingChangesNothing$
+
+id: multivol-custom-floor
+file: core/blob/multivol/multivol.go
+find: if s.opts.Floor > 0 {\n\t\treturn s.opts.Floor
+replace: if s.opts.Floor > 0 && false {\n\t\treturn s.opts.Floor
+pkg: ./core/blob/multivol
+run: ^TestCustomFloorIsHonored$
+
+id: multivol-create-refuses-existing
+file: core/blob/multivol/multivol.go
+find: if _, err := os.Stat(filepath.Join(paths[0], mapName)); err == nil {
+replace: if _, err := os.Stat(filepath.Join(paths[0], mapName)); err == nil && false {
+pkg: ./core/blob/multivol
+run: ^TestCreateNeverOverwritesAVolumeMap$
+
+id: local-unreadable-root-is-not-no-root
+file: core/blob/local/local.go
+find: if errors.Is(err, fs.ErrNotExist) {\n\t\treturn blob.Root{}, nil\n\t}\n\tif err != nil {\n\t\treturn blob.Root{}, err\n\t}
+replace: if err != nil {\n\t\treturn blob.Root{}, nil\n\t}
+pkg: ./core/blob/local
+run: ^TestUnreadableRootIsAnErrorNeverNoRoot$
+
+id: local-list-unreadable-dir-fails
+file: core/blob/local/local.go
+find: des, err := os.ReadDir(dir)\n\tif errors.Is(err, fs.ErrNotExist) {\n\t\treturn nil\n\t}\n\tif err != nil {\n\t\treturn err\n\t}
+replace: des, err := os.ReadDir(dir)\n\tif err != nil {\n\t\treturn nil\n\t}
+pkg: ./core/blob/local
+run: ^TestUnreadableDirectoryFailsTheListing$
+
+id: local-link-error-is-not-exists
+file: core/blob/local/local.go
+find: if errors.Is(err, fs.ErrExist) {\n\t\t\treturn blob.ErrExists\n\t\t}\n\t\treturn err
+replace: return blob.ErrExists
+pkg: ./core/blob/local
+run: ^TestUnwritableDirectoryIsNeverErrExists$
+
+id: local-stat-permission-is-not-not-found
+file: core/blob/local/local.go
+find: info, err := os.Stat(s.objectPath(name))\n\tif errors.Is(err, fs.ErrNotExist) {\n\t\treturn blob.Info{}, blob.ErrNotFound\n\t}
+replace: info, err := os.Stat(s.objectPath(name))\n\tif err != nil {\n\t\treturn blob.Info{}, blob.ErrNotFound\n\t}
+pkg: ./core/blob/local
+run: ^TestStatPermissionErrorIsNotNotFound$
+
+id: local-swap-requires-lock
+file: core/blob/local/local.go
+find: unlock, err := fsutil.Lock(filepath.Join(s.dir, lockName))\n\tif err != nil {\n\t\treturn blob.NoVersion, err\n\t}
+replace: unlock, err := fsutil.Lock(filepath.Join(s.dir, lockName))\n\tif err != nil {\n\t\tunlock = func() {}\n\t}
+pkg: ./core/blob/local
+run: ^TestSwapRootRefusesWithoutItsLock$
+
+id: s3-probe-checks-if-none-match
+file: core/blob/s3/s3.go
+find: statusOf(err) != http.StatusPreconditionFailed {\n\t\treturn unsafe("a second PUT with If-None-Match
+replace: statusOf(err) != http.StatusPreconditionFailed && false {\n\t\treturn unsafe("a second PUT with If-None-Match
+pkg: ./core/blob/s3
+run: ^TestProbeRefusesEndpointsThatIgnoreConditionalWrites$
+
+id: s3-probe-checks-if-match
+file: core/blob/s3/s3.go
+find: statusOf(err) != http.StatusPreconditionFailed {\n\t\treturn unsafe("a PUT with a wrong If-Match ETag
+replace: statusOf(err) != http.StatusPreconditionFailed && false {\n\t\treturn unsafe("a PUT with a wrong If-Match ETag
+pkg: ./core/blob/s3
+run: ^TestProbeRefusesEndpointsThatIgnoreConditionalWrites$
+
+id: s3-put-if-absent
+file: core/blob/s3/s3.go
+find: _, err := s.put(ctx, s.objectKey(name), body, size, "*", "")
+replace: _, err := s.put(ctx, s.objectKey(name), body, size, "", "")
+pkg: ./core/blob/s3
+run: ^TestContractAgainstTheInProcessServer$/^PutExistingRefused$
+
+id: s3-swap-sends-if-match
+file: core/blob/s3/s3.go
+find: ifNoneMatch, ifMatch := "", string(expected)
+replace: ifNoneMatch, ifMatch := "", ""
+pkg: ./core/blob/s3
+run: ^TestContractAgainstTheInProcessServer$/^StaleSwapRefused$
+
+id: s3-swap-recognizes-own-write
+file: core/blob/s3/s3.go
+find: if rerr == nil && bytes.Equal(cur, body) {
+replace: if rerr == nil && bytes.Equal(cur, body) && false {
+pkg: ./core/blob/s3
+run: ^TestSwapRootRecognizesItsOwnWriteAfterALostResponse$
+
+id: s3-root-nonce-is-fresh
+file: core/blob/s3/s3.go
+find: nonce, err := random(nonceSize)
+replace: nonce, err := make([]byte, nonceSize), error(nil)
+pkg: ./core/blob/s3
+run: ^TestContractAgainstTheInProcessServer$/^VersionsNeverRepeat$
+
+id: s3-refuses-plain-http
+file: core/blob/s3/s3.go
+find: && !o.AllowHTTP {
+replace: && false {
+pkg: ./core/blob/s3
+run: ^TestPlainHTTPIsRefusedUnlessAllowed$
+
+id: s3-validates-prefix
+file: core/blob/s3/s3.go
+find: case o.Prefix != "" && (!strings.HasSuffix(o.Prefix, "/") || blob.ValidName(strings.TrimSuffix(o.Prefix, "/")) != nil):
+replace: case o.Prefix == "\x00":
+pkg: ./core/blob/s3
+run: ^TestOptionsAreValidated$
+
+id: s3-requests-sse-kms
+file: core/blob/s3/s3.go
+find: if s.sseKMS != "" {
+replace: if s.sseKMS != "" && false {
+pkg: ./core/blob/s3
+run: ^TestSSEKMSIsRequestedWhenConfigured$
+
+id: s3-short-root-is-corrupt
+file: core/blob/s3/s3.go
+find: if len(body) <= nonceSize || len(body) > nonceSize+blob.MaxRootSize {
+replace: if len(body) < 0 || len(body) > nonceSize+blob.MaxRootSize {
+pkg: ./core/blob/s3
+run: ^TestTruncatedRootObjectIsCorrupt$
+
+id: s3-list-reads-past-short-pages
+file: core/blob/s3/s3.go
+find: if !aws.ToBool(page.IsTruncated) || page.NextContinuationToken == nil {
+replace: if true {
+pkg: ./core/blob/s3
+run: ^TestListFillsPagesAcrossShortServerPages$
+
+id: pack-refuses-oversized-chunks
+file: core/pack/pack.go
+find: case len(data) > MaxChunkSize:
+replace: case len(data) > MaxChunkSize+1:
+pkg: ./core/pack
+run: ^TestWriterLimits$
+
+id: pack-refuses-duplicates
+file: core/pack/pack.go
+find: if _, ok := w.entries[h]; ok {\n\t\treturn ErrDup
+replace: if _, ok := w.entries[h]; ok && false {\n\t\treturn ErrDup
+pkg: ./core/pack
+run: ^TestWriterLimits$
+
+id: pack-respects-its-size-limit
+file: core/pack/pack.go
+find: if len(w.entries) > 0 && len(w.buf)+len(sealed)+indexBound(len(w.entries)+1)+TrailerSize > w.maxSize {
+replace: if false {
+pkg: ./core/pack
+run: ^TestWriterLimits$
+
+id: pack-compresses-only-when-smaller
+file: core/pack/pack.go
+find: if z := w.codec.enc.EncodeAll(data, nil); len(z) < len(data) {
+replace: if z := w.codec.enc.EncodeAll(data, nil); len(z) < len(data)+1<<20 {
+pkg: ./core/pack
+run: ^TestCompressesOnlyWhenItHelps$
+
+id: pack-bytes-must-hash-to-name
+file: core/pack/pack.go
+find: if Name(b) != name {
+replace: if Name(b) != name && false {
+pkg: ./core/pack
+run: ^TestTamperingAnywhereIsCorrupt$
+
+id: pack-frame-rehashed-on-read
+file: core/pack/pack.go
+find: if hash.Sum(data) != e.Hash {
+replace: if hash.Sum(data) != e.Hash && false {
+pkg: ./core/pack
+run: ^TestHostileFramesAreRefused$
+
+id: pack-frame-length-checked
+file: core/pack/pack.go
+find: if len(data) != int(e.RawLen) {
+replace: if len(data) != int(e.RawLen) && false {
+pkg: ./core/pack
+run: ^TestHostileFramesAreRefused$
+
+id: pack-format-header-magic
+file: core/pack/pack.go
+find: headerMagic  = "SCPK"
+replace: headerMagic  = "SCPX"
+pkg: ./core/pack
+run: ^TestAV1PackStillReads$
+
+id: pack-format-trailer-magic
+file: core/pack/pack.go
+find: trailerMagic = "SCPE"
+replace: trailerMagic = "SCPX"
+pkg: ./core/pack
+run: ^TestAV1PackStillReads$
+
+id: pack-format-index-magic
+file: core/pack/pack.go
+find: indexMagic   = "SCPI"
+replace: indexMagic   = "SCPX"
+pkg: ./core/pack
+run: ^TestAV1PackStillReads$
+
+id: pack-format-version
+file: core/pack/pack.go
+find: version      = 1
+replace: version      = 2
+pkg: ./core/pack
+run: ^TestAV1PackStillReads$
+
+id: pack-trailer-bounded-by-the-pack
+file: core/pack/pack.go
+find: indexOffset < HeaderSize ||\n\t\tindexOffset+indexLen+TrailerSize != uint64(len(b)) {
+replace: indexOffset < HeaderSize {
+pkg: ./core/pack
+run: ^TestTrailerCannotPointOutsideThePack$
+
+id: pack-index-refuses-overlap
+file: core/pack/pack.go
+find: if uint64(e.Offset) < end {
+replace: if uint64(e.Offset) < end && false {
+pkg: ./core/pack
+run: ^TestForgedIndexesAreRefused$
+
+id: pack-index-strictly-sorted
+file: core/pack/pack.go
+find: case i > 0 && entries[i-1].Hash.Compare(e.Hash) >= 0:
+replace: case i > 0 && entries[i-1].Hash.Compare(e.Hash) > 0:
+pkg: ./core/pack
+run: ^TestForgedIndexesAreRefused$
+
+id: pack-index-frames-in-region
+file: core/pack/pack.go
+find: case stored < sealOverhead || off+stored > indexOffset:
+replace: case stored < sealOverhead:
+pkg: ./core/pack
+run: ^TestForgedIndexesAreRefused$
+
+id: pack-index-frames-clear-the-header
+file: core/pack/pack.go
+find: end := uint64(HeaderSize)
+replace: end := uint64(0)
+pkg: ./core/pack
+run: ^TestForgedIndexesAreRefused$
+
+id: pack-index-raw-length-consistent
+file: core/pack/pack.go
+find: case e.Codec == CodecRaw && stored != raw+sealOverhead:
+replace: case e.Codec == CodecRaw && false:
+pkg: ./core/pack
+run: ^TestForgedIndexesAreRefused$
+
+id: pack-index-zstd-smaller
+file: core/pack/pack.go
+find: case e.Codec == CodecZstd && stored-sealOverhead >= raw:
+replace: case e.Codec == CodecZstd && false:
+pkg: ./core/pack
+run: ^TestForgedIndexesAreRefused$
+
+id: pack-decoder-memory-bounded
+file: core/pack/pack.go
+find: zstd.WithDecoderMaxMemory(MaxChunkSize)
+replace: zstd.WithDecoderMaxMemory(1<<40)
+pkg: ./core/pack
+run: ^TestDecompressionIsBoundedInMemory$
+
+id: dedup-object-must-hash-to-its-name
+file: core/dedup/dedup.go
+find: if name != "index/"+hex.EncodeToString(sum[:]) {
+replace: if name != "index/"+hex.EncodeToString(sum[:]) && false {
+pkg: ./core/dedup
+run: ^TestIndexObjectsRefuseTamperingAndStrangers$
+
+id: dedup-first-location-wins
+file: core/dedup/dedup.go
+find: if _, dup := x.chunks[e.Hash]; dup {
+replace: if _, dup := x.chunks[e.Hash]; dup && false {
+pkg: ./core/dedup
+run: ^TestDuplicateChunksKeepTheirFirstLocation$
+
+id: dedup-format-object-magic
+file: core/dedup/dedup.go
+find: objectMagic = "SCIX"
+replace: objectMagic = "SCIY"
+pkg: ./core/dedup
+run: ^TestAV1IndexObjectStillReads$
+
+id: dedup-format-plain-magic
+file: core/dedup/dedup.go
+find: plainMagic  = "SCIP"
+replace: plainMagic  = "SCIQ"
+pkg: ./core/dedup
+run: ^TestAV1IndexObjectStillReads$
+
+id: dedup-format-version
+file: core/dedup/dedup.go
+find: version     = 1
+replace: version     = 2
+pkg: ./core/dedup
+run: ^TestAV1IndexObjectStillReads$
+
+id: dedup-packs-strictly-sorted
+file: core/dedup/dedup.go
+find: (i > 0 && bytes.Compare(prev[:], sum[:]) >= 0)
+replace: (i > 0 && bytes.Compare(prev[:], sum[:]) > 0)
+pkg: ./core/dedup
+run: ^TestForgedObjectsAreRefused$
+
+id: dedup-pack-size-bounded
+file: core/dedup/dedup.go
+find: size < pack.HeaderSize+pack.TrailerSize || size > pack.MaxPackSize ||
+replace: size < pack.HeaderSize+pack.TrailerSize ||
+pkg: ./core/dedup
+run: ^TestForgedObjectsAreRefused$
+
+id: dedup-entries-strictly-sorted
+file: core/dedup/dedup.go
+find: (j > 0 && p.Entries[j-1].Hash.Compare(e.Hash) >= 0)
+replace: (j > 0 && p.Entries[j-1].Hash.Compare(e.Hash) > 0)
+pkg: ./core/dedup
+run: ^TestForgedObjectsAreRefused$
+
+id: dedup-frames-inside-the-pack
+file: core/dedup/dedup.go
+find: off < pack.HeaderSize || off+stored > framesEnd ||
+replace: off < pack.HeaderSize || off+stored > framesEnd+1<<40 ||
+pkg: ./core/dedup
+run: ^TestForgedObjectsAreRefused$
+
+id: dedup-frames-clear-the-header
+file: core/dedup/dedup.go
+find: r.Err() != nil || off < pack.HeaderSize ||
+replace: r.Err() != nil ||
+pkg: ./core/dedup
+run: ^TestForgedObjectsAreRefused$
+
+id: dedup-codec-known
+file: core/dedup/dedup.go
+find: (e.Codec != pack.CodecRaw && e.Codec != pack.CodecZstd) ||
+replace: false ||
+pkg: ./core/dedup
+run: ^TestForgedObjectsAreRefused$
+
+id: memstore-verifies-on-read
+file: core/chunk/memstore/memstore.go
+find: if hash.Sum(out) != h {
+replace: if hash.Sum(out) != h && false {
+pkg: ./core/chunk/memstore
+run: ^TestContract$/^FlippedByteIsCorrupt$
+
+id: memstore-cas-compares
+file: core/chunk/memstore/memstore.go
+find: if s.root != expected {
+replace: if s.root != expected && false {
+pkg: ./core/chunk/memstore
+run: ^TestContract$/^StaleCASChangesNothing$
+
+id: memstore-root-must-be-stored
+file: core/chunk/memstore/memstore.go
+find: if _, ok := s.chunks[next]; !ok || next.IsZero() {
+replace: if next.IsZero() {
+pkg: ./core/chunk/memstore
+run: ^TestContract$/^RootMustBeStored$
+
+id: memstore-chunk-limit
+file: core/chunk/memstore/memstore.go
+find: if len(data) > chunk.MaxChunkSize {
+replace: if len(data) > chunk.MaxChunkSize+1 {
+pkg: ./core/chunk/memstore
+run: ^TestContract$/^TooLarge$
+
+id: packstore-uploads-before-publishing
+file: core/chunk/packstore/packstore.go
+find: if err := s.upload(ctx, toUpload); err != nil {\n\t\treturn err\n\t}
+replace: _ = toUpload
+pkg: ./core/chunk/packstore
+run: ^TestPublishedChunksAreDurableBeforeTheRoot$
+
+id: packstore-root-must-be-stored
+file: core/chunk/packstore/packstore.go
+find: if next.IsZero() || (!s.index.Has(next) && (s.pending == nil || !s.pending.Has(next))) {
+replace: if next.IsZero() {
+pkg: ./core/chunk/packstore
+run: ^TestContractOverEveryBackend$/^mem$/^RootMustBeStored$
+
+id: packstore-refreshes-on-a-miss
+file: core/chunk/packstore/packstore.go
+find: if attempt == 0 {\n\t\t\tif err := s.refresh(ctx); err != nil {\n\t\t\t\treturn dedup.Location{}
+replace: if attempt == 99 {\n\t\t\tif err := s.refresh(ctx); err != nil {\n\t\t\t\treturn dedup.Location{}
+pkg: ./core/chunk/packstore
+run: ^TestWritersOnOneBackendSeeEachOther$
+
+id: packstore-retries-manifest-conflicts
+file: core/chunk/packstore/packstore.go
+find: if !errors.Is(err, blob.ErrRootConflict) {\n\t\t\treturn err\n\t\t}\n\t\t// Someone else changed the manifest: refresh and re-apply.
+replace: return chunk.ErrRootConflict
+pkg: ./core/chunk/packstore
+run: ^TestManifestConflictsRetryThenGiveUp$
+
+id: packstore-bounded-swap-attempts
+file: core/chunk/packstore/packstore.go
+find: for attempt := 0; attempt < MaxSwapAttempts; attempt++ {
+replace: for attempt := 0; attempt < MaxSwapAttempts+5; attempt++ {
+pkg: ./core/chunk/packstore
+run: ^TestManifestConflictsRetryThenGiveUp$
+
+id: packstore-refreshes-a-stale-view
+file: core/chunk/packstore/packstore.go
+find: if m.root != expected && attempt == 0 {
+replace: if false && m.root != expected && attempt == 0 {
+pkg: ./core/chunk/packstore
+run: ^TestStaleViewIsRefreshedBeforeAConflict$
+
+id: packstore-verifies-cache-hits
+file: core/chunk/packstore/packstore.go
+find: return verified(h, bytes.Clone(data))
+replace: return bytes.Clone(data), nil
+pkg: ./core/chunk/packstore
+run: ^TestCachedReadsAreVerified$
+
+id: packstore-keeps-failed-uploads
+file: core/chunk/packstore/packstore.go
+find: s.unuploaded = append(s.unuploaded, b)
+replace: _ = b
+pkg: ./core/chunk/packstore
+run: ^TestFailedUploadStaysReadableAndIsRetried$
+
+id: packstore-serves-inflight-packs
+file: core/chunk/packstore/packstore.go
+find: local := s.inflight[loc.Pack.Name]
+replace: local := []byte(nil)
+pkg: ./core/chunk/packstore
+run: ^TestFailedUploadStaysReadableAndIsRetried$
+
+id: packstore-uploads-every-pack-in-a-batch
+file: core/chunk/packstore/packstore.go
+find: if err != nil && first == nil {\n\t\t\tfirst = fmt.Errorf("packstore: uploading %s: %w", b.Name, err)\n\t\t}
+replace: if err != nil {\n\t\t\treturn fmt.Errorf("packstore: uploading %s: %w", b.Name, err)\n\t\t}
+pkg: ./core/chunk/packstore
+run: ^TestFailedUploadStaysReadableAndIsRetried$
+
+id: cache-serves-hits
+file: core/blob/cache/cache.go
+find: el, hit := s.items[key]
+replace: el, hit := s.items[key+"-never"]
+pkg: ./core/blob/cache
+run: ^TestRepeatedRangeReadsHitTheCache$
+
+id: cache-only-immutable
+file: core/blob/cache/cache.go
+find: return strings.HasPrefix(name, "packs/") || strings.HasPrefix(name, "index/")
+replace: return true
+pkg: ./core/blob/cache
+run: ^TestOnlyImmutableObjectsAreCached$
+
+id: cache-respects-its-cap
+file: core/blob/cache/cache.go
+find: for s.used > s.max && s.lru.Len() > 0 {
+replace: for false && s.used > s.max && s.lru.Len() > 0 {
+pkg: ./core/blob/cache
+run: ^TestSizeCapEvictsLeastRecentlyUsed$
+
+id: cache-verifies-entries
+file: core/blob/cache/cache.go
+find: if got := sha256.Sum256(content); !bytes.Equal(got[:], sum) {
+replace: if got := sha256.Sum256(content); !bytes.Equal(got[:], sum) && false {
+pkg: ./core/blob/cache
+run: ^TestDamagedEntryIsRefetched$
+
+id: cache-delete-evicts
+file: core/blob/cache/cache.go
+find: for key := range s.byName[name] {
+replace: for key := range s.byName[name+"-never"] {
+pkg: ./core/blob/cache
+run: ^TestDeleteEvictsAndRestartsReuseTheCache$
+
+id: cache-reloads-after-restart
+file: core/blob/cache/cache.go
+find: if err := s.reload(); err != nil {
+replace: if err := error(nil); err != nil {
+pkg: ./core/blob/cache
+run: ^TestDeleteEvictsAndRestartsReuseTheCache$
+
+id: cache-evicts-least-recent
+file: core/blob/cache/cache.go
+find: s.lru.MoveToFront(el)
+replace: _ = el
+pkg: ./core/blob/cache
+run: ^TestHitsRefreshRecency$
+
+id: redcheck-judges-contract-callers
+file: tools/redcheck/redcheck.go
+find: if len(contracts) > 0 {
+replace: if len(contracts) > 0 && false {
+pkg: ./tools/redcheck
+run: ^TestContractChangeIsJudgedOnTheTestsThatRunIt$
+
+id: redcheck-contract-alias
+file: tools/redcheck/redcheck.go
+find: locals[imp.Name.Name] = true
+replace: locals[path.Base(p)] = true
+pkg: ./tools/redcheck
+run: ^TestPassingContractChangeIsBlocked$
+
+id: redcheck-contract-callers-only
+file: tools/redcheck/redcheck.go
+find: if uses {
+replace: if uses || true {
+pkg: ./tools/redcheck
+run: ^TestContractChangeIsJudgedOnTheTestsThatRunIt$
+
+id: pack-writer-add-after-finish
+file: core/pack/pack.go
+find: case w.finished:\n\t\treturn errors.New("pack: writer is finished")
+replace: case w.finished && false:\n\t\treturn errors.New("pack: writer is finished")
+pkg: ./core/pack
+run: ^TestAFinishedWriterRefusesMore$
+
+id: pack-writer-finishes-once
+file: core/pack/pack.go
+find: if w.finished {\n\t\treturn Built{}, errors.New("pack: writer is finished")\n\t}
+replace: if w.finished && false {\n\t\treturn Built{}, errors.New("pack: writer is finished")\n\t}
+pkg: ./core/pack
+run: ^TestAFinishedWriterRefusesMore$
+
+id: pack-index-must-end
+file: core/pack/pack.go
+find: if err := r.Done(); err != nil {\n\t\treturn nil, fmt.Errorf("%w: index: %w", ErrCorrupt, err)
+replace: if err := r.Err(); err != nil {\n\t\treturn nil, fmt.Errorf("%w: index: %w", ErrCorrupt, err)
+pkg: ./core/pack
+run: ^TestIndexPlaintextMustBeWhole$
+
+id: cache-reload-drops-junk
+file: core/blob/cache/cache.go
+find: if err != nil || ierr != nil {
+replace: if (err != nil && false) || ierr != nil {
+pkg: ./core/blob/cache
+run: ^TestRestartKeepsOnlyWholeEntries$
+
+id: cache-reload-drops-temps
+file: core/blob/cache/cache.go
+find: if !de.Type().IsRegular() || strings.HasPrefix(de.Name(), ".") {
+replace: if !de.Type().IsRegular() {
+pkg: ./core/blob/cache
+run: ^TestRestartKeepsOnlyWholeEntries$
+
+id: cache-reload-regular-only
+file: core/blob/cache/cache.go
+find: if !de.Type().IsRegular() || strings.HasPrefix(de.Name(), ".") {
+replace: if strings.HasPrefix(de.Name(), ".") {
+pkg: ./core/blob/cache
+run: ^TestRestartKeepsOnlyWholeEntries$
+
+id: cache-big-reads-pass-through
+file: core/blob/cache/cache.go
+find: if int64(len(head)) > s.entryLimit {
+replace: if int64(len(head)) > s.entryLimit && false {
+pkg: ./core/blob/cache
+run: ^TestReadsPastTheEntryLimitPassThrough$
+
+id: cache-oversize-does-not-flush
+file: core/blob/cache/cache.go
+find: if int64(len(b)) > s.max {
+replace: if int64(len(b)) > s.max && false {
+pkg: ./core/blob/cache
+run: ^TestAnObjectBiggerThanTheCacheDoesNotFlushIt$
+
+id: cache-read-error-returned
+file: core/blob/cache/cache.go
+find: head, err := io.ReadAll(io.LimitReader(rc, s.entryLimit+1))\n\tif err != nil {
+replace: head, err := io.ReadAll(io.LimitReader(rc, s.entryLimit+1))\n\tif err != nil && false {
+pkg: ./core/blob/cache
+run: ^TestAFailedBackendReadIsReturnedAndNotKept$
+
+id: cache-read-error-closes
+file: core/blob/cache/cache.go
+find: _ = rc.Close()\n\t\treturn nil, err
+replace: return nil, err
+pkg: ./core/blob/cache
+run: ^TestAFailedBackendReadIsReturnedAndNotKept$
+
+id: cache-default-max
+file: core/blob/cache/cache.go
+find: if o.MaxBytes == 0 {
+replace: if o.MaxBytes == 0 && false {
+pkg: ./core/blob/cache
+run: ^TestZeroMaxBytesIsTheDefault$
+
+id: cache-store-failure-is-a-miss
+file: core/blob/cache/cache.go
+find: tmp, err := os.CreateTemp(s.dir, ".tmp-*")\n\tif err != nil {
+replace: tmp, err := os.CreateTemp(s.dir, ".tmp-*")\n\tif err != nil && false {
+pkg: ./core/blob/cache
+run: ^TestACacheThatCannotWriteStillServesReads$
+
+id: manifest-plain-magic
+file: core/chunk/packstore/manifest.go
+find: string(magic) != plainMagic || v != manifestV1 || n > maxIndexes {
+replace: (string(magic) != plainMagic && false) || v != manifestV1 || n > maxIndexes {
+pkg: ./core/chunk/packstore
+run: ^TestForgedManifestsAreRefused$
+
+id: manifest-plain-version
+file: core/chunk/packstore/manifest.go
+find: string(magic) != plainMagic || v != manifestV1 || n > maxIndexes {
+replace: string(magic) != plainMagic || (v != manifestV1 && false) || n > maxIndexes {
+pkg: ./core/chunk/packstore
+run: ^TestForgedManifestsAreRefused$
+
+id: manifest-indexes-strictly-increasing
+file: core/chunk/packstore/manifest.go
+find: bytes.Compare(m.indexes[i-1][:], s[:]) >= 0
+replace: bytes.Compare(m.indexes[i-1][:], s[:]) > 0
+pkg: ./core/chunk/packstore
+run: ^TestForgedManifestsAreRefused$
+
+id: manifest-condemned-kind
+file: core/chunk/packstore/manifest.go
+find: (e.kind != condemnedPack && e.kind != condemnedIndex)
+replace: (e.kind != condemnedPack && e.kind != condemnedIndex && false)
+pkg: ./core/chunk/packstore
+run: ^TestForgedManifestsAreRefused$
+
+id: manifest-must-end
+file: core/chunk/packstore/manifest.go
+find: if err := r.Done(); err != nil {\n\t\treturn manifest{}, fmt.Errorf("%w: %w", ErrManifest, err)
+replace: if err := r.Err(); err != nil {\n\t\treturn manifest{}, fmt.Errorf("%w: %w", ErrManifest, err)
+pkg: ./core/chunk/packstore
+run: ^TestForgedManifestsAreRefused$
+
+id: packstore-open-requires-blobs-and-keys
+file: core/chunk/packstore/packstore.go
+find: if o.Blobs == nil || o.Keys == nil {
+replace: if (o.Blobs == nil || o.Keys == nil) && false {
+pkg: ./core/chunk/packstore
+run: ^TestOpenRefusesUnusableOptions$
+
+id: packstore-pack-size-bounds
+file: core/chunk/packstore/packstore.go
+find: if o.PackSize < pack.HeaderSize+pack.TrailerSize || o.PackSize > pack.MaxPackSize {
+replace: if (o.PackSize < pack.HeaderSize+pack.TrailerSize || o.PackSize > pack.MaxPackSize) && false {
+pkg: ./core/chunk/packstore
+run: ^TestOpenRefusesUnusableOptions$
+
+id: packstore-missing-index-named
+file: core/chunk/packstore/packstore.go
+find: return nil, fmt.Errorf("packstore: index object %s listed by the manifest: %w", name, err)
+replace: return nil, err
+pkg: ./core/chunk/packstore
+run: ^TestAMissingOrAlteredIndexObjectFailsOpen$
+
+id: packstore-index-decode-is-corrupt
+file: core/chunk/packstore/packstore.go
+find: return nil, fmt.Errorf("%w: %w", chunk.ErrCorrupt, err)\n\t}\n\treturn infos, nil
+replace: return nil, err\n\t}\n\treturn infos, nil
+pkg: ./core/chunk/packstore
+run: ^TestAMissingOrAlteredIndexObjectFailsOpen$
+
+id: packstore-missing-pack-is-corrupt
+file: core/chunk/packstore/packstore.go
+find: if errors.Is(err, blob.ErrNotFound) {\n\t\t\treturn nil, fmt.Errorf("%w: %s is in pack %s, which is missing"
+replace: if errors.Is(err, blob.ErrNotFound) && false {\n\t\t\treturn nil, fmt.Errorf("%w: %s is in pack %s, which is missing"
+pkg: ./core/chunk/packstore
+run: ^TestAChunkWhosePackIsGoneIsCorrupt$
+
+id: packstore-cache-evicts
+file: core/chunk/packstore/cache.go
+find: for c.used > c.max {
+replace: for c.used > c.max && false {
+pkg: ./core/chunk/packstore
+run: ^TestTheChunkCacheIsByteBounded$
+
+id: packstore-cache-skips-oversize
+file: core/chunk/packstore/cache.go
+find: if c == nil || len(data) > c.max {
+replace: if c == nil {
+pkg: ./core/chunk/packstore
+run: ^TestTheChunkCacheIsByteBounded$
+
+id: redcheck-default-base-prefers-main
+file: tools/redcheck/redcheck.go
+find: if _, err := c.git("rev-parse", "--verify", "--quiet", "main^{commit}"); err == nil {
+replace: if _, err := c.git("rev-parse", "--verify", "--quiet", "main^{commit}"); err == nil && false {
+pkg: ./tools/redcheck
+run: ^TestBaseDefaultsToMainThenTheRootCommit$
+
+id: redcheck-default-base-falls-back
+file: tools/redcheck/redcheck.go
+find: if _, err := c.git("rev-parse", "--verify", "--quiet", "main^{commit}"); err == nil {
+replace: if _, err := c.git("rev-parse", "--verify", "--quiet", "main^{commit}"); err == nil || true {
+pkg: ./tools/redcheck
+run: ^TestBaseDefaultsToMainThenTheRootCommit$
+
+id: redcheck-caller-skip-not-judged
+file: tools/redcheck/redcheck.go
+find: if callers[dir+"\x00"+n] && r.action == "skip" && !r.panicked {
+replace: if callers[dir+"\x00"+n] && r.action == "skip" && !r.panicked && false {
+pkg: ./tools/redcheck
+run: ^TestAContractCallerThatSkipsIsNotJudged$
+
+id: redcheck-all-callers-skipped
+file: tools/redcheck/redcheck.go
+find: if ran == 0 && skipped > 0 {
+replace: if ran == 0 && skipped > 0 && false {
+pkg: ./tools/redcheck
+run: ^TestAContractCallerThatSkipsIsNotJudged$
+
+id: redcheck-written-test-beats-caller
+file: tools/redcheck/redcheck.go
+find: if seen[dir+"\x00"+name] {\n\t\t\treturn // changed in its own right beats calling a contract
+replace: if seen[dir+"\x00"+name] && false {\n\t\t\treturn // changed in its own right beats calling a contract
+pkg: ./tools/redcheck
+run: ^TestAWrittenTestThatCallsTheContractIsJudgedStrictly$
+
+id: boundary-hard-minimum
+file: core/boundary/boundary.go
+find: case s.size < s.rule.g.Min:
+replace: case s.size < s.rule.g.Min && false:
+pkg: ./core/boundary
+run: ^TestHardMinimumAndMaximum$
+
+id: boundary-hard-maximum
+file: core/boundary/boundary.go
+find: if after >= r.g.Max {
+replace: if after >= r.g.Max && false {
+pkg: ./core/boundary
+run: ^TestHardMinimumAndMaximum$
+
+id: boundary-two-entries-per-internal-node
+file: core/boundary/boundary.go
+find: case s.level >= 1 && s.n < 2:
+replace: case s.level >= 1 && s.n < 1:
+pkg: ./core/boundary
+run: ^TestInternalNodesTakeTwoEntries$
+
+id: boundary-fresh-window-per-level
+file: core/boundary/boundary.go
+find: return binary.BigEndian.Uint32(digest[4*(level%8):])
+replace: return binary.BigEndian.Uint32(digest[:])
+pkg: ./core/boundary
+run: ^TestWindowsAreFreshPerLevel$
+
+id: stream-top-has-two-children
+file: core/stream/stream.go
+find: if depth == int(r.ref.Depth) && len(es) < 2 {
+replace: if depth == int(r.ref.Depth) && len(es) < 2 && false {
+pkg: ./core/stream
+run: ^TestForgedStreamsAreCorrupt$
+
+id: stream-root-collapses
+file: core/stream/stream.go
+find: if l.total == 1 {
+replace: if l.total == 1 && lv == 0 {
+pkg: ./core/stream
+run: ^TestWriterEmitsTheDocumentedIndexFormat$|^TestAOnePieceStreamIsItsOwnRoot$
+
+id: stream-node-sum-checked
+file: core/stream/stream.go
+find: if sum != want {\n\t\t\treturn nil, 0, corrupt(
+replace: if sum != want && false {\n\t\t\treturn nil, 0, corrupt(
+pkg: ./core/stream
+run: ^TestForgeriesThatWouldReadCleanly$
+
+id: stream-level-matches-depth
+file: core/stream/stream.go
+find: if level != depth {\n\t\t\treturn nil, 0, corrupt(
+replace: if level != depth && false {\n\t\t\treturn nil, 0, corrupt(
+pkg: ./core/stream
+run: ^TestForgeriesThatWouldReadCleanly$
+
+id: stream-index-sizes-nonzero
+file: core/stream/stream.go
+find: if r.Err() != nil || e.size == 0 || carry != 0 {
+replace: if r.Err() != nil || carry != 0 {
+pkg: ./core/stream
+run: ^TestForgeriesThatWouldReadCleanly$
+
+id: mutate-timeout-applied
+file: tools/internal/mutation/mutation.go
+find: tags...), "-timeout", o.Timeout.String(), "-run", m.Run, m.Pkg)...)
+replace: tags...), "-run", m.Run, m.Pkg)...)
+pkg: ./tools/internal/mutation
+run: ^TestAHangingMutantIsKilledAtTheTimeout$
+
+id: mutate-timeout-named
+file: tools/internal/mutation/mutation.go
+find: case errors.As(err, &exitErr) && strings.Contains(out, "panic: test timed out"):
+replace: case errors.As(err, &exitErr) && strings.Contains(out, "panic: test timed out") && false:
+pkg: ./tools/internal/mutation
+run: ^TestAHangingMutantIsKilledAtTheTimeout$
+
+# Without the check, a chunk shorter than its entry makes ReadAt copy zero
+# bytes forever: this mutant is killed by the run's timeout.
+id: stream-data-length-checked
+file: core/stream/stream.go
+find: if uint64(len(b)) != want {
+replace: if uint64(len(b)) != want && false {
+pkg: ./core/stream
+run: ^TestForgedStreamsAreCorrupt$
+
+id: prolly-child-level
+file: core/prolly/prolly.go
+find: case c.level != p.level-1:
+replace: case c.level != p.level-1 && false:
+pkg: ./core/prolly
+run: ^TestForgedTreesAreCorrupt$
+
+id: prolly-child-last-key
+file: core/prolly/prolly.go
+find: case !bytes.Equal(c.lastKey(), e.key):
+replace: case !bytes.Equal(c.lastKey(), e.key) && false:
+pkg: ./core/prolly
+run: ^TestForgedTreesAreCorrupt$
+
+id: prolly-child-count
+file: core/prolly/prolly.go
+find: case c.total() != e.count:
+replace: case c.total() != e.count && false:
+pkg: ./core/prolly
+run: ^TestForgedTreesAreCorrupt$
+
+id: prolly-children-disjoint
+file: core/prolly/prolly.go
+find: case i > 0 && bytes.Compare(c.entries[0].key, p.entries[i-1].key) <= 0:
+replace: case i > 0 && bytes.Compare(c.entries[0].key, p.entries[i-1].key) <= 0 && false:
+pkg: ./core/prolly
+run: ^TestForgedTreesAreCorrupt$
+
+id: prolly-root-two-children
+file: core/prolly/prolly.go
+find: if n.level > 0 && len(n.entries) < 2 {
+replace: if n.level > 0 && len(n.entries) < 2 && false {
+pkg: ./core/prolly
+run: ^TestForgedTreesAreCorrupt$
+
+id: prolly-decode-keys-increasing
+file: core/prolly/node.go
+find: if i > 0 && bytes.Compare(n.entries[i-1].key, e.key) >= 0 {
+replace: if i > 0 && bytes.Compare(n.entries[i-1].key, e.key) >= 0 && false {
+pkg: ./core/prolly
+run: ^TestForgedTreesAreCorrupt$
+
+id: prolly-decode-stream-over-limit
+file: core/prolly/node.go
+find: if r.Err() == nil && (ref.Size <= uint64(inlineLimit) || ref.Depth > maxLevel) {
+replace: if r.Err() == nil && (ref.Size <= uint64(inlineLimit) || ref.Depth > maxLevel) && false {
+pkg: ./core/prolly
+run: ^TestForgedTreesAreCorrupt$
+
+id: prolly-decode-inline-limit
+file: core/prolly/node.go
+find: e.val.inline = r.LenBytes(inlineLimit)
+replace: e.val.inline = r.LenBytes(maxInlineLimit)
+pkg: ./core/prolly
+run: ^TestForgedTreesAreCorrupt$
+
+id: prolly-decode-key-limit
+file: core/prolly/node.go
+find: e.key = r.LenBytes(MaxKeySize)
+replace: e.key = r.LenBytes(1 << 20)
+pkg: ./core/prolly
+run: ^TestForgedTreesAreCorrupt$
+
+id: prolly-editor-key-limit
+file: core/prolly/prolly.go
+find: func (e *Editor) Put(key, val []byte) error {\n\tif len(key) > MaxKeySize {
+replace: func (e *Editor) Put(key, val []byte) error {\n\tif len(key) > MaxKeySize && false {
+pkg: ./core/prolly
+run: ^TestOversizedKeyIsRefusedWithoutAPartialWrite$
+
+id: prolly-value-inline-at-limit
+file: core/prolly/prolly.go
+find: if len(*p) > e.m.cfg.InlineLimit {
+replace: if len(*p) >= e.m.cfg.InlineLimit {
+pkg: ./core/prolly
+run: ^TestAValueOverTheInlineLimitIsAStream$
+
+id: prolly-collapse-single-child-roots
+file: core/prolly/flush.go
+find: for n.level > 0 && len(n.entries) == 1 {
+replace: for n.level > 0 && len(n.entries) == 1 && false {
+pkg: ./core/prolly
+run: ^TestIncrementalFlushEqualsBulkBuild$
+
+id: prolly-diff-skips-shared-children
+file: core/prolly/diff.go
+find: if a.parent != nil && b.parent != nil && a.parent.valid() && b.parent.valid() && equalItems(a.parent, b.parent) {
+replace: if a.parent != nil && b.parent != nil && a.parent.valid() && b.parent.valid() && equalItems(a.parent, b.parent) && false {
+pkg: ./core/prolly
+run: ^TestDiffReturnsExactlyTheChangesAndReadsLittle$
+
+id: prolly-diff-equal-roots-read-nothing
+file: core/prolly/diff.go
+find: if from.root == to.root {
+replace: if from.root == to.root && false {
+pkg: ./core/prolly
+run: ^TestDiffReturnsExactlyTheChangesAndReadsLittle$
+
+id: prolly-flush-resyncs
+file: core/prolly/flush.go
+find: if len(ch.pending) == 0 {\n\t\t\t\tbreak // resynced
+replace: if len(ch.pending) == 0 && false {\n\t\t\t\tbreak // resynced
+pkg: ./core/prolly
+run: ^TestFlushReadsOnlyAroundItsEdits$
+
+id: prolly-flush-all-deleted-is-empty
+file: core/prolly/flush.go
+find: case len(ch.nodes) == 0: // everything was deleted
+replace: case len(ch.nodes) == 0 && false: // everything was deleted
+pkg: ./core/prolly
+run: ^TestDeletingEverythingLeavesTheEmptyMap$
+
+id: prolly-flush-identical-is-no-edit
+file: core/prolly/flush.go
+find: if removed[i].child != added[j].child || removed[i].count != added[j].count {
+replace: if removed[i].child != added[j].child || removed[i].count != added[j].count || true {
+pkg: ./core/prolly
+run: ^TestANoOpFlushWritesNothing$
+
+id: prolly-flush-stops-when-nothing-changed
+file: core/prolly/flush.go
+find: if len(edits) == 0 {\n\t\t\treturn m, nil
+replace: if len(edits) == 0 && false {\n\t\t\treturn m, nil
+pkg: ./core/prolly
+run: ^TestANoOpFlushWritesNothing$
+
+id: prolly-flush-skips-unchanged-nodes
+file: core/prolly/flush.go
+find: if !existing[h] {
+replace: if !existing[h] || true {
+pkg: ./core/prolly
+run: ^TestANoOpFlushWritesNothing$
+
+id: prolly-get-read-error-surfaces
+file: core/prolly/prolly.go
+find: if n, err = m.child(ctx, n, i); err != nil {\n\t\t\treturn nil, false, err
+replace: if n, err = m.child(ctx, n, i); err != nil {\n\t\t\treturn nil, false, nil
+pkg: ./core/prolly
+run: ^TestStoreErrorsSurfaceAtEveryPoint$
+
+id: prolly-iter-error-surfaces
+file: core/prolly/prolly.go
+find: if err := it.c.advance(it.ctx); err != nil {\n\t\treturn nil, nil, false, err
+replace: if err := it.c.advance(it.ctx); err != nil {\n\t\treturn nil, nil, false, nil
+pkg: ./core/prolly
+run: ^TestStoreErrorsSurfaceAtEveryPoint$
+
+id: prolly-flush-level-error-surfaces
+file: core/prolly/flush.go
+find: if edits, err = m.applyLevel(ctx, level, edits); err != nil {\n\t\t\treturn nil, err
+replace: if edits, err = m.applyLevel(ctx, level, edits); err != nil {\n\t\t\treturn m, nil
+pkg: ./core/prolly
+run: ^TestStoreErrorsSurfaceAtEveryPoint$
+
+id: prolly-diff-send-error-surfaces
+file: core/prolly/diff.go
+find: v, err := side.c.m.materialize(d.ctx, e.val)\n\t\tif err != nil {\n\t\t\treturn Change{}, false, err
+replace: v, err := side.c.m.materialize(d.ctx, e.val)\n\t\tif err != nil {\n\t\t\treturn Change{}, false, nil
+pkg: ./core/prolly
+run: ^TestStoreErrorsSurfaceAtEveryPoint$
+
+id: prolly-store-put-error-surfaces
+file: core/prolly/flush.go
+find: if _, err := m.s.Put(ctx, b); err != nil {
+replace: if _, err := m.s.Put(ctx, b); err != nil && false {
+pkg: ./core/prolly
+run: ^TestStoreErrorsSurfaceAtEveryPoint$
+
+id: prolly-diff-fetch-error-surfaces
+file: core/prolly/diff.go
+find: if err := c.fetch(ctx); err != nil {\n\t\t\treturn err
+replace: if err := c.fetch(ctx); err != nil && false {\n\t\t\treturn err
+pkg: ./core/prolly
+run: ^TestStoreErrorsSurfaceAtEveryPoint$
+
+id: stream-write-put-error-surfaces
+file: core/stream/stream.go
+find: h, err := w.Put(ctx, data)\n\t\tif err != nil {
+replace: h, err := w.Put(ctx, data)\n\t\tif err != nil && false {
+pkg: ./core/prolly
+run: ^TestStoreErrorsSurfaceAtEveryPoint$
+
+id: stream-emit-put-error-surfaces
+file: core/stream/stream.go
+find: h, err := b.w.Put(b.ctx, encodeIndex(lv, l.entries))\n\tif err != nil {
+replace: h, err := b.w.Put(b.ctx, encodeIndex(lv, l.entries))\n\tif err != nil && false {
+pkg: ./core/prolly
+run: ^TestStoreErrorsSurfaceAtEveryPoint$
+
+id: stream-read-error-surfaces
+file: core/stream/stream.go
+find: b, err := r.rd.Get(r.ctx, h)\n\t\tif err != nil {
+replace: b, err := r.rd.Get(r.ctx, h)\n\t\tif err != nil && false {
+pkg: ./core/prolly
+run: ^TestStoreErrorsSurfaceAtEveryPoint$
+
+id: prolly-config-inline-limit
+file: core/prolly/prolly.go
+find: if c.InlineLimit < 0 || c.InlineLimit > maxInlineLimit {
+replace: if (c.InlineLimit < 0 || c.InlineLimit > maxInlineLimit) && false {
+pkg: ./core/prolly
+run: ^TestConfigIsValidated$
+
+id: prolly-child-nonempty
+file: core/prolly/prolly.go
+find: case len(c.entries) == 0:
+replace: case len(c.entries) == 0 && false:
+pkg: ./core/prolly
+run: ^TestMoreForgedTreesAreCorrupt$
+
+id: prolly-decode-value-tags
+file: core/prolly/node.go
+find: case valInline:
+replace: case valInline, 0x02:
+pkg: ./core/prolly
+run: ^TestMoreForgedTreesAreCorrupt$
+
+id: prolly-long-values-compare-by-ref
+file: core/prolly/node.go
+find: if v.ref != nil {\n\t\treturn *v.ref == *o.ref
+replace: if v.ref != nil {\n\t\treturn true
+pkg: ./core/prolly
+run: ^TestDiffReadsLongValues$
+
+id: stream-negative-offset
+file: core/stream/stream.go
+find: if off < 0 {
+replace: if off < 0 && false {
+pkg: ./core/prolly
+run: ^TestStreamRefusesImpossibleRefsAndOffsets$
+
+id: stream-write-validates-nodes
+file: core/stream/stream.go
+find: rule, err := boundary.New(c.Nodes)\n\tif err != nil {
+replace: rule, err := boundary.New(c.Nodes)\n\tif err != nil && false {
+pkg: ./core/prolly
+run: ^TestStreamRefusesImpossibleRefsAndOffsets$
+
+id: stream-write-validates-cdc
+file: core/stream/stream.go
+find: cut, err := cdc.New(r, c.CDC)\n\tif err != nil {
+replace: cut, err := cdc.New(r, c.CDC)\n\tif err != nil && false {
+pkg: ./core/prolly
+run: ^TestStreamRefusesImpossibleRefsAndOffsets$
+
+id: auth-nil-means-deny
+file: core/auth/auth.go
+find: if az == nil {\n\t\taz = DenyAll{}
+replace: if az == nil {\n\t\taz = AllowAll{}
+pkg: ./core/auth
+run: ^TestDenyAllRefusesEveryCall$
+
+id: auth-principal-checked-first
+file: core/auth/auth.go
+find: if err := p.Validate(); err != nil {\n\t\treturn err
+replace: if err := p.Validate(); err != nil && false {\n\t\treturn err
+pkg: ./core/auth
+run: ^TestPrincipalsAreValidated$
+
+id: auth-no-control-characters
+file: core/auth/auth.go
+find: if r < 0x20 || r == 0x7f {
+replace: if r < 0x20 && r == 0x7f {
+pkg: ./core/auth
+run: ^TestPrincipalsAreValidated$
+
+id: model-registry-refuses-duplicates
+file: core/model/port.go
+find: if _, dup := r.models[id]; dup {
+replace: if _, dup := r.models[id]; dup && false {
+pkg: ./core/model
+run: ^TestNewRegistryRefusesTwoModelsWithOneID$
+
+id: model-refuses-newer-formats
+file: core/model/port.go
+find: case format == 0 || format > m.FormatVersion():
+replace: case format == 0:
+pkg: ./core/model
+run: ^TestResolveKnowsOnlyItsModelsAndFormats$
+
+id: model-ids-are-copied
+file: core/model/port.go
+find: func (r *Registry) IDs() []ID { return append([]ID(nil), r.ids...) }
+replace: func (r *Registry) IDs() []ID { return r.ids }
+pkg: ./core/model
+run: ^TestARegistryCannotChange$
+
+id: object-ref-flags-zero
+file: core/object/object.go
+find: if r.Done() != nil || ref.Flags != 0 || ref.Model == 0 || ref.Root.Format == 0 {
+replace: if r.Done() != nil || ref.Model == 0 || ref.Root.Format == 0 {
+pkg: ./core/object
+run: ^TestARefIsTheDocumented46Bytes$
+
+id: object-path-dot-segments
+file: core/object/object.go
+find: if depth > MaxDepth || seg == "" || len(seg) > MaxSegmentLen || seg == "." || seg == ".." {
+replace: if depth > MaxDepth || seg == "" || len(seg) > MaxSegmentLen {
+pkg: ./core/object
+run: ^TestInvalidPathsAreRejected$
+
+id: object-path-max-depth
+file: core/object/object.go
+find: if depth > MaxDepth || seg == "" || len(seg) > MaxSegmentLen || seg == "." || seg == ".." {
+replace: if seg == "" || len(seg) > MaxSegmentLen || seg == "." || seg == ".." {
+pkg: ./core/object
+run: ^TestInvalidPathsAreRejected$
+
+id: object-path-control-characters
+file: core/object/object.go
+find: if seg[i] < 0x20 || seg[i] == 0x7f {
+replace: if seg[i] < 0x20 && seg[i] == 0x7f {
+pkg: ./core/object
+run: ^TestInvalidPathsAreRejected$
+
+id: object-get-validates-path
+file: core/object/object.go
+find: func (n *Namespace) Get(ctx context.Context, path string) (Ref, model.Model, bool, error) {\n\tif err := ValidPath(path); err != nil {
+replace: func (n *Namespace) Get(ctx context.Context, path string) (Ref, model.Model, bool, error) {\n\tif err := ValidPath(path); err != nil && false {
+pkg: ./core/object
+run: ^TestEditsRefuseInvalidPathsAndRefs$
+
+id: object-get-resolves-the-model
+file: core/object/object.go
+find: m, err := n.reg.Resolve(ref.Model, ref.Root.Format)\n\tif err != nil {
+replace: m, err := n.reg.Resolve(ref.Model, ref.Root.Format)\n\tif err != nil && false {
+pkg: ./core/object
+run: ^TestAnUnregisteredModelIsUnknownAndNothingIsRead$
+
+id: object-put-resolves-the-model
+file: core/object/object.go
+find: if _, err := e.n.reg.Resolve(ref.Model, ref.Root.Format); err != nil {
+replace: if _, err := e.n.reg.Resolve(ref.Model, ref.Root.Format); err != nil && false {
+pkg: ./core/object
+run: ^TestAnUnregisteredModelIsUnknownAndNothingIsRead$
+
+id: object-put-refuses-flags
+file: core/object/object.go
+find: if ref.Flags != 0 {
+replace: if ref.Flags != 0 && false {
+pkg: ./core/object
+run: ^TestEditsRefuseInvalidPathsAndRefs$
+
+id: object-detail-needs-one-model
+file: core/object/object.go
+find: if c.Kind != prolly.Modified || c.From.Model != c.To.Model {
+replace: if c.Kind != prolly.Modified {
+pkg: ./core/object
+run: ^TestDetailAsksTheOwningModel$
+
+id: blob-conflicts-when-both-change
+file: model/blob/blob.go
+find: return model.MergeResult{Root: ours, Conflicts: []model.Conflict{{Reason: "both sides changed the file"}}}, nil
+replace: return model.MergeResult{Root: ours}, nil
+pkg: ./model/blob
+run: ^TestBothSidesEditingIsOneConflict$
+
+id: blob-takes-theirs-change
+file: model/blob/blob.go
+find: case ours == base:\n\t\treturn model.MergeResult{Root: theirs}, nil
+replace: case ours == base:\n\t\treturn model.MergeResult{Root: ours}, nil
+pkg: ./model/blob
+run: ^TestBothSidesEditingIsOneConflict$
+
+id: blob-diff-with-itself-is-empty
+file: model/blob/blob.go
+find: if from == to {\n\t\treturn &changes{}, nil
+replace: if from == to && false {\n\t\treturn &changes{}, nil
+pkg: ./model/blob
+run: ^TestContract$
+
+id: blob-validate-reads-through
+file: model/blob/blob.go
+find: _, err = io.Copy(io.Discard, rd)
+replace: _, err = io.Copy(io.Discard, io.LimitReader(rd, 0))
+pkg: ./model/blob
+run: ^TestValidateReadsTheWholeBlob$
+
+id: blob-open-checks-the-format
+file: model/blob/blob.go
+find: if root.Format != Format {\n\t\treturn nil, fmt.Errorf(
+replace: if root.Format != Format && false {\n\t\treturn nil, fmt.Errorf(
+pkg: ./model/blob
+run: ^TestOpenRefusesAnotherFormat$
+
+id: tree-delete-against-edit-conflicts
+file: model/tree/tree.go
+find: case ours.Kind == prolly.Removed || theirs.Kind == prolly.Removed:\n\t\treturn "deleted on one side and changed on the other"
+replace: case ours.Kind == prolly.Removed || theirs.Kind == prolly.Removed:\n\t\treturn ""
+pkg: ./model/tree
+run: ^TestDeletingADirectoryAgainstAnEditIsAConflict$
+
+id: tree-applies-theirs
+file: model/tree/tree.go
+find: if err = apply(ed, ct); err == nil {
+replace: if err = error(nil); err == nil {
+pkg: ./model/tree
+run: ^TestChangesToDifferentEntriesCombine$
+
+id: tree-different-edits-conflict
+file: model/tree/tree.go
+find: case bytes.Equal(ours.To, theirs.To):
+replace: case true:
+pkg: ./model/tree
+run: ^TestConflictsPerEntry$
+
+id: tree-root-count-checked
+file: model/tree/tree.go
+find: if m.Count() != root.Size {
+replace: if m.Count() != root.Size && false {
+pkg: ./model/tree
+run: ^TestValidateChecksTheCount$
+
+id: tree-entry-format-nonzero
+file: model/tree/tree.go
+find: if e.Content.Format == 0 {
+replace: if e.Content.Format == 0 && false {
+pkg: ./model/tree
+run: ^TestAnEntryIsTheDocumented55Bytes$
+
+id: tree-paths-checked
+file: model/tree/tree.go
+find: if err := object.ValidPath(string(key)); err != nil {
+replace: if err := object.ValidPath(string(key)); err != nil && false {
+pkg: ./model/tree
+run: ^TestPathsAreCheckedOnReadAndMerge$
+
+id: merge-fast-forwards
+file: core/merge/merge.go
+find: case base.Root() == ours.Root():\n\t\treturn Result{Merged: theirs}, nil
+replace: case base.Root() == ours.Root() && false:\n\t\treturn Result{Merged: theirs}, nil
+pkg: ./core/merge
+run: ^TestFastForwardDoesNoWork$
+
+id: merge-takes-theirs
+file: core/merge/merge.go
+find: if err = z.take(ct); err == nil {
+replace: if err = error(nil); err == nil {
+pkg: ./core/merge
+run: ^TestEveryRuleOfTheTable$
+
+id: merge-delete-edit-conflicts
+file: core/merge/merge.go
+find: case oGone || tGone:\n\t\treturn z.conflict(DeleteEdit, ours, theirs, nil)
+replace: case oGone || tGone:\n\t\treturn nil
+pkg: ./core/merge
+run: ^TestEveryRuleOfTheTable$
+
+id: merge-add-add-conflicts
+file: core/merge/merge.go
+find: case ours.Kind == prolly.Added:\n\t\treturn z.conflict(AddAdd, ours, theirs, nil)
+replace: case ours.Kind == prolly.Added:\n\t\treturn nil
+pkg: ./core/merge
+run: ^TestEveryRuleOfTheTable$
+
+id: merge-model-change-conflicts
+file: core/merge/merge.go
+find: case ours.From.Model != ours.To.Model || theirs.To.Model != ours.To.Model:
+replace: case (ours.From.Model != ours.To.Model || theirs.To.Model != ours.To.Model) && false:
+pkg: ./core/merge
+run: ^TestEveryRuleOfTheTable$
+
+id: merge-model-conflicts-recorded
+file: core/merge/merge.go
+find: if len(r.Conflicts) > 0 {\n\t\treturn z.conflict(BothChanged, ours, theirs, r.Conflicts)
+replace: if len(r.Conflicts) > 0 && false {\n\t\treturn z.conflict(BothChanged, ours, theirs, r.Conflicts)
+pkg: ./core/merge
+run: ^TestEveryRuleOfTheTable$
+
+id: merge-model-error-aborts
+file: core/merge/merge.go
+find: return fmt.Errorf("merge %s: model %d: %w", ours.Path, m.ID(), err)
+replace: return nil
+pkg: ./core/merge
+run: ^TestAModelErrorAbortsTheMerge$
+
+id: merge-conflict-limit
+file: core/merge/merge.go
+find: err = z.both(co, ct); err == nil && len(z.res.Conflicts) > o.MaxConflicts {
+replace: err = z.both(co, ct); err == nil && len(z.res.Conflicts) > o.MaxConflicts && false {
+pkg: ./core/merge
+run: ^TestTooManyConflictsAbort$
+
+id: vcs-open-needs-a-repository
+file: core/vcs/vcs.go
+find: if root.IsZero() {\n\t\treturn nil, ErrNoRepo
+replace: if root.IsZero() && false {\n\t\treturn nil, ErrNoRepo
+pkg: ./core/vcs
+run: ^TestANewRepoHasMainAtAnEmptyInitialCommit$
+
+id: vcs-stale-working-set-conflicts
+file: core/vcs/vcs.go
+find: if work != prev.Hash {
+replace: if work != prev.Hash && false {
+pkg: ./core/vcs
+run: ^TestAStaleWorkingSetUpdateIsAConflict$
+
+id: vcs-conflicts-block-commits
+file: core/vcs/vcs.go
+find: } else if n > 0 {
+replace: } else if n > 0 && false {
+pkg: ./core/vcs
+run: ^TestConflictsBlockTheCommitUntilResolved$
+
+id: vcs-merge-commit-has-two-parents
+file: core/vcs/vcs.go
+find: c.Parents = append(c.Parents, theirs.Hash)
+replace: _ = theirs.Hash
+pkg: ./core/vcs
+run: ^TestConflictsBlockTheCommitUntilResolved$
+
+id: vcs-author-is-the-principal
+file: core/vcs/vcs.go
+find: Time: r.o.Clock().UTC(), Author: p.ID, Message: message}
+replace: Time: r.o.Clock().UTC(), Author: "someone", Message: message}
+pkg: ./core/vcs
+run: ^TestTheAuthorIsThePrincipal$
+
+id: vcs-branch-names-checked
+file: core/vcs/vcs.go
+find: return validName(branch)\n}
+replace: return nil\n}
+pkg: ./core/vcs
+run: ^TestInvalidBranchNamesAreRejected$
+
+id: vcs-names-refuse-dotdot
+file: core/vcs/names.go
+find: strings.Contains(n, "..") || strings.Contains(n, "//")
+replace: strings.Contains(n, "//")
+pkg: ./core/vcs
+run: ^TestInvalidBranchNamesAreRejected$
+
+id: vcs-names-refuse-lock
+file: core/vcs/names.go
+find: ||\n\t\tstrings.HasSuffix(n, "/") || strings.HasSuffix(n, ".lock")
+replace: ||\n\t\tstrings.HasSuffix(n, "/")
+pkg: ./core/vcs
+run: ^TestInvalidBranchNamesAreRejected$
+
+id: vcs-checked-out-branch-refused
+file: core/vcs/vcs.go
+find: if inUse {
+replace: if inUse && false {
+pkg: ./core/vcs
+run: ^TestDeletingACheckedOutBranchIsRefused$
+
+id: vcs-log-limit-capped
+file: core/vcs/vcs.go
+find: if limit < 1 || limit > MaxLog {
+replace: if limit < 1 {
+pkg: ./core/vcs
+run: ^TestLogIsBoundedAndHighestFirst$
+
+id: vcs-log-highest-first
+file: core/vcs/vcs.go
+find: return h[i].Height > h[j].Height
+replace: return h[i].Height < h[j].Height
+pkg: ./core/vcs
+run: ^(TestLogIsBoundedAndHighestFirst|TestMergeBase)$
+
+id: vcs-merge-base-needs-both-sides
+file: core/vcs/vcs.go
+find: if f == fromA|fromB {
+replace: if f != 0 {
+pkg: ./core/vcs
+run: ^TestMergeBase$
+
+id: vcs-every-call-authorized
+file: core/vcs/vcs.go
+find: return auth.Check(ctx, r.o.Authorizer, p, a, resource)
+replace: return nil
+pkg: ./core/vcs
+run: ^TestEveryCallIsAuthorized$
+
+id: vcs-branch-exists
+file: core/vcs/vcs.go
+find: } else if ok {\n\t\t\treturn fmt.Errorf("%w: %s", ErrBranchExists, name)
+replace: } else if ok && false {\n\t\t\treturn fmt.Errorf("%w: %s", ErrBranchExists, name)
+pkg: ./core/vcs
+run: ^TestInvalidBranchNamesAreRejected$
+
+id: vcs-tag-exists
+file: core/vcs/vcs.go
+find: } else if ok {\n\t\t\treturn fmt.Errorf("%w: %s", ErrTagExists, name)
+replace: } else if ok && false {\n\t\t\treturn fmt.Errorf("%w: %s", ErrTagExists, name)
+pkg: ./core/vcs
+run: ^TestTagsNameCommits$
+
+id: vcs-commit-kind-byte
+file: core/vcs/encode.go
+find: kindCommit     = 0x03
+replace: kindCommit     = 0x13
+pkg: ./core/vcs
+run: ^TestAFixedHistoryHasAFixedHead$
+
+id: vcs-working-set-kind-byte
+file: core/vcs/encode.go
+find: kindWorkingSet = 0x05
+replace: kindWorkingSet = 0x15
+pkg: ./core/vcs
+run: ^TestAFixedHistoryHasAFixedHead$
+
+id: vcs-commit-parents-bounded
+file: core/vcs/encode.go
+find: if r.Err() != nil || kind != kindCommit || n > 2 {
+replace: if r.Err() != nil || kind != kindCommit || n > 3 {
+pkg: ./core/vcs
+run: ^TestForgedChunksAreCorrupt$
+
+id: vcs-commit-parents-distinct
+file: core/vcs/encode.go
+find: case n == 2 && c.Parents[0] == c.Parents[1]:
+replace: case n == 2 && c.Parents[0] == c.Parents[1] && false:
+pkg: ./core/vcs
+run: ^TestForgedChunksAreCorrupt$
+
+id: vcs-commit-height-fits-parents
+file: core/vcs/encode.go
+find: case (n == 0) != (c.Height == 0):
+replace: case false:
+pkg: ./core/vcs
+run: ^TestForgedChunksAreCorrupt$
+
+id: vcs-working-set-merge-flag
+file: core/vcs/encode.go
+find: case r.Err() != nil || merging > 1:
+replace: case r.Err() != nil:
+pkg: ./core/vcs
+run: ^TestForgedChunksAreCorrupt$
+
+id: vcs-conflict-kind-range
+file: core/vcs/encode.go
+find: if c.Kind < merge.BothChanged || c.Kind > merge.ModelChange {
+replace: if c.Kind < merge.BothChanged {
+pkg: ./core/vcs
+run: ^TestForgedChunksAreCorrupt$
+
+id: vcs-conflict-side-flag
+file: core/vcs/encode.go
+find: case r.Err() != nil || present > 1:
+replace: case r.Err() != nil:
+pkg: ./core/vcs
+run: ^TestForgedChunksAreCorrupt$
+
+id: repo-wrong-key-before-decrypting
+file: core/repo/repo.go
+find: if c.KeyID != kr.ID() {
+replace: if c.KeyID != kr.ID() && false {
+pkg: ./core/repo
+run: ^TestOpenTellsAWrongKeyFromADamagedConfig$
+
+id: repo-geometry-checked-before-writing
+file: core/repo/repo.go
+find: if err := g.validate(); err != nil {\n\t\treturn nil, err\n\t}\n\tif err := auth.Check
+replace: if err := g.validate(); err != nil && false {\n\t\treturn nil, err\n\t}\n\tif err := auth.Check
+pkg: ./core/repo
+run: ^TestInitValidatesTheGeometry$
+
+id: repo-needs-a-key
+file: core/repo/repo.go
+find: if o.Blobs == nil || o.Keys == nil || o.Registry == nil {
+replace: if o.Blobs == nil || o.Registry == nil {
+pkg: ./core/repo
+run: ^TestThereIsNoRepositoryWithoutAConfigOrAKey$
+
+id: repo-init-refuses-an-existing-repository
+file: core/repo/repo.go
+find: if errors.Is(err, vcs.ErrExists) {\n\t\t\treturn nil, ErrExists
+replace: if errors.Is(err, vcs.ErrExists) && false {\n\t\t\treturn nil, ErrExists
+pkg: ./core/repo
+run: ^TestInitThenOpen$
+
+id: repo-open-finds-no-repository
+file: core/repo/repo.go
+find: if errors.Is(err, blob.ErrNotFound) {\n\t\treturn Config{}, ErrNoRepo
+replace: if errors.Is(err, blob.ErrNotFound) && false {\n\t\treturn Config{}, ErrNoRepo
+pkg: ./core/repo
+run: ^TestThereIsNoRepositoryWithoutAConfigOrAKey$
+
+id: repo-zero-geometry-is-the-default
+file: core/repo/repo.go
+find: if g == (Geometry{}) {
+replace: if g == (Geometry{}) && false {
+pkg: ./core/repo
+run: ^TestInitThenOpen$
+
+id: repo-chunks-cannot-swap-the-root
+file: core/repo/repo.go
+find: func (r *Repo) Chunks() chunk.ReadWriter { return readWriter{r.chunks} }
+replace: func (r *Repo) Chunks() chunk.ReadWriter { return r.chunks }
+pkg: ./core/repo
+run: ^TestHostsWriteObjectsThroughTheRepository$
+
+id: e2e-tree-applies-theirs
+file: model/tree/tree.go
+find: if err = apply(ed, ct); err == nil {
+replace: if err = error(nil); err == nil {
+pkg: ./e2e
+run: ^TestAFolderBranchesDiffsAndMerges$
+
+id: e2e-merge-commit-has-two-parents
+file: core/vcs/vcs.go
+find: c.Parents = append(c.Parents, theirs.Hash)
+replace: _ = theirs.Hash
+pkg: ./e2e
+run: ^TestAFolderBranchesDiffsAndMerges$
+
+id: e2e-different-edits-conflict
+file: model/tree/tree.go
+find: case bytes.Equal(ours.To, theirs.To):
+replace: case true:
+pkg: ./e2e
+run: ^TestAFolderBranchesDiffsAndMerges$
+
+id: e2e-commits-write-their-index
+file: core/chunk/packstore/packstore.go
+find: if err := s.writeSessionIndex(ctx); err != nil {
+replace: if err := error(nil); err != nil {
+pkg: ./e2e
+run: ^TestAFolderBranchesDiffsAndMerges$
+
+id: vcs-refs-surface-root-errors
+file: core/vcs/vcs.go
+find: root, err := r.s.Root(ctx)\n\tif err != nil {\n\t\treturn nil, err\n\t}\n\tif root.IsZero() {\n\t\treturn nil, ErrNoRepo
+replace: root, err := r.s.Root(ctx)\n\tif err != nil && false {\n\t\treturn nil, err\n\t}\n\tif root.IsZero() {\n\t\treturn nil, ErrNoRepo
+pkg: ./core/vcs
+run: ^TestStoreErrorsSurfaceAndLeaveTheRefs$
+
+id: vcs-init-surfaces-root-errors
+file: core/vcs/vcs.go
+find: if root, err := s.Root(ctx); err != nil {
+replace: if root, err := s.Root(ctx); err != nil && false {
+pkg: ./core/vcs
+run: ^TestStoreErrorsSurfaceAndLeaveTheRefs$
+
+id: vcs-update-surfaces-swap-errors
+file: core/vcs/vcs.go
+find: if !errors.Is(err, chunk.ErrRootConflict) {\n\t\t\treturn err
+replace: if err == nil {\n\t\t\treturn err
+pkg: ./core/vcs
+run: ^TestStoreErrorsSurfaceAndLeaveTheRefs$
+
+id: vcs-read-commit-surfaces-read-errors
+file: core/vcs/vcs.go
+find: b, err := r.s.Get(ctx, h)\n\tif err != nil {\n\t\treturn Commit{}, err
+replace: b, err := r.s.Get(ctx, h)\n\tif err != nil && false {\n\t\treturn Commit{}, err
+pkg: ./core/vcs
+run: ^TestStoreErrorsSurfaceAndLeaveTheRefs$
+
+
+id: vcs-conflicts-surface-iteration-errors
+file: core/vcs/vcs.go
+find: k, v, ok, err := it.Next()\n\t\tif err != nil || !ok {\n\t\t\treturn out, err
+replace: k, v, ok, err := it.Next()\n\t\tif err != nil || !ok {\n\t\t\treturn out, nil
+pkg: ./core/vcs
+run: ^TestStoreErrorsSurfaceAndLeaveTheRefs$
+
+id: vcs-update-keeps-the-merge-state
+file: core/vcs/vcs.go
+find: if !sameMerge(stored.Merge, next.Merge) {
+replace: if !sameMerge(stored.Merge, next.Merge) && false {
+pkg: ./core/vcs
+run: ^TestUpdateWorkingSetKeepsTheMergeState$
+
+id: vcs-merge-state-checked-against-the-store
+file: core/vcs/vcs.go
+find: stored, err := r.readWorkingSet(ctx, work)
+replace: stored, err := prev, error(nil)
+pkg: ./core/vcs
+run: ^TestUpdateWorkingSetKeepsTheMergeState$
+
+id: vcs-already-merged-changes-nothing
+file: core/vcs/vcs.go
+find: if baseHash == theirs { // the branch holds theirs already: nothing to merge
+replace: if baseHash == theirs && false { // the branch holds theirs already: nothing to merge
+pkg: ./core/vcs
+run: ^TestMergingWhatIsAlreadyMergedChangesNothing$
+
+
+id: vcs-branch-names-a-commit
+file: core/vcs/vcs.go
+find: c, err := r.readCommit(ctx, at)\n\tif err != nil {\n\t\treturn err
+replace: c, err := r.readCommit(ctx, at)\n\tif err != nil && false {\n\t\treturn err
+pkg: ./core/vcs
+run: ^TestRefsNameOnlyStoredObjects$
+
+id: vcs-tag-names-a-commit
+file: core/vcs/vcs.go
+find: if _, err := r.readCommit(ctx, target); err != nil {
+replace: if _, err := r.readCommit(ctx, target); err != nil && false {
+pkg: ./core/vcs
+run: ^TestRefsNameOnlyStoredObjects$
+
+id: vcs-commit-message-bounded
+file: core/vcs/vcs.go
+find: if len(message) > MaxMessageLen || !utf8.ValidString(message) {\n\t\treturn Commit{}
+replace: if (len(message) > MaxMessageLen || !utf8.ValidString(message)) && false {\n\t\treturn Commit{}
+pkg: ./core/vcs
+run: ^TestMessagesAreBoundedUTF8$
+
+id: vcs-tag-message-bounded
+file: core/vcs/vcs.go
+find: if len(message) > MaxMessageLen || !utf8.ValidString(message) {\n\t\treturn Tag{}
+replace: if (len(message) > MaxMessageLen || !utf8.ValidString(message)) && false {\n\t\treturn Tag{}
+pkg: ./core/vcs
+run: ^TestMessagesAreBoundedUTF8$
+
+id: vcs-delete-needs-the-branch
+file: core/vcs/vcs.go
+find: if _, _, err := branchRefs(ctx, m, name); err != nil {
+replace: if _, _, err := branchRefs(ctx, m, name); err != nil && false {
+pkg: ./core/vcs
+run: ^TestMissingBranchesAreNotFound$
+
+id: vcs-checkout-needs-the-branch
+file: core/vcs/vcs.go
+find: if _, err := r.Head(ctx, p, branch); err != nil {
+replace: if _, err := r.Head(ctx, p, branch); err != nil && false {
+pkg: ./core/vcs
+run: ^TestMissingBranchesAreNotFound$
+
+id: vcs-merge-base-needs-shared-history
+file: core/vcs/vcs.go
+find: return hash.Hash{}, fmt.Errorf("vcs: %s and %s share no history", a.Short(), b.Short())
+replace: return hash.Hash{}, nil
+pkg: ./core/vcs
+run: ^TestMergesOutOfTurnAreRefused$
+
+id: vcs-one-merge-at-a-time
+file: core/vcs/vcs.go
+find: if ws.Merge != nil {\n\t\treturn merge.Result{}
+replace: if ws.Merge != nil && false {\n\t\treturn merge.Result{}
+pkg: ./core/vcs
+run: ^TestMergesOutOfTurnAreRefused$
+
+id: vcs-resolve-needs-a-conflict
+file: core/vcs/vcs.go
+find: } else if !ok {\n\t\t\treturn fmt.Errorf("vcs: no conflict at %s on %s", path, branch)
+replace: } else if !ok && false {\n\t\t\treturn fmt.Errorf("vcs: no conflict at %s on %s", path, branch)
+pkg: ./core/vcs
+run: ^TestMergesOutOfTurnAreRefused$
+
+id: vcs-resolve-by-deleting
+file: core/vcs/vcs.go
+find: err = e.Delete(path)
+replace: err = nil
+pkg: ./core/vcs
+run: ^TestMergesOutOfTurnAreRefused$
+
+id: vcs-init-race-is-exists
+file: core/vcs/vcs.go
+find: if errors.Is(err, chunk.ErrRootConflict) {\n\t\t\treturn nil, ErrExists
+replace: if errors.Is(err, chunk.ErrRootConflict) && false {\n\t\t\treturn nil, ErrExists
+pkg: ./core/vcs
+run: ^TestAnInitThatLosesTheRaceIsErrExists$
+
+id: vcs-update-retries
+file: core/vcs/vcs.go
+find: for attempt := 0; attempt < maxAttempts; attempt++ {\n\t\tm, err := r.refs(ctx)
+replace: for attempt := 0; attempt < 1; attempt++ {\n\t\tm, err := r.refs(ctx)
+pkg: ./core/vcs
+run: ^TestAWriterThatKeepsLosingGivesUp$
+
+id: vcs-update-gives-up
+file: core/vcs/vcs.go
+find: return fmt.Errorf("vcs: the refs changed under %d attempts in a row", maxAttempts)
+replace: return nil
+pkg: ./core/vcs
+run: ^TestAWriterThatKeepsLosingGivesUp$
+
+id: vcs-repo-needs-a-registry
+file: core/vcs/vcs.go
+find: if o.Registry == nil {\n\t\treturn nil, errors.New("vcs: a repository needs a model registry")
+replace: if o.Registry == nil && false {\n\t\treturn nil, errors.New("vcs: a repository needs a model registry")
+pkg: ./core/vcs
+run: ^TestARepositoryNeedsARegistryAndReadsTheWallClock$
+
+id: vcs-clock-defaults-to-now
+file: core/vcs/vcs.go
+find: o.Clock = time.Now
+replace: o.Clock = func() time.Time { return time.Unix(0, 0) }
+pkg: ./core/vcs
+run: ^TestARepositoryNeedsARegistryAndReadsTheWallClock$
+
+id: vcs-ref-length-checked
+file: core/vcs/vcs.go
+find: if len(v) != hash.Size {
+replace: if len(v) != hash.Size && false {
+pkg: ./core/vcs
+run: ^TestForgedRefsAreCorrupt$
+
+id: vcs-branch-needs-a-working-set
+file: core/vcs/vcs.go
+find: if err == nil && !ok {\n\t\terr = corrupt("branch %s has no working set", branch)
+replace: if err == nil && !ok && false {\n\t\terr = corrupt("branch %s has no working set", branch)
+pkg: ./core/vcs
+run: ^TestForgedRefsAreCorrupt$
+
+id: vcs-branches-authorized
+file: core/vcs/vcs.go
+find: func (r *Repo) Branches(ctx context.Context, p auth.Principal) ([]string, error) {\n\tif err := r.check(ctx, p, auth.Read, "repo"); err != nil {
+replace: func (r *Repo) Branches(ctx context.Context, p auth.Principal) ([]string, error) {\n\tif err := r.check(ctx, p, auth.Read, "repo"); err != nil && false {
+pkg: ./core/vcs
+run: ^TestEveryCallIsAuthorized$
+
+id: vcs-read-commit-authorized
+file: core/vcs/vcs.go
+find: func (r *Repo) ReadCommit(ctx context.Context, p auth.Principal, h hash.Hash) (Commit, error) {\n\tif err := r.check(ctx, p, auth.Read, "repo"); err != nil {
+replace: func (r *Repo) ReadCommit(ctx context.Context, p auth.Principal, h hash.Hash) (Commit, error) {\n\tif err := r.check(ctx, p, auth.Read, "repo"); err != nil && false {
+pkg: ./core/vcs
+run: ^TestEveryCallIsAuthorized$
+
+id: vcs-merge-base-authorized
+file: core/vcs/vcs.go
+find: func (r *Repo) MergeBase(ctx context.Context, p auth.Principal, a, b hash.Hash) (hash.Hash, error) {\n\tif err := r.check(ctx, p, auth.Read, "repo"); err != nil {
+replace: func (r *Repo) MergeBase(ctx context.Context, p auth.Principal, a, b hash.Hash) (hash.Hash, error) {\n\tif err := r.check(ctx, p, auth.Read, "repo"); err != nil && false {
+pkg: ./core/vcs
+run: ^TestEveryCallIsAuthorized$
+
+id: vcs-update-working-set-authorized
+file: core/vcs/vcs.go
+find: func (r *Repo) UpdateWorkingSet(ctx context.Context, p auth.Principal, branch string, prev, next WorkingSet) (WorkingSet, error) {\n\tif err := r.branchCheck(ctx, p, auth.Write, branch); err != nil {
+replace: func (r *Repo) UpdateWorkingSet(ctx context.Context, p auth.Principal, branch string, prev, next WorkingSet) (WorkingSet, error) {\n\tif err := r.branchCheck(ctx, p, auth.Write, branch); err != nil && false {
+pkg: ./core/vcs
+run: ^TestEveryCallIsAuthorized$
+
+id: vcs-delete-branch-authorized
+file: core/vcs/vcs.go
+find: func (r *Repo) DeleteBranch(ctx context.Context, p auth.Principal, name string) error {\n\tif err := r.branchCheck(ctx, p, auth.Manage, name); err != nil {
+replace: func (r *Repo) DeleteBranch(ctx context.Context, p auth.Principal, name string) error {\n\tif err := r.branchCheck(ctx, p, auth.Manage, name); err != nil && false {
+pkg: ./core/vcs
+run: ^TestEveryCallIsAuthorized$
+
+id: vcs-merge-authorized
+file: core/vcs/vcs.go
+find: func (r *Repo) Merge(ctx context.Context, p auth.Principal, branch string, theirs hash.Hash) (merge.Result, error) {\n\tif err := r.branchCheck(ctx, p, auth.Write, branch); err != nil {
+replace: func (r *Repo) Merge(ctx context.Context, p auth.Principal, branch string, theirs hash.Hash) (merge.Result, error) {\n\tif err := r.branchCheck(ctx, p, auth.Write, branch); err != nil && false {
+pkg: ./core/vcs
+run: ^TestEveryCallIsAuthorized$
+
+id: vcs-resolve-authorized
+file: core/vcs/vcs.go
+find: func (r *Repo) ResolveConflict(ctx context.Context, p auth.Principal, branch, path string, to *object.Ref) error {\n\tif err := r.branchCheck(ctx, p, auth.Write, branch); err != nil {
+replace: func (r *Repo) ResolveConflict(ctx context.Context, p auth.Principal, branch, path string, to *object.Ref) error {\n\tif err := r.branchCheck(ctx, p, auth.Write, branch); err != nil && false {
+pkg: ./core/vcs
+run: ^(TestEveryCallIsAuthorized|TestAWriteNeedsTheBranchAsWellAsItsPaths)$
+
+id: repo-init-finishes-a-stopped-init
+file: core/repo/repo.go
+find: if c, err = readConfig(ctx, o); err != nil {\n\t\t\treturn nil, fmt.Errorf("%w: %w", ErrExists, err)\n\t\t}
+replace: return nil, ErrExists
+pkg: ./core/repo
+run: ^TestAnInitThatStoppedIsFinishedByTheNext$
+
+id: repo-another-key-cannot-finish
+file: core/repo/repo.go
+find: if c, err = readConfig(ctx, o); err != nil {
+replace: if c, err = readConfig(ctx, o); err != nil && false {
+pkg: ./core/repo
+run: ^TestAnInitThatStoppedIsFinishedByTheNext$
+
+id: repo-open-reports-a-stopped-init
+file: core/repo/repo.go
+find: if errors.Is(err, vcs.ErrNoRepo) {
+replace: if errors.Is(err, vcs.ErrNoRepo) && false {
+pkg: ./core/repo
+run: ^TestAnInitThatStoppedIsFinishedByTheNext$
+
+id: repo-init-finishes-on-the-configs-geometry
+file: core/repo/repo.go
+find: v, err := vcs.Init(ctx, chunks, p, o.vcs(c.Geometry))
+replace: v, err := vcs.Init(ctx, chunks, p, o.vcs(g))
+pkg: ./core/repo
+run: ^TestAnInitThatStoppedIsFinishedByTheNext$
+
+id: repo-config-length-checked
+file: core/repo/repo.go
+find: if len(b) < headerLen {
+replace: if len(b) < headerLen && false {
+pkg: ./core/repo
+run: ^TestTheConfigIsCheckedBeforeItIsUsed$
+
+id: repo-config-header-checked
+file: core/repo/repo.go
+find: if h.Done() != nil || string(magic) != configMagic || v != configV1 {
+replace: if (h.Done() != nil || string(magic) != configMagic || v != configV1) && false {
+pkg: ./core/repo
+run: ^TestTheConfigIsCheckedBeforeItIsUsed$
+
+id: repo-config-plaintext-checked
+file: core/repo/repo.go
+find: if p.Done() != nil || string(pm) != plainMagic || pv != configV1 {
+replace: if (p.Done() != nil || string(pm) != plainMagic || pv != configV1) && false {
+pkg: ./core/repo
+run: ^TestTheConfigIsCheckedBeforeItIsUsed$
+
+id: repo-config-geometry-checked
+file: core/repo/repo.go
+find: if err := g.validate(); err != nil {\n\t\treturn Config{}, fmt.Errorf("%w: %w", ErrConfig, err)
+replace: if err := g.validate(); err != nil && false {\n\t\treturn Config{}, fmt.Errorf("%w: %w", ErrConfig, err)
+pkg: ./core/repo
+run: ^TestTheConfigIsCheckedBeforeItIsUsed$
+
+id: repo-init-authorized-before-writing
+file: core/repo/repo.go
+find: if err := auth.Check(ctx, o.Authorizer, p, auth.Admin, "repo"); err != nil {\n\t\treturn nil, err
+replace: if err := auth.Check(ctx, o.Authorizer, p, auth.Admin, "repo"); err != nil && false {\n\t\treturn nil, err
+pkg: ./core/repo
+run: ^TestARefusedInitWritesNothing$
+
+id: repo-init-surfaces-put-errors
+file: core/repo/repo.go
+find: if !errors.Is(err, blob.ErrExists) {\n\t\t\treturn nil, err
+replace: if !errors.Is(err, blob.ErrExists) && false {\n\t\t\treturn nil, err
+pkg: ./core/repo
+run: ^TestEveryStoreFailureIsSurvivable$
+
+id: repo-config-read-errors-surface
+file: core/repo/repo.go
+find: _ = rc.Close()\n\tif err != nil {
+replace: _ = rc.Close()\n\tif err != nil && false {
+pkg: ./core/repo
+run: ^TestEveryStoreFailureIsSurvivable$
+
+id: repo-open-no-repo-only-for-no-refs
+file: core/repo/repo.go
+find: if errors.Is(err, vcs.ErrNoRepo) {
+replace: if err != nil {
+pkg: ./core/repo
+run: ^TestEveryStoreFailureIsSurvivable$
+
+id: repo-init-exists-only-for-a-root
+file: core/repo/repo.go
+find: if errors.Is(err, vcs.ErrExists) {\n\t\t\treturn nil, ErrExists
+replace: if err != nil {\n\t\t\treturn nil, ErrExists
+pkg: ./core/repo
+run: ^TestEveryStoreFailureIsSurvivable$
+
+id: tree-root-format-checked
+file: model/tree/tree.go
+find: if root.Format != Format {\n\t\treturn nil, fmt.Errorf(
+replace: if root.Format != Format && false {\n\t\treturn nil, fmt.Errorf(
+pkg: ./model/tree
+run: ^TestTreesRefuseWhatTheyCannotServe$
+
+id: tree-write-checks-paths
+file: model/tree/tree.go
+find: if err := object.ValidPath(p); err != nil {\n\t\t\treturn model.Root{}, err
+replace: if err := object.ValidPath(p); err != nil && false {\n\t\t\treturn model.Root{}, err
+pkg: ./model/tree
+run: ^TestTreesRefuseWhatTheyCannotServe$
+
+id: tree-read-only-refuses-writes
+file: model/tree/tree.go
+find: return hash.Hash{}, errors.New("tree: this store is read-only")
+replace: return hash.Hash{}, errors.Unwrap(nil)
+pkg: ./model/tree
+run: ^TestTheReadOnlyStoreRefusesWrites$
+
+id: tree-read-surfaces-iteration-errors
+file: model/tree/tree.go
+find: k, v, ok, err := it.Next()\n\t\tif err != nil {\n\t\t\treturn nil, err
+replace: k, v, ok, err := it.Next()\n\t\tif err != nil && false {\n\t\t\treturn nil, err
+pkg: ./model/tree
+run: ^TestStoreErrorsSurfaceAtEveryPoint$
+
+id: tree-merge-surfaces-diff-errors
+file: model/tree/tree.go
+find: if err != nil {\n\t\treturn model.MergeResult{}, err\n\t}\n\tif len(conflicts) > 0 {
+replace: if err != nil && false {\n\t\treturn model.MergeResult{}, err\n\t}\n\tif len(conflicts) > 0 {
+pkg: ./model/tree
+run: ^TestStoreErrorsSurfaceAtEveryPoint$
+
+id: tree-diff-surfaces-iteration-errors
+file: model/tree/tree.go
+find: if err != nil || !ok {\n\t\treturn model.Change{}, false, err
+replace: if err != nil || !ok {\n\t\treturn model.Change{}, false, nil
+pkg: ./model/tree
+run: ^TestStoreErrorsSurfaceAtEveryPoint$
+
+id: object-open-surfaces-errors
+file: core/object/object.go
+find: m, err := prolly.Open(ctx, s, c, root)\n\tif err != nil {
+replace: m, err := prolly.Open(ctx, s, c, root)\n\tif err != nil && false {
+pkg: ./core/object
+run: ^TestStoreErrorsSurfaceAtEveryPoint$
+
+id: object-get-surfaces-read-errors
+file: core/object/object.go
+find: b, ok, err := n.m.Get(ctx, []byte(path))\n\tif err != nil || !ok {\n\t\treturn Ref{}, nil, false, err
+replace: b, ok, err := n.m.Get(ctx, []byte(path))\n\tif err != nil || !ok {\n\t\treturn Ref{}, nil, false, nil
+pkg: ./core/object
+run: ^TestStoreErrorsSurfaceAtEveryPoint$
+
+id: object-flush-surfaces-errors
+file: core/object/object.go
+find: m, err := e.e.Flush(ctx)\n\tif err != nil {
+replace: m, err := e.e.Flush(ctx)\n\tif err != nil && false {
+pkg: ./core/object
+run: ^TestStoreErrorsSurfaceAtEveryPoint$
+
+id: object-diff-surfaces-iteration-errors
+file: core/object/object.go
+find: pc, ok, err := d.d.Next()\n\tif err != nil || !ok {\n\t\treturn Change{}, false, err
+replace: pc, ok, err := d.d.Next()\n\tif err != nil || !ok {\n\t\treturn Change{}, false, nil
+pkg: ./core/object
+run: ^TestStoreErrorsSurfaceAtEveryPoint$
+
+id: object-new-needs-a-registry
+file: core/object/object.go
+find: if reg == nil {\n\t\treturn nil, errors.New("object: a namespace needs a model registry")\n\t}\n\tm, err := prolly.Empty(ctx, s, c)
+replace: if reg == nil && false {\n\t\treturn nil, errors.New("object: a namespace needs a model registry")\n\t}\n\tm, err := prolly.Empty(ctx, s, c)
+pkg: ./core/object
+run: ^TestANamespaceNeedsARegistryAndAUsableGeometry$
+
+id: object-open-needs-a-registry
+file: core/object/object.go
+find: if reg == nil {\n\t\treturn nil, errors.New("object: a namespace needs a model registry")\n\t}\n\tm, err := prolly.Open(ctx, s, c, root)
+replace: if reg == nil && false {\n\t\treturn nil, errors.New("object: a namespace needs a model registry")\n\t}\n\tm, err := prolly.Open(ctx, s, c, root)
+pkg: ./core/object
+run: ^TestANamespaceNeedsARegistryAndAUsableGeometry$
+
+id: object-get-decodes-the-ref
+file: core/object/object.go
+find: ref, err := DecodeRef(b)\n\tif err != nil {
+replace: ref, err := DecodeRef(b)\n\tif err != nil && false {
+pkg: ./core/object
+run: ^TestForgedNamespacesAreCorrupt$
+
+id: object-diff-checks-stored-paths
+file: core/object/object.go
+find: if err := ValidPath(c.Path); err != nil {\n\t\treturn Change{}, false
+replace: if err := ValidPath(c.Path); err != nil && false {\n\t\treturn Change{}, false
+pkg: ./core/object
+run: ^TestForgedNamespacesAreCorrupt$
+
+id: object-diff-decodes-from
+file: core/object/object.go
+find: if c.From, err = DecodeRef(pc.From); err != nil {
+replace: if c.From, err = DecodeRef(pc.From); err != nil && false {
+pkg: ./core/object
+run: ^TestForgedNamespacesAreCorrupt$
+
+id: object-diff-decodes-to
+file: core/object/object.go
+find: if c.To, err = DecodeRef(pc.To); err != nil {
+replace: if c.To, err = DecodeRef(pc.To); err != nil && false {
+pkg: ./core/object
+run: ^TestForgedNamespacesAreCorrupt$
+
+id: object-detail-resolves-both-sides
+file: core/object/object.go
+find: if _, err := d.to.reg.Resolve(side.Model, side.Root.Format); err != nil {
+replace: if _, err := d.to.reg.Resolve(side.Model, side.Root.Format); err != nil && false {
+pkg: ./core/object
+run: ^TestDetailNeverHandsAModelAnUnknownFormat$
+
+id: redcheck-backfill-mutants-get-their-tags
+file: tools/redcheck/redcheck.go
+find: m.Run, m.Tags = "^("+strings.Join(names, "|")+")$", tags[dir]
+replace: m.Run, m.Tags = "^("+strings.Join(names, "|")+")$", nil
+pkg: ./tools/redcheck
+run: ^TestTaggedBackfillIsProvenUnderItsTag$
+
+id: mutation-runs-with-build-tags
+file: tools/internal/mutation/mutation.go
+find: tags = []string{"-tags", strings.Join(m.Tags, ",")}
+replace: tags = nil
+pkg: ./tools/redcheck
+run: ^TestTaggedBackfillIsProvenUnderItsTag$
+
+id: merge-reads-only-what-changed
+file: core/prolly/diff.go
+find: if a.parent != nil && b.parent != nil && a.parent.valid() && b.parent.valid() && equalItems(a.parent, b.parent) {
+replace: if a.parent != nil && b.parent != nil && a.parent.valid() && b.parent.valid() && equalItems(a.parent, b.parent) && false {
+pkg: ./core/merge
+run: ^TestMergingLargeNamespacesReadsLittle$
+
+id: stream-walk-level-checked
+file: core/stream/stream.go
+find: if level != depth {\n\t\treturn corrupt(
+replace: if level != depth && false {\n\t\treturn corrupt(
+pkg: ./core/stream
+run: ^TestWalkRefusesForgedIndexNodes$
+
+id: stream-walk-top-has-two-children
+file: core/stream/stream.go
+find: if top && len(es) < 2 {
+replace: if top && len(es) < 2 && false {
+pkg: ./core/stream
+run: ^TestWalkRefusesForgedIndexNodes$
+
+id: stream-walk-sizes-add-up
+file: core/stream/stream.go
+find: if sum != want {\n\t\treturn corrupt(
+replace: if sum != want && false {\n\t\treturn corrupt(
+pkg: ./core/stream
+run: ^TestWalkRefusesForgedIndexNodes$
+
+id: stream-walk-ref-bounded
+file: core/stream/stream.go
+find: if ref.Depth > maxDepth || ref.Size > math.MaxInt64 {\n\t\treturn corrupt("ref: depth %d, size %d", ref.Depth, ref.Size)\n\t}\n\treturn walk(
+replace: if (ref.Depth > maxDepth || ref.Size > math.MaxInt64) && false {\n\t\treturn corrupt("ref: depth %d, size %d", ref.Depth, ref.Size)\n\t}\n\treturn walk(
+pkg: ./core/stream
+run: ^TestWalkRefusesForgedIndexNodes$
+
+id: stream-walk-data-never-read
+file: core/stream/stream.go
+find: if err != nil || !deeper || depth == 0 {
+replace: if err != nil || !deeper {
+pkg: ./core/stream
+run: ^TestWalkNamesEveryChunkAndReadsOnlyTheIndex$
+
+id: stream-walk-honors-visit
+file: core/stream/stream.go
+find: if err != nil || !deeper || depth == 0 {
+replace: if err != nil || !(deeper || true) || depth == 0 {
+pkg: ./core/stream
+run: ^TestWalkGoesNoFurtherThanVisitSays$
+
+id: prolly-walk-validates-config
+file: core/prolly/walk.go
+find: if _, err := c.rule(); err != nil {
+replace: if _, err := c.rule(); err != nil && false {
+pkg: ./core/prolly
+run: ^TestWalkRefusesForgedMaps$
+
+id: prolly-walk-root-has-two-children
+file: core/prolly/walk.go
+find: if n.level > 0 && len(n.entries) < 2 {
+replace: if n.level > 0 && len(n.entries) < 2 && false {
+pkg: ./core/prolly
+run: ^TestWalkRefusesForgedMaps$
+
+id: prolly-walk-checks-children
+file: core/prolly/walk.go
+find: if err := checkChild(n, i, c); err != nil {
+replace: if err := checkChild(n, i, c); err != nil && false {
+pkg: ./core/prolly
+run: ^TestWalkRefusesForgedMaps$
+
+id: prolly-walk-names-long-values
+file: core/prolly/walk.go
+find: if e.val.ref != nil {\n\t\tif err := stream.Walk(
+replace: if e.val.ref != nil && false {\n\t\tif err := stream.Walk(
+pkg: ./core/prolly
+run: ^TestWalkNamesEveryChunkOfAMap$
+
+id: prolly-walk-reads-long-values-whole
+file: core/prolly/walk.go
+find: v := e.val.inline\n\tif e.val.ref != nil {
+replace: v := e.val.inline\n\tif e.val.ref != nil && false {
+pkg: ./core/prolly
+run: ^TestWalkNamesEveryChunkOfAMap$
+
+id: prolly-walk-honors-visit-for-children
+file: core/prolly/walk.go
+find: if !deeper {\n\t\t\tcontinue
+replace: if !deeper && false {\n\t\t\tcontinue
+pkg: ./core/prolly
+run: ^TestWalkGoesNoFurtherThanVisitSays$
+
+id: prolly-walk-honors-visit-for-the-root
+file: core/prolly/walk.go
+find: if err != nil || !deeper {\n\t\treturn err\n\t}\n\tn, err := w.read(root)
+replace: if err != nil || !(deeper || true) {\n\t\treturn err\n\t}\n\tn, err := w.read(root)
+pkg: ./core/prolly
+run: ^TestWalkGoesNoFurtherThanVisitSays$
+
+id: blob-walk-checks-the-format
+file: model/blob/blob.go
+find: if root.Format != Format {\n\t\treturn fmt.Errorf("%w: blob format %d", model.ErrUnknownModel, root.Format)\n\t}\n\treturn stream.Walk(
+replace: if root.Format != Format && false {\n\t\treturn fmt.Errorf("%w: blob format %d", model.ErrUnknownModel, root.Format)\n\t}\n\treturn stream.Walk(
+pkg: ./model/blob
+run: ^TestABlobWalksToEveryChunk$
+
+id: blob-walk-is-its-stream
+file: model/blob/blob.go
+find: return stream.Walk(ctx, r, stream.Ref{Root: root.Hash, Size: root.Size, Depth: root.Depth}, visit)
+replace: return stream.Walk(ctx, r, stream.Ref{Root: root.Hash, Size: root.Size}, visit)
+pkg: ./model/blob
+run: ^TestABlobWalksToEveryChunk$
+
+id: tree-walk-checks-the-format
+file: model/tree/tree.go
+find: if root.Format != Format {\n\t\treturn fmt.Errorf(
+replace: if root.Format != Format && false {\n\t\treturn fmt.Errorf(
+pkg: ./model/tree
+run: ^TestATreeWalksToItsEntriesContents$
+
+id: tree-walk-checks-the-depth
+file: model/tree/tree.go
+find: if root.Depth != 0 {\n\t\treturn fmt.Errorf(
+replace: if root.Depth != 0 && false {\n\t\treturn fmt.Errorf(
+pkg: ./model/tree
+run: ^TestATreeWalksToItsEntriesContents$
+
+id: tree-walk-checks-paths
+file: model/tree/tree.go
+find: e, err := checked(key, val)\n\t\tif err != nil {
+replace: e, err := checked(key, val)\n\t\tif err != nil && false {
+pkg: ./model/tree
+run: ^TestATreeWalksToItsEntriesContents$
+
+id: tree-walk-content-depth
+file: model/tree/tree.go
+find: Depth: e.Content.Depth}, visit)
+replace: Depth: 0}, visit)
+pkg: ./model/tree
+run: ^TestATreeWalksToItsEntriesContents$
+
+id: tree-walk-names-contents
+file: model/tree/tree.go
+find: Depth: e.Content.Depth}, visit)
+replace: Depth: e.Content.Depth}, func(hash.Hash, bool) (bool, error) { return false, nil })
+pkg: ./model/tree
+run: ^TestATreeWalksToItsEntriesContents$
+
+id: contract-blob-walk-names-its-index
+file: model/blob/blob.go
+find: Size: root.Size, Depth: root.Depth}, visit)
+replace: Size: root.Size}, visit)
+pkg: ./model/blob
+run: ^TestContract$
+
+id: contract-tree-walk-names-its-map
+file: model/tree/tree.go
+find: return prolly.Walk(ctx, r, m.Config, root.Hash, visit, func(
+replace: return prolly.Walk(ctx, r, m.Config, root.Hash, func(hash.Hash, bool) (bool, error) { return false, nil }, func(
+pkg: ./model/tree
+run: ^TestContract$
+
+id: stream-walk-names-data-as-leaves
+file: core/stream/stream.go
+find: deeper, err := visit(h, depth == 0)
+replace: deeper, err := visit(h, false)
+pkg: ./core/stream
+run: ^TestWalkNamesEveryChunkAndReadsOnlyTheIndex$
+
+id: prolly-walk-nodes-are-not-leaves
+file: core/prolly/walk.go
+find: deeper, err := w.visit(e.child, false)
+replace: deeper, err := w.visit(e.child, true)
+pkg: ./core/prolly
+run: ^TestWalkNamesEveryChunkOfAMap$
+
+id: object-walk-reaches-objects
+file: core/object/object.go
+find: if err := WalkRef(ctx, rd, reg, ref, visit); err != nil {
+replace: if err := WalkRef(ctx, rd, reg, ref, func(hash.Hash, bool) (bool, error) { return false, nil }); err != nil {
+pkg: ./core/object
+run: ^TestAWalkReachesEveryObject$
+
+id: object-walk-checks-stored-paths
+file: core/object/object.go
+find: if err := ValidPath(path); err != nil {\n\t\t\treturn fmt.Errorf("%w: a stored path: %w", chunk.ErrCorrupt, err)
+replace: if err := ValidPath(path); err != nil && false {\n\t\t\treturn fmt.Errorf("%w: a stored path: %w", chunk.ErrCorrupt, err)
+pkg: ./core/object
+run: ^TestWalkRefusesWhatItCannotWalk$
+
+id: object-walk-ref-needs-a-walker
+file: core/object/object.go
+find: w, ok := m.(model.Walker)\n\tif !ok {
+replace: w, ok := m.(model.Walker)\n\tif !ok && false {
+pkg: ./core/object
+run: ^TestWalkRefusesWhatItCannotWalk$
+
+id: object-walk-ref-resolves-the-model
+file: core/object/object.go
+find: m, err := reg.Resolve(ref.Model, ref.Root.Format)\n\tif err != nil {\n\t\treturn err\n\t}\n\tw, ok := m.(model.Walker)
+replace: m, err := reg.Resolve(ref.Model, ref.Root.Format)\n\tif err != nil && false {\n\t\treturn err\n\t}\n\tw, ok := m.(model.Walker)
+pkg: ./core/object
+run: ^TestWalkRefusesWhatItCannotWalk$
+
+id: vcs-walk-follows-heads
+file: core/vcs/walk.go
+find: case strings.HasPrefix(k, "heads/"):\n\t\t\tw.commits = append(w.commits, h)\n\t\t\treturn nil
+replace: case strings.HasPrefix(k, "heads/"):\n\t\t\treturn nil
+pkg: ./core/vcs
+run: ^TestAWalkNamesAllTheRepositoryHolds$
+
+id: vcs-walk-follows-tags
+file: core/vcs/walk.go
+find: case strings.HasPrefix(k, "tags/"):\n\t\t\treturn w.tag(h)
+replace: case strings.HasPrefix(k, "tags/"):\n\t\t\treturn nil
+pkg: ./core/vcs
+run: ^TestAWalkNamesAllTheRepositoryHolds$
+
+id: vcs-walk-follows-working-sets
+file: core/vcs/walk.go
+find: case strings.HasPrefix(k, "work/"):\n\t\t\treturn w.workingSet(h)
+replace: case strings.HasPrefix(k, "work/"):\n\t\t\treturn nil
+pkg: ./core/vcs
+run: ^TestAWalkNamesAllTheRepositoryHolds$
+
+id: vcs-walk-follows-the-merge
+file: core/vcs/walk.go
+find: w.commits = append(w.commits, ws.Merge.Base, ws.Merge.Theirs)
+replace: w.commits = append(w.commits, ws.Merge.Base)
+pkg: ./core/vcs
+run: ^TestAWalkNamesAllTheRepositoryHolds$
+
+id: vcs-walk-follows-conflicts
+file: core/vcs/walk.go
+find: if err := object.WalkRef(w.ctx, w.rd, w.o.Registry, side, w.visit); err != nil {
+replace: if err := error(nil); side.Model == 0 && err != nil {
+pkg: ./core/vcs
+run: ^TestAWalkNamesAllTheRepositoryHolds$
+
+id: vcs-walk-follows-parents
+file: core/vcs/walk.go
+find: w.commits = append(w.commits, c.Parents...)
+replace: w.commits = append(w.commits, c.Parents[:0]...)
+pkg: ./core/vcs
+run: ^TestAWalkNamesAllTheRepositoryHolds$
+
+id: vcs-walk-refuses-unknown-refs
+file: core/vcs/walk.go
+find: return corrupt("a ref %q the version graph does not write", key)
+replace: return nil
+pkg: ./core/vcs
+run: ^TestWalkRefusesWhatItCannotName$
+
+id: vcs-walk-ref-length-checked
+file: core/vcs/walk.go
+find: if len(val) != hash.Size {
+replace: if len(val) != hash.Size && false {
+pkg: ./core/vcs
+run: ^TestWalkRefusesWhatItCannotName$
+
+id: vcs-walk-one-role-per-chunk
+file: core/vcs/walk.go
+find: if k != kind {
+replace: if k != kind && false {
+pkg: ./core/vcs
+run: ^TestWalkRefusesWhatItCannotName$
+
+id: vcs-tag-kind-byte
+file: core/vcs/encode.go
+find: if r.U8() != kindTag {
+replace: if r.U8() != kindTag && false {
+pkg: ./core/vcs
+run: ^TestForgedTagsAreCorrupt$
+
+id: vcs-tag-utf8
+file: core/vcs/encode.go
+find: case !utf8.ValidString(t.Tagger) || !utf8.ValidString(t.Message):
+replace: case (!utf8.ValidString(t.Tagger) || !utf8.ValidString(t.Message)) && false:
+pkg: ./core/vcs
+run: ^TestForgedTagsAreCorrupt$
+
+id: packstore-round-condemns
+file: core/chunk/packstore/gc.go
+find: next = append(next, condemned{kind: condemnedPack, sum: sum, at: at})
+replace: _ = sum
+pkg: ./core/chunk/packstore
+run: ^TestARoundCondemnsWaitsThenExpires$
+
+id: packstore-round-waits-the-grace-window
+file: core/chunk/packstore/gc.go
+find: expired := func(c condemned) bool { return at-c.at >= int64(grace) }
+replace: expired := func(c condemned) bool { return at-c.at >= 0 }
+pkg: ./core/chunk/packstore
+run: ^TestARoundCondemnsWaitsThenExpires$
+
+id: packstore-round-reprieves
+file: core/chunk/packstore/gc.go
+find: case isLive(p, live):
+replace: case isLive(p, live) && !was:
+pkg: ./core/chunk/packstore
+run: ^TestAReachedPackIsReprieved$
+
+id: packstore-round-compacts-the-index
+file: core/chunk/packstore/gc.go
+find: upd.indexes = sums
+replace: _ = sums
+pkg: ./core/chunk/packstore
+run: ^TestARoundCondemnsWaitsThenExpires$
+
+id: packstore-round-condemns-replaced-indexes
+file: core/chunk/packstore/gc.go
+find: next = append(next, condemned{kind: condemnedIndex, sum: old, at: at})
+replace: _ = old
+pkg: ./core/chunk/packstore
+run: ^TestARoundCondemnsWaitsThenExpires$
+
+id: packstore-round-loses-to-writers
+file: core/chunk/packstore/gc.go
+find: if errors.Is(err, blob.ErrRootConflict) {\n\t\t\treturn Outcome{}, ErrMoved
+replace: if errors.Is(err, blob.ErrRootConflict) && false {\n\t\t\treturn Outcome{}, ErrMoved
+pkg: ./core/chunk/packstore
+run: ^TestARoundLosesToAWriterThatPublished$
+
+id: packstore-round-refuses-a-rootless-live-set
+file: core/chunk/packstore/gc.go
+find: if !live(r.man.root) {
+replace: if !live(r.man.root) && false {
+pkg: ./core/chunk/packstore
+run: ^TestARoundRefusesALiveSetWithoutTheRoot$
+
+id: packstore-put-skips-condemned-packs
+file: core/chunk/packstore/packstore.go
+find: if loc, ok := s.index.Lookup(h); ok && !s.condemned[loc.Pack.Name] {
+replace: if loc, ok := s.index.Lookup(h); ok && !(s.condemned[loc.Pack.Name] && false) {
+pkg: ./core/chunk/packstore
+run: ^TestWritersDoNotDeduplicateAgainstCondemnedPacks$
+
+id: packstore-publish-checks-survivors
+file: core/chunk/packstore/packstore.go
+find: if err := s.survived(m); err != nil {
+replace: if err := s.survived(m); err != nil && false {
+pkg: ./core/chunk/packstore
+run: ^TestAWriterFencedWhenAPackItCountedOnExpires$
+
+id: packstore-survived-after-a-collection
+file: core/chunk/packstore/packstore.go
+find: if m.gcGen == s.sessGen {
+replace: if m.gcGen == s.sessGen || true {
+pkg: ./core/chunk/packstore
+run: ^TestAWriterFencedWhenAPackItCountedOnExpires$
+
+id: packstore-refresh-rebuilds-after-expiry
+file: core/chunk/packstore/packstore.go
+find: rebuild := s.ver != blob.NoVersion && m.seq > s.man.seq && m.gcGen != s.man.gcGen
+replace: rebuild := false && s.ver != blob.NoVersion && m.seq > s.man.seq && m.gcGen != s.man.gcGen
+pkg: ./core/chunk/packstore
+run: ^TestAStoreForgetsChunksWhosePacksExpired$
+
+id: packstore-get-refreshes-on-a-missing-pack
+file: core/chunk/packstore/packstore.go
+find: if errors.Is(err, blob.ErrNotFound) {\n\t\t// GC may have expired the pack
+replace: if errors.Is(err, blob.ErrNotFound) && false {\n\t\t// GC may have expired the pack
+pkg: ./core/chunk/packstore
+run: ^TestReadingAnExpiredChunkIsNotFound$
+
+id: packstore-round-moves-the-generation
+file: core/chunk/packstore/gc.go
+find: upd.gcGen++
+replace: upd.gcGen += 0
+pkg: ./core/chunk/packstore
+run: ^TestAWriterFencedWhenAPackItCountedOnExpires$
+
+id: packstore-rebuild-keeps-unpublished
+file: core/chunk/packstore/packstore.go
+find: for _, info := range s.unpublished {\n\t\t\tx.Add(info)
+replace: for _, info := range s.unpublished[""].Entries {\n\t\t\t_ = info
+pkg: ./core/chunk/packstore
+run: ^TestAStoresOwnPacksAcrossARebuild$
+
+id: packstore-publish-forgets-published-packs
+file: core/chunk/packstore/packstore.go
+find: delete(s.unpublished, name)
+replace: _ = name
+pkg: ./core/chunk/packstore
+run: ^TestAStoresOwnPacksAcrossARebuild$
+
+id: gc-takes-another-round
+file: core/gc/gc.go
+find: if errors.Is(err, packstore.ErrMoved) {\n\t\t\tcontinue
+replace: if errors.Is(err, packstore.ErrMoved) && false {\n\t\t\tcontinue
+pkg: ./core/gc
+run: ^TestGCTakesAnotherRoundWhenAWriterPublishes$
+
+id: gc-refuses-what-it-cannot-walk
+file: core/gc/gc.go
+find: live, err := mark(ctx, rd, o, r.Root())\n\t\tif err != nil {
+replace: live, err := mark(ctx, rd, o, r.Root())\n\t\tif err != nil && false {
+pkg: ./core/gc
+run: ^TestGCRefusesWhatItCannotWalk$
+
+id: gc-orphans-wait-the-grace-window
+file: core/gc/gc.go
+find: if !named[info.Name] && now.Sub(info.ModTime) >= grace {
+replace: if !named[info.Name] {
+pkg: ./core/gc
+run: ^TestGCKeepsWhatTheRefsReachAndDeletesTheRest$
+
+id: gc-orphans-are-unnamed
+file: core/gc/gc.go
+find: if !named[info.Name] && now.Sub(info.ModTime) >= grace {
+replace: if now.Sub(info.ModTime) >= grace {
+pkg: ./core/gc
+run: ^TestGCKeepsWhatTheRefsReachAndDeletesTheRest$
+
+id: gc-deletes-what-expired
+file: core/gc/gc.go
+find: for _, name := range append(out.Expired, stale...) {
+replace: for _, name := range stale {
+pkg: ./core/gc
+run: ^TestOrphanAgesAreTheBackendsClock$
+
+id: gc-orphan-ages-by-the-backend
+file: core/gc/gc.go
+find: now, err := backendNow(ctx, o.Blobs)
+replace: now, err := clock(), error(nil)
+pkg: ./core/gc
+run: ^TestOrphanAgesAreTheBackendsClock$
+
+id: gc-prunes-only-what-it-went-into
+file: core/gc/gc.go
+find: live[h] = true\n\t\tif leaf || gone[h] {
+replace: seen := live[h]\n\t\tlive[h] = true\n\t\tif leaf || seen {
+pkg: ./core/gc
+run: ^TestGCIsNotSteeredByAFileThatIsANode$
+
+id: gc-removes-its-probe
+file: core/gc/gc.go
+find: if derr := bs.Delete(ctx, name); err == nil {
+replace: if derr := error(nil); err == nil {
+pkg: ./core/gc
+run: ^TestGCLeavesNoProbeBehind$
+
+id: gc-sweeps-stopped-probes
+file: core/gc/gc.go
+find: for _, prefix := range []string{"packs/", "index/", probePrefix} {
+replace: for _, prefix := range []string{"packs/", "index/"} {
+pkg: ./core/gc
+run: ^TestGCLeavesNoProbeBehind$
+
+id: vcs-fenced-write-is-a-conflict
+file: core/vcs/vcs.go
+find: if errors.Is(err, chunk.ErrStale) { // GC fenced the write: the host re-reads
+replace: if errors.Is(err, chunk.ErrStale) && false { // GC fenced the write: the host re-reads
+pkg: ./core/vcs
+run: ^TestAWriteFencedByGCIsAConflict$
+
+id: gcprop-walk-follows-parents
+file: core/vcs/walk.go
+find: w.commits = append(w.commits, c.Parents...)
+replace: w.commits = append(w.commits, c.Parents[:0]...)
+pkg: ./core/gc
+run: ^TestGCSafetyProperty$
+
+id: gcprop-walk-follows-working-sets
+file: core/vcs/walk.go
+find: case strings.HasPrefix(k, "work/"):\n\t\t\treturn w.workingSet(h)
+replace: case strings.HasPrefix(k, "work/"):\n\t\t\treturn nil
+pkg: ./core/gc
+run: ^TestGCSafetyProperty$
+
+id: gcprop-namespaces-reach-objects
+file: core/object/object.go
+find: if err := WalkRef(ctx, rd, reg, ref, visit); err != nil {
+replace: if err := WalkRef(ctx, rd, reg, ref, func(hash.Hash, bool) (bool, error) { return false, nil }); err != nil {
+pkg: ./core/gc
+run: ^TestGCSafetyProperty$
+
+id: repo-gc-needs-admin
+file: core/repo/repo.go
+find: if err := auth.Check(ctx, o.Authorizer, p, auth.Admin, "repo"); err != nil {\n\t\treturn gc.Report{}, err
+replace: if err := auth.Check(ctx, o.Authorizer, p, auth.Admin, "repo"); err != nil && false {\n\t\treturn gc.Report{}, err
+pkg: ./core/repo
+run: ^TestAnAdminCollectsTheRepositoryOnTheRawStore$
+
+id: repo-gc-needs-a-repository
+file: core/repo/repo.go
+find: c, err := readConfig(ctx, o)\n\tif err != nil {\n\t\treturn gc.Report{}, err
+replace: c, err := readConfig(ctx, o)\n\tif err != nil && false {\n\t\treturn gc.Report{}, err
+pkg: ./core/repo
+run: ^TestAnAdminCollectsTheRepositoryOnTheRawStore$
+
+id: e2e-gc-tree-names-file-contents
+file: model/tree/tree.go
+find: Depth: e.Content.Depth}, visit)
+replace: Depth: e.Content.Depth}, func(hash.Hash, bool) (bool, error) { return false, nil })
+pkg: ./e2e
+run: ^TestAFoldersHistoryComesThroughGC$
+
+id: e2e-gc-tree-names-file-data
+file: model/tree/tree.go
+find: Depth: e.Content.Depth}, visit)
+replace: Depth: 0}, visit)
+pkg: ./e2e
+run: ^TestAFoldersHistoryComesThroughGC$
+
+id: object-ref-grammar-fuzzed
+file: core/object/object.go
+find: if r.Done() != nil || ref.Flags != 0 || ref.Model == 0 || ref.Root.Format == 0 {
+replace: if r.Done() != nil || ref.Flags != 0 {
+pkg: ./core/object
+run: ^FuzzDecodeRef$
+
+id: repo-config-short-fuzzed
+file: core/repo/repo.go
+find: if len(b) < headerLen {
+replace: if len(b) < headerLen && false {
+pkg: ./core/repo
+run: ^FuzzOpenConfig$
+
+id: vcs-update-checks-paths
+file: core/vcs/vcs.go
+find: for _, ns := range [][2]hash.Hash{{stored.Working, next.Working}, {stored.Staged, next.Staged}} {
+replace: for _, ns := range [][2]hash.Hash{{stored.Working, stored.Working}} {
+pkg: ./core/vcs
+run: ^TestWritesAreAuthorizedPerPath$
+
+id: vcs-update-checks-against-the-store
+file: core/vcs/vcs.go
+find: stored, err := r.readWorkingSet(ctx, prev.Hash)
+replace: stored, err := prev, error(nil)
+pkg: ./core/vcs
+run: ^TestWritesAreAuthorizedPerPath$
+
+id: vcs-commit-checks-paths
+file: core/vcs/vcs.go
+find: if err := r.checkPaths(ctx, p, branch, head.Namespace, ws.Staged); err != nil {
+replace: if err := r.checkPaths(ctx, p, branch, head.Namespace, ws.Staged); err != nil && false {
+pkg: ./core/vcs
+run: ^TestWritesAreAuthorizedPerPath$
+
+id: vcs-merge-checks-paths
+file: core/vcs/vcs.go
+find: if err := r.checkPaths(ctx, p, branch, ws.Working, res.Merged.Root()); err != nil {
+replace: if err := r.checkPaths(ctx, p, branch, ws.Working, res.Merged.Root()); err != nil && false {
+pkg: ./core/vcs
+run: ^TestWritesAreAuthorizedPerPath$
+
+id: vcs-resolve-checks-the-path
+file: core/vcs/vcs.go
+find: if err := r.check(ctx, p, auth.Write, pathResource(branch, path)); err != nil {
+replace: if err := r.check(ctx, p, auth.Write, pathResource(branch, path)); err != nil && false {
+pkg: ./core/vcs
+run: ^TestWritesAreAuthorizedPerPath$
+
+id: vcs-paths-are-asked-one-by-one
+file: core/vcs/vcs.go
+find: if err := r.check(ctx, p, auth.Write, pathResource(branch, c.Path)); err != nil {
+replace: if err := r.check(ctx, p, auth.Write, pathResource(branch, c.Path)); err != nil && false {
+pkg: ./core/vcs
+run: ^TestWritesAreAuthorizedPerPath$
+
+id: gc-refuses-a-negative-grace
+file: core/gc/gc.go
+find: if grace < 0 {
+replace: if grace < 0 && false {
+pkg: ./core/gc
+run: ^TestGCRefusesOptionsItCannotUse$
+
+id: gc-default-grace-is-seven-days
+file: core/gc/gc.go
+find: grace = DefaultGrace
+replace: grace = time.Hour
+pkg: ./core/gc
+run: ^TestGCDefaultsToSevenDaysAndTheWallClock$
+
+id: gc-default-clock-is-the-wall-clock
+file: core/gc/gc.go
+find: clock = time.Now
+replace: clock = func() time.Time { return time.Time{} }
+pkg: ./core/gc
+run: ^TestGCDefaultsToSevenDaysAndTheWallClock$
+
+id: gc-gives-up-when-writers-never-stop
+file: core/gc/gc.go
+find: return rep, fmt.Errorf("gc: the repository changed during %d rounds in a row", maxRounds)
+replace: return rep, nil
+pkg: ./core/gc
+run: ^TestGCGivesUpWhenWritersNeverStop$
+
+id: gc-nothing-live-without-a-root
+file: core/gc/gc.go
+find: if root.IsZero() {\n\t\treturn live, nil\n\t}
+replace: if root.IsZero() && false {\n\t\treturn live, nil\n\t}
+pkg: ./core/gc
+run: ^TestGCOnAStoreWithNoRepository$
+
+id: gc-orphans-every-page
+file: core/gc/gc.go
+find: if len(page) < blob.MaxListPage {\n\t\t\t\tbreak\n\t\t\t}\n\t\t\tafter = page[len(page)-1].Name
+replace: break
+pkg: ./core/gc
+run: ^TestGCOnAStoreWithNoRepository$
+
+id: gc-surfaces-a-failed-round
+file: core/gc/gc.go
+find: if err != nil {\n\t\t\treturn rep, err\n\t\t}\n\t\trep.Live, rep.Condemned
+replace: if err != nil && false {\n\t\t\treturn rep, err\n\t\t}\n\t\trep.Live, rep.Condemned
+pkg: ./core/gc
+run: ^TestEveryStoreFailureIsGCsError$
+
+id: gc-surfaces-a-failed-probe
+file: core/gc/gc.go
+find: now, err := backendNow(ctx, o.Blobs)\n\t\tif err != nil {
+replace: now, err := backendNow(ctx, o.Blobs)\n\t\tif err != nil && false {
+pkg: ./core/gc
+run: ^TestEveryStoreFailureIsGCsError$
+
+id: gc-surfaces-a-failed-listing
+file: core/gc/gc.go
+find: page, err := bs.List(ctx, prefix, after, blob.MaxListPage)\n\t\t\tif err != nil {
+replace: page, err := bs.List(ctx, prefix, after, blob.MaxListPage)\n\t\t\tif err != nil && false {
+pkg: ./core/gc
+run: ^TestEveryStoreFailureIsGCsError$

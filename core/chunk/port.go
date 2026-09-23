@@ -1,0 +1,72 @@
+// Package chunk is the chunk store port: immutable byte chunks keyed by the
+// SHA-256 of their bytes, plus one mutable root (Engine Spec L0, which moved
+// into the Storage Core as the layer above the BlobStore; docs/DESIGN.md §2).
+// Nothing above this layer touches a backend. Implementations:
+// chunk/memstore (tests) and chunk/packstore (packs on any BlobStore). Every
+// implementation must pass chunk/contract.
+//
+// Port version 1.
+package chunk
+
+import (
+	"context"
+	"errors"
+
+	"github.com/SmithOperatingSolutions/snapshot-core/core/hash"
+)
+
+// Errors every implementation reports.
+var (
+	ErrNotFound     = errors.New("chunk: not found")
+	ErrCorrupt      = errors.New("chunk: stored bytes do not verify")
+	ErrTooLarge     = errors.New("chunk: larger than the chunk limit")
+	ErrRootConflict = errors.New("chunk: root changed since it was read")
+	ErrRootMissing  = errors.New("chunk: a root must name a stored chunk")
+	ErrClosed       = errors.New("chunk: store is closed")
+	// ErrStale: GC deleted a chunk this writer counted on while it wrote
+	// (docs/DESIGN.md §9); nothing was published, and the writer must read
+	// again and write again.
+	ErrStale = errors.New("chunk: a chunk this write counted on was collected")
+)
+
+// MaxChunkSize is the Engine Spec's chunk limit.
+const MaxChunkSize = 1 << 20
+
+// Reader reads chunks. Every Get re-hashes what it returns: a chunk whose
+// bytes do not hash to its name is ErrCorrupt, from every backend, cached or not.
+type Reader interface {
+	Get(ctx context.Context, h hash.Hash) ([]byte, error)
+	Has(ctx context.Context, hs []hash.Hash) (map[hash.Hash]bool, error)
+}
+
+// Writer stores chunks. Put is idempotent: the same bytes are one chunk.
+type Writer interface {
+	Put(ctx context.Context, data []byte) (hash.Hash, error)
+}
+
+// ReadWriter is both.
+type ReadWriter interface {
+	Reader
+	Writer
+}
+
+// Stats describes what a store holds.
+type Stats struct {
+	Chunks int64 // distinct chunks stored (including ones not yet published)
+}
+
+// Store is the chunk store port.
+type Store interface {
+	ReadWriter
+	// Root returns the current root; the zero Hash if none has been set.
+	Root(ctx context.Context) (hash.Hash, error)
+	// CompareAndSetRoot sets the root to next if it is still expected (the
+	// zero Hash: only if none is set). next must be a stored chunk
+	// (ErrRootMissing). On success the new root and every chunk it reaches
+	// are durable. A stale expected is ErrRootConflict, and nothing changes.
+	CompareAndSetRoot(ctx context.Context, expected, next hash.Hash) error
+	Stats(ctx context.Context) (Stats, error)
+	// Close releases the store. Afterwards every other method returns
+	// ErrClosed, and Close again returns nil.
+	Close() error
+}

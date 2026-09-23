@@ -40,7 +40,9 @@ linters:
             - pkg: github.com/SmithOperatingSolutions/disknexus-engine
               desc: "disknexus-engine is imported only by core/dnx (Storage Core Spec, dependency rule 2)"
         no-reflective-decoding:
-          files: ["**/core/**", "**/model/**", "!$test"]
+          # crashtest is test infrastructure (it re-executes the test binary);
+          # it is imported only from _test.go files.
+          files: ["**/core/**", "**/model/**", "!$test", "!**/core/blob/internal/crashtest/**"]
           deny:
             - pkg: reflect
               desc: "no reflection on stored bytes; write a bounds-checked decoder"
@@ -66,7 +68,6 @@ linters:
             - "**/core/dnx/**"
             - "**/core/hash/**"
             - "**/core/auth/**"
-            - "**/core/limits/**"
             - "**/core/seal/**"
             - "**/core/cdc/**"
             - "**/core/boundary/**"
@@ -162,6 +163,10 @@ linters:
       - path: ^tools/
         linters: [forbidigo, gosec]
       - path: _test\.go$
+        linters: [gosec, forbidigo]
+      # Test infrastructure outside _test.go files: the crash harness spawns
+      # the test binary and talks to it over stdout.
+      - path: core/blob/internal/crashtest/
         linters: [gosec, forbidigo]
 
 formatters:

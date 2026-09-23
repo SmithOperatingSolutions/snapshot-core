@@ -49,9 +49,35 @@ behavior change and need no red.
 
 `mise run redcheck` (`tools/redcheck`) checks every `test:` commit between the
 branch and `main`: it checks the commit out in a scratch worktree, runs only
-the tests that commit added, and requires each of them to FAIL on an
-assertion. A build failure, a panic, or a pass blocks the PR. CI runs the same
-tool on every pull request.
+the tests that commit added or changed, and requires each of them to FAIL on
+an assertion. A build failure, a panic, a skip, or a pass blocks the PR. Every
+`feat:`/`fix:` needs a `test:` commit since the previous one. CI runs the same
+tool on every pull request. A change to a port's contract suite
+(`<pkg>/contract`) counts as a change to every Test function that calls it,
+so a contract that grows is red on each implementation it catches out.
+
+**Backfills.** A test for behavior that already exists (a guard someone argued
+for but never tested, `docs/TESTING.md` §11) cannot fail against its parent.
+Its red is a mutant instead: add the mutant to `tools/mutate/mutants.txt` in
+the same commit and name it in the commit body:
+
+```
+test(pkg): pin the stale-swap refusal
+
+Red-Check: mutants mem-swap-compares-version
+```
+
+redcheck then requires the commit's tests to pass, and each named mutant to be
+killed by those tests alone.
+
+**Property tests and their red.** A `test:` commit's red run fails its
+`rapid` properties on purpose, and rapid saves each failure under
+`testdata/rapid/`. Those files record the stub, not a bug: delete them
+before committing. (A real property failure found later is the opposite:
+minimize it and check it in as a regression case.) And check that a
+property's cases reach the inputs it is about: rapid draws mostly small
+values, so a property over trees must see deep trees (`deepEnough` in
+`core/prolly` fails a run that did not).
 
 ## Regressions
 

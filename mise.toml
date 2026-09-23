@@ -13,7 +13,7 @@ go = "1.27"
 CGO_ENABLED = "0"
 
 [tasks.ci]
-description = "Local run-all: fmt, vet (3 OSes), mod verify, lint, vuln, race suite, coverage gate, red-check, crash harness, fuzz smoke"
+description = "Local run-all: fmt, vet (3 OSes), mod verify, lint, vuln, race suite, coverage gate, red-check, crash harness, scale guards, fuzz, mutants, MinIO"
 run = "go run ./tools/ci"
 
 [tasks."ci:quick"]
@@ -47,6 +47,10 @@ run = "go run ./tools/mutate"
 [tasks.crash]
 description = "kill -9 crash harness, full 1,000 iterations per backend (nightly in CI)"
 run = "go test -count=1 -run Crash -timeout 30m -tags crash ./core/..."
+
+[tasks.slow]
+description = "Scale guards behind -tags slow (1 GiB streams, 1M-entry maps)"
+run = "go run ./tools/ci -only slow"
 
 [tasks.fuzz]
 description = "Every fuzz target for FUZZTIME each (default 30s; nightly CI uses 30m)"
