@@ -44,6 +44,7 @@ var (
 	ErrBranchNotFound      = errors.New("vcs: no such branch")
 	ErrBranchInUse         = errors.New("vcs: branch is checked out")
 	ErrTagExists           = errors.New("vcs: tag exists")
+	ErrTagNotFound         = errors.New("vcs: no such tag")
 	ErrInvalidName         = errors.New("vcs: invalid branch or tag name")
 	ErrInvalidLimit        = errors.New("vcs: log limit must be 1 to 10,000")
 	ErrUnresolvedConflicts = errors.New("vcs: unresolved merge conflicts")
@@ -619,6 +620,15 @@ func (r *Repo) CreateTag(ctx context.Context, p auth.Principal, name string, tar
 	})
 	return t, err
 }
+
+// Tags lists the tags' names in order.
+func (r *Repo) Tags(ctx context.Context, p auth.Principal) ([]string, error) { return nil, nil }
+
+// Tag returns the tag a name holds.
+func (r *Repo) Tag(ctx context.Context, p auth.Principal, name string) (Tag, error) { return Tag{}, nil }
+
+// DeleteTag removes a tag.
+func (r *Repo) DeleteTag(ctx context.Context, p auth.Principal, name string) error { return nil }
 
 // byHeight is a max-heap of commits by height, lower hash first on a tie.
 type byHeight []Commit

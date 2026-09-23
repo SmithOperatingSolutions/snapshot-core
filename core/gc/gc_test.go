@@ -442,6 +442,50 @@ func TestGCKeepsWhatTheRefsReachAndDeletesTheRest(t *testing.T) {
 	}
 }
 
+// A tag keeps what it names through GC; once the tag is deleted, what only
+// it reached is collected a grace window later (issue #2).
+func TestADeletedTagsHistoryIsCollected(t *testing.T) {
+	w := newWorld(t)
+	w.put(vcs.MainBranch, "notes/main", w.note(7, "a note main keeps"))
+	w.commit(vcs.MainBranch, "main")
+	if err := w.r.CreateBranch(ctx, alice, "release", w.commitOf(vcs.MainBranch)); err != nil {
+		t.Fatal(err)
+	}
+	w.put("release", "notes/release", w.note(7, "a note only the tag keeps"))
+	tagged := w.commit("release", "the release")
+	if _, err := w.r.CreateTag(ctx, alice, "v1", tagged.Hash, "release 1"); err != nil {
+		t.Fatal(err)
+	}
+	if err := w.r.DeleteBranch(ctx, alice, "release"); err != nil {
+		t.Fatal(err)
+	}
+	only := hash.Sum([]byte("a note only the tag keeps"))
+	for _, jump := range []time.Duration{0, grace + time.Minute} {
+		w.jump = jump
+		if _, err := w.gc(); err != nil {
+			t.Fatalf("GC: %v", err)
+		}
+	}
+	if _, err := w.store().Get(ctx, only); err != nil {
+		t.Fatalf("after GC an object only a tag reaches reads as %v: GC did not keep what the tag names", err)
+	}
+	if err := w.r.DeleteTag(ctx, alice, "v1"); err != nil {
+		t.Fatalf("DeleteTag = %v", err)
+	}
+	for _, jump := range []time.Duration{grace + 2*time.Minute, 2*grace + 3*time.Minute} {
+		w.jump = jump
+		if _, err := w.gc(); err != nil {
+			t.Fatalf("GC after the tag was deleted: %v", err)
+		}
+	}
+	if _, err := w.store().Get(ctx, only); !errors.Is(err, chunk.ErrNotFound) {
+		t.Fatalf("two grace windows after its tag was deleted, an object only the tag reached reads as %v, want ErrNotFound", err)
+	}
+	if got := w.readable(); !got["a note main keeps"] {
+		t.Fatal("collecting the tag's history lost what main keeps")
+	}
+}
+
 func (w *world) commitOf(branch string) hash.Hash {
 	w.t.Helper()
 	c, err := w.r.Head(ctx, alice, branch)

@@ -531,6 +531,9 @@ func TestEveryCallIsAuthorized(t *testing.T) {
 		}},
 		{"user:bob 3 branch:feature", func(r *vcs.Repo) error { return r.DeleteBranch(ctx, bob, "feature") }},
 		{"user:bob 3 tag:v1", func(r *vcs.Repo) error { _, err := r.CreateTag(ctx, bob, "v1", head, "t"); return err }},
+		{"user:bob 1 tag:v1", func(r *vcs.Repo) error { _, err := r.Tag(ctx, bob, "v1"); return err }},
+		{"user:bob 1 repo", func(r *vcs.Repo) error { _, err := r.Tags(ctx, bob); return err }},
+		{"user:bob 3 tag:v1", func(r *vcs.Repo) error { return r.DeleteTag(ctx, bob, "v1") }},
 		{"user:bob 2 branch:main", func(r *vcs.Repo) error { _, err := r.Merge(ctx, bob, "main", theirs); return err }},
 		{"user:bob 1 branch:main", func(r *vcs.Repo) error { _, err := r.Conflicts(ctx, bob, "main"); return err }},
 		{"user:bob 2 branch:main", func(r *vcs.Repo) error { return r.ResolveConflict(ctx, bob, "main", "doc", &resolved) }},
@@ -808,5 +811,80 @@ func TestTagsNameCommits(t *testing.T) {
 	}
 	if _, err := f.r.CreateTag(ctx, alice, "bad..name", head.Hash, "x"); !errors.Is(err, vcs.ErrInvalidName) {
 		t.Fatalf("an invalid tag name = %v, want ErrInvalidName", err)
+	}
+}
+
+// Tags are listed in order and read back by name as they were created
+// (issue #2).
+func TestTagsAreListedAndReadBack(t *testing.T) {
+	f := newFixture(t)
+	if tags, err := f.r.Tags(ctx, alice); err != nil || len(tags) != 0 {
+		t.Fatalf("a new repository lists tags %q (%v), want none", tags, err)
+	}
+	head := f.head(vcs.MainBranch).Hash
+	created := map[string]vcs.Tag{}
+	for _, c := range []struct {
+		name, message string
+		by            auth.Principal
+	}{{"v1.0", "first release", alice}, {"v0.9", "a preview", bob}, {"nightly/2026-09-23", "", alice}} {
+		tag, err := f.r.CreateTag(ctx, c.by, c.name, head, c.message)
+		if err != nil {
+			t.Fatal(err)
+		}
+		created[c.name] = tag
+	}
+	tags, err := f.r.Tags(ctx, alice)
+	if want := "nightly/2026-09-23 v0.9 v1.0"; err != nil || strings.Join(tags, " ") != want {
+		t.Fatalf("Tags = %q (%v), want %q", tags, err, want)
+	}
+	for name, want := range created {
+		got, err := f.r.Tag(ctx, bob, name)
+		if err != nil {
+			t.Fatalf("Tag(%q) = %v", name, err)
+		}
+		if got.Hash != want.Hash || got.Target != want.Target || !got.Time.Equal(want.Time) || got.Tagger != want.Tagger || got.Message != want.Message {
+			t.Errorf("Tag(%q) reads back %+v, created as %+v", name, got, want)
+		}
+	}
+}
+
+// A tag the refs do not hold is not found, to read or to delete; a deleted
+// tag is gone, and its name takes a new tag (issue #2).
+func TestAMissingOrDeletedTagIsNotFound(t *testing.T) {
+	f := newFixture(t)
+	if _, err := f.r.Tag(ctx, alice, "v9"); !errors.Is(err, vcs.ErrTagNotFound) {
+		t.Fatalf("reading a tag never created = %v, want ErrTagNotFound", err)
+	}
+	if err := f.r.DeleteTag(ctx, alice, "v9"); !errors.Is(err, vcs.ErrTagNotFound) {
+		t.Fatalf("deleting a tag never created = %v, want ErrTagNotFound", err)
+	}
+	if _, err := f.r.Tag(ctx, alice, "bad..name"); !errors.Is(err, vcs.ErrInvalidName) {
+		t.Fatalf("reading an invalid tag name = %v, want ErrInvalidName", err)
+	}
+	if err := f.r.DeleteTag(ctx, alice, "bad..name"); !errors.Is(err, vcs.ErrInvalidName) {
+		t.Fatalf("deleting an invalid tag name = %v, want ErrInvalidName", err)
+	}
+	head := f.head(vcs.MainBranch).Hash
+	first, err := f.r.CreateTag(ctx, alice, "v1", head, "first")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := f.r.DeleteTag(ctx, alice, "v1"); err != nil {
+		t.Fatalf("DeleteTag = %v", err)
+	}
+	if _, err := f.r.Tag(ctx, alice, "v1"); !errors.Is(err, vcs.ErrTagNotFound) {
+		t.Fatalf("a deleted tag reads as %v, want ErrTagNotFound", err)
+	}
+	if tags, err := f.r.Tags(ctx, alice); err != nil || len(tags) != 0 {
+		t.Fatalf("after its one tag was deleted the repository lists %q (%v)", tags, err)
+	}
+	f.put(vcs.MainBranch, "doc", f.obj(8, "later"))
+	later := f.commit(vcs.MainBranch, "later").Hash
+	again, err := f.r.CreateTag(ctx, alice, "v1", later, "second")
+	if err != nil {
+		t.Fatalf("a deleted tag's name does not take a new tag: %v", err)
+	}
+	if got, err := f.r.Tag(ctx, alice, "v1"); err != nil || got.Target != later || got.Hash == first.Hash || got.Hash != again.Hash {
+		t.Fatalf("the name's new tag reads as %+v (%v), want the one naming the later commit", got, err)
 	}
 }

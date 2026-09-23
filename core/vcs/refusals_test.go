@@ -7,6 +7,7 @@ import (
 
 	"github.com/SmithOperatingSolutions/snapshot-core/core/chunk"
 	"github.com/SmithOperatingSolutions/snapshot-core/core/hash"
+	"github.com/SmithOperatingSolutions/snapshot-core/core/prolly"
 	"github.com/SmithOperatingSolutions/snapshot-core/core/vcs"
 )
 
@@ -207,5 +208,55 @@ func TestMergesOutOfTurnAreRefused(t *testing.T) {
 	}
 	if cs, err := f.r.Conflicts(ctx, alice, main); err != nil || len(cs) != 0 {
 		t.Fatalf("after resolving the only conflict, Conflicts = %v, %v; want none", cs, err)
+	}
+}
+
+// A tag ref names a tag chunk by its 32-byte hash. One that names a commit,
+// or holds 33 bytes, reads as corrupt, never as a tag (issue #2).
+func TestForgedTagRefsAreCorrupt(t *testing.T) {
+	for _, c := range []struct {
+		name  string
+		value func(head, tag hash.Hash) []byte
+	}{
+		{"a tag naming a commit", func(head, _ hash.Hash) []byte { return head[:] }},
+		{"a tag of 33 bytes", func(_, tag hash.Hash) []byte { return append(tag[:], 0) }},
+	} {
+		f := newFixture(t)
+		head := f.head(vcs.MainBranch).Hash
+		tag, err := f.r.CreateTag(ctx, alice, "v1", head, "t")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got, err := f.r.Tag(ctx, alice, "v1"); err != nil || got.Hash != tag.Hash {
+			t.Fatalf("%s: positive control: Tag = %+v, %v", c.name, got, err)
+		}
+		f.forge("tags/v1", c.value(head, tag.Hash))
+		if got, err := f.r.Tag(ctx, alice, "v1"); !errors.Is(err, chunk.ErrCorrupt) {
+			t.Errorf("%s: Tag = %+v, %v; want ErrCorrupt", c.name, got, err)
+		}
+	}
+}
+
+// forge sets a ref to raw bytes behind the version graph's back.
+func (f *fixture) forge(key string, value []byte) {
+	f.t.Helper()
+	root, err := f.s.Root(ctx)
+	if err != nil {
+		f.t.Fatal(err)
+	}
+	m, err := prolly.Open(ctx, f.s, f.o.Config, root)
+	if err != nil {
+		f.t.Fatal(err)
+	}
+	e := m.Editor()
+	if err := e.Put([]byte(key), value); err != nil {
+		f.t.Fatal(err)
+	}
+	forged, err := e.Flush(ctx)
+	if err != nil {
+		f.t.Fatal(err)
+	}
+	if err := f.s.CompareAndSetRoot(ctx, root, forged.Root()); err != nil {
+		f.t.Fatal(err)
 	}
 }
