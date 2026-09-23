@@ -354,7 +354,16 @@ working set  0x05 · working [32] · staged [32] · merging u8 (0 or 1) ·
 - Every call takes a `Principal` and asks the `Authorizer` about exactly
   what it does (read, write or manage a branch, manage a tag, admin the
   repository), except `Namespace`: it opens what a hash names, and a host
-  that has the hash has the chunk store it came from.
+  that has the hash has the chunk store it came from. Writes are also
+  authorized per path (the spec's "per path prefix"): every write asks for
+  write on each path it changes, `path:<branch>:<path>`. `UpdateWorkingSet`
+  diffs the working set stored under `prev`, never the caller's copy;
+  `CommitWorkingSet` diffs the head against what is staged, so committing
+  someone else's staged change needs the committer's own permission;
+  `Merge` diffs the working namespace against the result;
+  `ResolveConflict` asks for its path. Reads stay per branch: a host holding
+  the chunk store can read what it can open, so a per-path read rule belongs
+  in the host's own read API.
 
 ### Merging (`core/merge`)
 
@@ -451,6 +460,29 @@ fails with `chunk.ErrStale`, which the version graph reports as `ErrConflict`,
 and the writer's host re-reads and writes again. A store that sees a new gcGen
 rebuilds its index from the manifest's index objects, so nothing points into
 a deleted pack.
+
+**Clocks.** Expiry is GC's own reckoning: it dates condemnations by its
+clock, and an expired pack is deleted by name whatever else is true. An
+orphan's age is the backend's to tell, since the backend stamps its
+objects: GC puts a probe under `gc/`, reads the stamp it got, and measures
+ages against that, never against its own clock. A backend whose clock runs
+behind GC's would otherwise make a writer's upload of a moment ago look old.
+
+**Entry point.** `repo.GC(ctx, principal, options, grace)` needs admin and
+the raw store. Run on a `NoDelete` store it condemns but cannot delete
+(`ErrDeleteForbidden`); what it expired is an orphan by then, and the next
+run on the raw store deletes it.
+
+**Reclaiming space.** GC frees whole packs. At the default pack size a
+session's packs mix what later dies with what lives, and such a pack is
+kept whole; rewriting mostly-dead packs (copying their live chunks out and
+condemning them) is the next step, not v1's.
+
+**Proof.** `TestGCSafetyProperty` drives random histories the way a host
+following the contract does, with GC between the steps as the clock moves
+on, edits that span collections (and are fenced), merges left in conflict,
+and deleted branches, and checks after every run that the whole repository
+reads, and at the end that nothing unreachable is left to condemn.
 
 **What a host must do.** Publish what it writes, and use what it reads,
 within the grace window. A chunk is deleted only when it was unreachable at

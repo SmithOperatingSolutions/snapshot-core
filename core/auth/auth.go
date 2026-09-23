@@ -52,7 +52,10 @@ const (
 )
 
 // Authorizer decides one call: nil allows it, an error wrapping ErrDenied
-// refuses it.
+// refuses it. The resource names what the call acts on: "repo" (the whole
+// repository: reading history, GC), "branch:<name>", "tag:<name>", or
+// "path:<branch>:<path>", asked for write on every path a write changes. A
+// branch name holds no colon, so a policy can match by prefix.
 type Authorizer interface {
 	Authorize(ctx context.Context, p Principal, a Action, resource string) error
 }
