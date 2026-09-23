@@ -1251,3 +1251,17 @@ find: if _, err := c.git("rev-parse", "--verify", "--quiet", "main^{commit}"); e
 replace: if _, err := c.git("rev-parse", "--verify", "--quiet", "main^{commit}"); err == nil || true {
 pkg: ./tools/redcheck
 run: ^TestBaseDefaultsToMainThenTheRootCommit$
+
+id: redcheck-caller-skip-not-judged
+file: tools/redcheck/redcheck.go
+find: if callers[dir+"\x00"+n] && r.action == "skip" && !r.panicked {
+replace: if callers[dir+"\x00"+n] && r.action == "skip" && !r.panicked && false {
+pkg: ./tools/redcheck
+run: ^TestAContractCallerThatSkipsIsNotJudged$
+
+id: redcheck-all-callers-skipped
+file: tools/redcheck/redcheck.go
+find: if ran == 0 && skipped > 0 {
+replace: if ran == 0 && skipped > 0 && false {
+pkg: ./tools/redcheck
+run: ^TestAContractCallerThatSkipsIsNotJudged$

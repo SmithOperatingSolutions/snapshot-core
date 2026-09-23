@@ -178,9 +178,9 @@ func (c checker) git(args ...string) (string, error) {
 
 // changedTests returns, per package directory, the Test functions that exist
 // at commit and either did not exist at its parent, have a different body, or
-// call a contract package the commit changed, and the build tags those tests'
-// files require.
-func (c checker) changedTests(commit string) (map[string][]string, map[string][]string, error) {
+// call a contract package the commit changed; the build tags those tests'
+// files require; and which of them (dir+"\x00"+name) are in only as callers.
+func (c checker) changedTests(commit string) (map[string][]string, map[string][]string, map[string]bool, error) {
 	parent := commit + "^"
 	if _, err := c.git("rev-parse", "--verify", "--quiet", parent); err != nil {
 		parent = "" // root commit: everything is new
@@ -193,17 +193,19 @@ func (c checker) changedTests(commit string) (map[string][]string, map[string][]
 		files, err = c.git("diff", "--name-only", "--diff-filter=AM", parent, commit)
 	}
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
 	changed := map[string][]string{}
 	tagSets := map[string]map[string]bool{}
 	seen := map[string]bool{}
-	add := func(file, name, src string) {
+	callers := map[string]bool{}
+	add := func(file, name, src string, caller bool) {
 		dir := path.Dir(file)
 		if seen[dir+"\x00"+name] {
-			return
+			return // changed in its own right beats calling a contract
 		}
 		seen[dir+"\x00"+name] = true
+		callers[dir+"\x00"+name] = caller
 		changed[dir] = append(changed[dir], name)
 		if tagSets[dir] == nil {
 			tagSets[dir] = map[string]bool{}
@@ -218,7 +220,7 @@ func (c checker) changedTests(commit string) (map[string][]string, map[string][]
 		}
 		now, err := c.git("show", commit+":"+f)
 		if err != nil {
-			return nil, nil, err
+			return nil, nil, nil, err
 		}
 		before := ""
 		if parent != "" {
@@ -226,35 +228,35 @@ func (c checker) changedTests(commit string) (map[string][]string, map[string][]
 		}
 		nowFns, err := testBodies(f, now)
 		if err != nil {
-			return nil, nil, err
+			return nil, nil, nil, err
 		}
 		beforeFns, _ := testBodies(f, before) // an unparsable parent just means "all new"
 		for name, body := range nowFns {
 			if prev, ok := beforeFns[name]; !ok || prev != body {
-				add(f, name, now)
+				add(f, name, now, false)
 			}
 		}
 	}
 	contracts, err := c.changedContracts(commit, strings.Fields(files))
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
 	if len(contracts) > 0 {
 		users, err := c.filesImporting(commit, contracts)
 		if err != nil {
-			return nil, nil, err
+			return nil, nil, nil, err
 		}
 		for _, f := range users {
 			src, err := c.git("show", commit+":"+f)
 			if err != nil {
-				return nil, nil, err
+				return nil, nil, nil, err
 			}
 			names, err := contractCallers(f, src, contracts)
 			if err != nil {
-				return nil, nil, err
+				return nil, nil, nil, err
 			}
 			for _, name := range names {
-				add(f, name, src)
+				add(f, name, src, true)
 			}
 		}
 	}
@@ -266,7 +268,7 @@ func (c checker) changedTests(commit string) (map[string][]string, map[string][]
 		}
 		sort.Strings(tags[dir])
 	}
-	return changed, tags, nil
+	return changed, tags, callers, nil
 }
 
 // platformTags are satisfied (or not) by the toolchain itself; forcing one on
@@ -450,7 +452,7 @@ func backfillMutants(body string) []string {
 }
 
 func (c checker) checkTestCommit(commit string, mutants []string) ([]Violation, int, error) {
-	changed, tags, err := c.changedTests(commit)
+	changed, tags, callers, err := c.changedTests(commit)
 	if err != nil {
 		return nil, 0, err
 	}
@@ -474,7 +476,7 @@ func (c checker) checkTestCommit(commit string, mutants []string) ([]Violation, 
 	}
 	sort.Strings(dirs)
 	var vs []Violation
-	ran := 0
+	ran, skipped := 0, 0
 	for _, dir := range dirs {
 		names := changed[dir]
 		fmt.Fprintf(c.o.Log, "redcheck: %.9s ./%s %v\n", commit, dir, names)
@@ -488,11 +490,22 @@ func (c checker) checkTestCommit(commit string, mutants []string) ([]Violation, 
 			continue
 		}
 		for _, n := range names {
+			r := results.tests[n]
+			if callers[dir+"\x00"+n] && r.action == "skip" && !r.panicked {
+				// Only a caller of a changed contract, and it needs an
+				// environment this check lacks (the MinIO tier): not judged.
+				fmt.Fprintf(c.o.Log, "redcheck: %.9s %s calls the changed contract but skipped: not judged\n", commit, n)
+				skipped++
+				continue
+			}
 			ran++
-			if v, bad := judge(n, results.tests[n], mutants != nil); bad {
+			if v, bad := judge(n, r, mutants != nil); bad {
 				vs = append(vs, v)
 			}
 		}
+	}
+	if ran == 0 && skipped > 0 {
+		vs = append(vs, Violation{Reason: "every test that calls the changed contract skipped, so nothing was seen to fail"})
 	}
 	if mutants != nil {
 		mvs, err := c.checkMutants(wt, changed, mutants)
