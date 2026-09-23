@@ -242,3 +242,73 @@ find: args = append(args, "-tags", strings.Join(tags, ","))
 replace: _ = tags
 pkg: ./tools/redcheck
 run: ^TestBuildTaggedTestIsRunWithItsTag$
+
+id: blob-name-no-dot-segments
+file: core/blob/port.go
+find: if seg[0] == '.' {
+replace: if seg[0] == '.' && false {
+pkg: ./core/blob
+run: ^TestValidName$
+
+id: blob-name-charset
+file: core/blob/port.go
+find: if (c < 'a' || c > 'z') && (c < '0' || c > '9')
+replace: if (c < 'A' || c > 'z') && (c < '0' || c > '9')
+pkg: ./core/blob
+run: ^TestValidName$
+
+id: blob-name-depth
+file: core/blob/port.go
+find: if len(segs) > MaxDepth {
+replace: if len(segs) > MaxDepth+1 {
+pkg: ./core/blob
+run: ^TestValidName$
+
+id: blob-nodelete-forbids
+file: core/blob/port.go
+find: func (noDelete) Delete(context.Context, string) error { return ErrDeleteForbidden }
+replace: func (noDelete) unused() {}
+pkg: ./core/blob
+run: ^TestNoDeleteForbidsOnlyDelete$
+
+id: blob-copyexact-refuses-long-body
+file: core/blob/helpers.go
+find: if m > 0 {
+replace: if m > 1 {
+pkg: ./core/blob/mem
+run: ^TestContract$/^PutSizeMismatchLeavesNothing$
+
+id: blob-list-limit-cap
+file: core/blob/helpers.go
+find: if limit < 1 || limit > MaxListPage {
+replace: if limit < 1 {
+pkg: ./core/blob/mem
+run: ^TestContract$/^ListLimits$
+
+id: blob-root-refuses-empty
+file: core/blob/helpers.go
+find: if len(next) == 0 {\n\t\treturn ErrEmptyRoot
+replace: if false {\n\t\treturn ErrEmptyRoot
+pkg: ./core/blob/mem
+run: ^TestContract$/^RootValueLimits$
+
+id: mem-put-if-absent
+file: core/blob/mem/mem.go
+find: if _, ok := s.objects[name]; ok {
+replace: if _, ok := s.objects[name]; ok && false {
+pkg: ./core/blob/mem
+run: ^TestContract$/^PutExistingRefused$
+
+id: mem-swap-compares-version
+file: core/blob/mem/mem.go
+find: if s.version != expected {
+replace: if s.version != expected && false {
+pkg: ./core/blob/mem
+run: ^TestContract$/^StaleSwapRefused$
+
+id: mem-versions-are-fresh
+file: core/blob/mem/mem.go
+find: s.root, s.version = bytes.Clone(next), v
+replace: v = blob.Version(next)\n\ts.root, s.version = bytes.Clone(next), v
+pkg: ./core/blob/mem
+run: ^TestContract$/^VersionsNeverRepeat$

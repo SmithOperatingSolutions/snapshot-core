@@ -10,7 +10,9 @@ package blob
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
+	"strings"
 	"time"
 )
 
@@ -93,12 +95,51 @@ type BlobStore interface {
 // '/'-separated segments of 1..MaxSegmentLen bytes from [a-z0-9._-], at most
 // MaxDepth segments, no segment starting with '.' (so "." and ".." and every
 // backend's own dot-files are unreachable).
-func ValidName(name string) error { return nil }
+func ValidName(name string) error {
+	if len(name) == 0 || len(name) > MaxNameLen {
+		return fmt.Errorf("%w: length %d outside 1..%d", ErrInvalidName, len(name), MaxNameLen)
+	}
+	segs := strings.Split(name, "/")
+	if len(segs) > MaxDepth {
+		return fmt.Errorf("%w: %d segments, more than %d", ErrInvalidName, len(segs), MaxDepth)
+	}
+	for _, seg := range segs {
+		if err := validSegment(seg); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func validSegment(seg string) error {
+	if len(seg) == 0 || len(seg) > MaxSegmentLen {
+		return fmt.Errorf("%w: segment length %d outside 1..%d", ErrInvalidName, len(seg), MaxSegmentLen)
+	}
+	if seg[0] == '.' {
+		return fmt.Errorf("%w: segment starts with '.'", ErrInvalidName)
+	}
+	for i := 0; i < len(seg); i++ {
+		c := seg[i]
+		if (c < 'a' || c > 'z') && (c < '0' || c > '9') && c != '.' && c != '_' && c != '-' {
+			return fmt.Errorf("%w: byte %#x", ErrInvalidName, c)
+		}
+	}
+	return nil
+}
 
 // ValidPrefix reports whether prefix is a legal List prefix: empty, or a
 // valid name, or a valid name followed by '/', or a valid name's leading part.
-func ValidPrefix(prefix string) error { return nil }
+func ValidPrefix(prefix string) error {
+	if prefix == "" {
+		return nil
+	}
+	return ValidName(strings.TrimSuffix(prefix, "/"))
+}
 
 // NoDelete wraps a store so Delete fails with ErrDeleteForbidden. The
 // repository runs on a NoDelete store; only core/gc holds the raw one.
-func NoDelete(s BlobStore) BlobStore { return s }
+func NoDelete(s BlobStore) BlobStore { return noDelete{s} }
+
+type noDelete struct{ BlobStore }
+
+func (noDelete) Delete(context.Context, string) error { return ErrDeleteForbidden }
