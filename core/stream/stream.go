@@ -321,7 +321,46 @@ func (r *Reader) Read(p []byte) (int, error) {
 // nodes are read and checked as a Reader checks them; data chunks are named,
 // never read, so walking a stream costs its index, not its bytes.
 func Walk(ctx context.Context, rd chunk.Reader, ref Ref, visit func(hash.Hash) (bool, error)) error {
-	return errors.New("stream: Walk is not written yet")
+	if ref.Depth > maxDepth || ref.Size > math.MaxInt64 {
+		return corrupt("ref: depth %d, size %d", ref.Depth, ref.Size)
+	}
+	return walk(ctx, rd, ref.Root, int(ref.Depth), ref.Size, true, visit)
+}
+
+// walk visits h, a chunk at depth (0: data) whose parent says it holds want
+// bytes, and what it reaches.
+func walk(ctx context.Context, rd chunk.Reader, h hash.Hash, depth int, want uint64, top bool, visit func(hash.Hash) (bool, error)) error {
+	deeper, err := visit(h)
+	if err != nil || !deeper || depth == 0 {
+		return err
+	}
+	b, err := rd.Get(ctx, h)
+	if err != nil {
+		return err
+	}
+	level, es, err := decodeIndex(b)
+	if err != nil {
+		return err
+	}
+	if level != depth {
+		return corrupt("an index node at depth %d is level %d", depth, level)
+	}
+	if top && len(es) < 2 {
+		return corrupt("the top index node has one child")
+	}
+	var sum uint64
+	for _, e := range es {
+		sum += e.size // decodeIndex checked the sum fits
+	}
+	if sum != want {
+		return corrupt("a level-%d node's entries add to %d bytes, its parent says %d", level, sum, want)
+	}
+	for _, e := range es {
+		if err := walk(ctx, rd, e.child, depth-1, e.size, false, visit); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // ReadAll returns the whole stream. It grows with the bytes actually read,

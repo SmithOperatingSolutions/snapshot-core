@@ -2547,3 +2547,45 @@ find: if a.parent != nil && b.parent != nil && a.parent.valid() && b.parent.vali
 replace: if a.parent != nil && b.parent != nil && a.parent.valid() && b.parent.valid() && equalItems(a.parent, b.parent) && false {
 pkg: ./core/merge
 run: ^TestMergingLargeNamespacesReadsLittle$
+
+id: stream-walk-level-checked
+file: core/stream/stream.go
+find: if level != depth {\n\t\treturn corrupt(
+replace: if level != depth && false {\n\t\treturn corrupt(
+pkg: ./core/stream
+run: ^TestWalkRefusesForgedIndexNodes$
+
+id: stream-walk-top-has-two-children
+file: core/stream/stream.go
+find: if top && len(es) < 2 {
+replace: if top && len(es) < 2 && false {
+pkg: ./core/stream
+run: ^TestWalkRefusesForgedIndexNodes$
+
+id: stream-walk-sizes-add-up
+file: core/stream/stream.go
+find: if sum != want {\n\t\treturn corrupt(
+replace: if sum != want && false {\n\t\treturn corrupt(
+pkg: ./core/stream
+run: ^TestWalkRefusesForgedIndexNodes$
+
+id: stream-walk-ref-bounded
+file: core/stream/stream.go
+find: if ref.Depth > maxDepth || ref.Size > math.MaxInt64 {\n\t\treturn corrupt("ref: depth %d, size %d", ref.Depth, ref.Size)\n\t}\n\treturn walk(
+replace: if (ref.Depth > maxDepth || ref.Size > math.MaxInt64) && false {\n\t\treturn corrupt("ref: depth %d, size %d", ref.Depth, ref.Size)\n\t}\n\treturn walk(
+pkg: ./core/stream
+run: ^TestWalkRefusesForgedIndexNodes$
+
+id: stream-walk-data-never-read
+file: core/stream/stream.go
+find: if err != nil || !deeper || depth == 0 {
+replace: if err != nil || !deeper {
+pkg: ./core/stream
+run: ^TestWalkNamesEveryChunkAndReadsOnlyTheIndex$
+
+id: stream-walk-honors-visit
+file: core/stream/stream.go
+find: if err != nil || !deeper || depth == 0 {
+replace: if err != nil || !(deeper || true) || depth == 0 {
+pkg: ./core/stream
+run: ^TestWalkGoesNoFurtherThanVisitSays$
