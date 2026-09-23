@@ -361,6 +361,34 @@ func TestAFuzzTargetIsJudgedLikeATest(t *testing.T) {
 	}
 }
 
+const fuzzAdd = "package calc\n\nimport \"testing\"\n\nfunc FuzzAdd(f *testing.F) {\n\tf.Add(2, 3)\n" +
+	"\tf.Fuzz(func(t *testing.T, a, b int) {\n\t\tif got := Add(a, b); got != a+b && got != 0 {\n\t\t\tt.Fatalf(\"Add(%d, %d) = %d\", a, b, got)\n\t\t}\n\t})\n}\n"
+
+// In a red commit, a fuzz target that passes against the stub stands beside
+// the failing test (its property may hold of a stub that answers nothing);
+// a red commit of passing fuzz targets alone showed nothing failing.
+func TestAFuzzTargetNeedNotFailBesideARedTest(t *testing.T) {
+	f := newFixture(t)
+	f.write("calc/calc_test.go", addTest)
+	f.write("calc/calc_fuzz_test.go", fuzzAdd)
+	f.commit("test(calc): Add adds, and is fuzzed")
+	f.write("calc/calc.go", addImpl)
+	f.commit("feat(calc): Add adds")
+	if rep := f.check(); len(rep.Violations) != 0 || rep.TestsRun != 2 {
+		t.Fatalf("a red test beside a fuzz target its stub passes was blocked (ran %d):\n%s", rep.TestsRun, reasons(rep))
+	}
+
+	g := newFixture(t)
+	g.write("calc/calc_fuzz_test.go", fuzzAdd)
+	g.commit("test(calc): Add is fuzzed")
+	g.write("calc/calc.go", addImpl)
+	g.commit("feat(calc): Add adds")
+	vs := g.check().Violations
+	if len(vs) != 1 || !strings.Contains(vs[0].Reason, "nothing was seen to fail") {
+		t.Fatalf("a red commit of fuzz targets that all pass was accepted:\n%s", reasons(Report{Violations: vs}))
+	}
+}
+
 // Pairs may interleave across scopes: test(a), test(b), feat(b), feat(a).
 func TestInterleavedPairsAreMatchedByScope(t *testing.T) {
 	f := newFixture(t)
