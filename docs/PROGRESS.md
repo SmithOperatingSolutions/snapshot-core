@@ -5,7 +5,7 @@ every "first failing test" checkbox in both specs. Updated at each milestone
 boundary and whenever a checklist item turns green; the evidence for each item
 is the named test, and the commit that added it carries its red.
 
-**Updated 2026-09-23** · branch `storage-core`, one PR into `main` · 219 commits
+**Updated 2026-09-23** · branch `storage-core`, one PR into `main` · 224 commits
 · red-check clean · 452 checked-in mutants, all killed · lint clean · every
 package at or above its coverage gate
 
@@ -297,6 +297,7 @@ Beyond the list: merging what a branch already holds changes nothing (`TestMergi
 | the GC property's counters | The fence never fired in sequential histories | An edit that spans two collections |
 | a flaky test | A fresh object looked up by a prefix a real pack name shares one run in sixty | Looked up by name |
 | the full gates, closing C4 | A commit changing a signature mechanically across tests was blocked (each changed test judged); a stored-namespace check the path checks made dead; a branch check the path checks masked | The commit split into a refactor and a red; the check removed; a test granting paths and not the branch |
+| the PR's first CI run | Docker Hub no longer serves `minio/minio`: the MinIO tier had passed locally on a copy cached a year before, and the failure said only "exit status 125" | The tier runs MinIO's release from quay.io, pinned by digest; a failed command's error carries what it printed |
 | (redcheck on this branch) | Build-tagged tests unjudged; `TestMain` judged; pairs not matched by scope; contract changes invisible; environment-bound callers refused; no `main` in a new clone; a tagged backfill's mutants built without its tag; fuzz targets not counted as tests | Tool fixed each time, with a red test |
 
 ## Next
