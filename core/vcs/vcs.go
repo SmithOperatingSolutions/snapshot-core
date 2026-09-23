@@ -612,7 +612,9 @@ func (r *Repo) MergeBase(ctx context.Context, p auth.Principal, a, b hash.Hash) 
 // mergeBase walks both histories highest first. A commit's descendants are
 // all higher than it, so when it is popped every path to it from a and b has
 // been seen: the first commit reachable from both is the highest common
-// ancestor (the lower hash on a tie), a best merge base.
+// ancestor (the lower hash on a tie), a best merge base. A commit is queued
+// only while it has no flags, and queuing gives it some, so none is popped
+// twice.
 func (r *Repo) mergeBase(ctx context.Context, a, b hash.Hash) (hash.Hash, error) {
 	const fromA, fromB = 1, 2
 	flags := map[hash.Hash]int{}
@@ -630,13 +632,8 @@ func (r *Repo) mergeBase(ctx context.Context, a, b hash.Hash) (hash.Hash, error)
 		}
 		flags[s.h] |= s.f
 	}
-	done := map[hash.Hash]bool{}
 	for q.Len() > 0 {
 		c := heap.Pop(q).(Commit)
-		if done[c.Hash] {
-			continue
-		}
-		done[c.Hash] = true
 		f := flags[c.Hash]
 		if f == fromA|fromB {
 			return c.Hash, nil
