@@ -105,7 +105,7 @@ func TestAddVolumeWhenReadOnlyOrFailingChangesNothing(t *testing.T) {
 	if err := os.Mkdir(locked, 0o500); err != nil {
 		t.Fatal(err)
 	}
-	defer os.Chmod(locked, 0o700)
+	defer func() { _ = os.Chmod(locked, 0o700) }()
 	if err := s.AddVolume(filepath.Join(locked, "vol")); err == nil {
 		t.Fatal("AddVolume on an unwritable path reported success")
 	}

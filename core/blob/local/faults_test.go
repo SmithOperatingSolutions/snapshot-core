@@ -118,7 +118,7 @@ func TestUnreadableObjectIsAnErrorNotNotFound(t *testing.T) {
 	if err := os.Chmod(p, 0o000); err != nil {
 		t.Fatal(err)
 	}
-	defer os.Chmod(p, 0o600)
+	defer func() { _ = os.Chmod(p, 0o600) }()
 	rc, err := s.Get(ctx, "packs/y", 0, -1)
 	if err == nil {
 		rc.Close()
@@ -259,4 +259,139 @@ func FuzzParseMarker(f *testing.F) {
 			t.Fatalf("parsed a marker with a %d-character id", len(id))
 		}
 	})
+}
+
+// An I/O error must never be read as a benign state. Each of these is a
+// misclassification that would silently lose data one layer up.
+
+// An unreadable root is not "no root yet": if it were, SwapRoot(NoVersion)
+// would create a fresh root over the real one.
+func TestUnreadableRootIsAnErrorNeverNoRoot(t *testing.T) {
+	requireUnprivileged(t)
+	s, dir := newStore(t)
+	if _, err := s.SwapRoot(ctx, blob.NoVersion, []byte("the real root")); err != nil {
+		t.Fatal(err)
+	}
+	p := filepath.Join(dir, "root")
+	if err := os.Chmod(p, 0o000); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(p, 0o600) })
+	if r, err := s.Root(ctx); err == nil {
+		t.Fatalf("Root of an unreadable root file = %q with no error", r.Value)
+	}
+	if _, err := s.SwapRoot(ctx, blob.NoVersion, []byte("an impostor")); err == nil {
+		t.Fatal("SwapRoot(NoVersion) succeeded over an unreadable root: the real root was overwritten")
+	}
+	_ = os.Chmod(p, 0o600)
+	if r, err := s.Root(ctx); err != nil || string(r.Value) != "the real root" {
+		t.Fatalf("the real root is gone: %q, %v", r.Value, err)
+	}
+}
+
+// An unreadable directory is not an empty one: a listing that skipped it
+// would tell GC every pack in it is gone.
+func TestUnreadableDirectoryFailsTheListing(t *testing.T) {
+	requireUnprivileged(t)
+	s, dir := newStore(t)
+	for _, n := range []string{"packs/aa/1", "packs/bb/2"} {
+		if err := s.Put(ctx, n, strings.NewReader("x"), 1); err != nil {
+			t.Fatal(err)
+		}
+	}
+	shard := filepath.Join(dir, "objects", "packs", "bb")
+	if err := os.Chmod(shard, 0o000); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(shard, 0o700) })
+	if infos, err := s.List(ctx, "packs/", "", 100); err == nil {
+		t.Fatalf("List with an unreadable shard returned %d objects and no error", len(infos))
+	}
+}
+
+// A permission error on link is not "already exists": a content-addressed
+// caller would take ErrExists to mean the bytes are safely stored.
+func TestUnwritableDirectoryIsNeverErrExists(t *testing.T) {
+	requireUnprivileged(t)
+	s, dir := newStore(t)
+	if err := s.Put(ctx, "packs/first", strings.NewReader("x"), 1); err != nil {
+		t.Fatal(err)
+	}
+	deny(t, filepath.Join(dir, "objects", "packs"))
+	err := s.Put(ctx, "packs/second", strings.NewReader("y"), 1)
+	if err == nil {
+		t.Fatal("Put into an unwritable directory reported success")
+	}
+	if errors.Is(err, blob.ErrExists) {
+		t.Fatal("Put into an unwritable directory reported ErrExists: the caller would believe it stored")
+	}
+	if left := entries(t, filepath.Join(dir, "tmp")); len(left) != 0 {
+		t.Fatalf("the failed Put left %v in tmp/", left)
+	}
+}
+
+// A Stat that cannot look is not "not found".
+func TestStatPermissionErrorIsNotNotFound(t *testing.T) {
+	requireUnprivileged(t)
+	s, dir := newStore(t)
+	if err := s.Put(ctx, "packs/x", strings.NewReader("x"), 1); err != nil {
+		t.Fatal(err)
+	}
+	packs := filepath.Join(dir, "objects", "packs")
+	if err := os.Chmod(packs, 0o600); err != nil { // no search permission
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(packs, 0o700) })
+	_, err := s.Stat(ctx, "packs/x")
+	if err == nil || errors.Is(err, blob.ErrNotFound) {
+		t.Fatalf("Stat without search permission = %v; want an error that is not ErrNotFound", err)
+	}
+}
+
+// The swap lock is not optional: if it cannot be taken, nothing is swapped.
+func TestSwapRootRefusesWithoutItsLock(t *testing.T) {
+	requireUnprivileged(t)
+	s, dir := newStore(t)
+	v, err := s.SwapRoot(ctx, blob.NoVersion, []byte("before"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	lock := filepath.Join(dir, "root.lock")
+	if err := os.Chmod(lock, 0o000); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(lock, 0o600) })
+	if _, err := s.SwapRoot(ctx, v, []byte("after")); err == nil {
+		t.Fatal("SwapRoot proceeded without its lock: two processes could swap at once")
+	}
+	if r, err := s.Root(ctx); err != nil || string(r.Value) != "before" {
+		t.Fatalf("root after the refused swap: %q, %v", r.Value, err)
+	}
+}
+
+func TestOpenReportsUnreadableMarkersAndDetectorFailures(t *testing.T) {
+	requireUnprivileged(t)
+	_, dir := newStore(t)
+	marker := filepath.Join(dir, ".snapshot-core")
+	if err := os.Chmod(marker, 0o000); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := local.Open(dir, local.Options{}); err == nil || errors.Is(err, local.ErrNotAStore) {
+		t.Fatalf("Open with an unreadable marker = %v; want an error, and not \"not a store\"", err)
+	}
+	_ = os.Chmod(marker, 0o600)
+	failing := local.WithFSType(func(string) (string, error) { return "", errors.New("statfs failed") })
+	if _, err := local.Create(filepath.Join(t.TempDir(), "s"), failing); !errors.Is(err, local.ErrUnsupportedFilesystem) {
+		t.Fatalf("Create when the filesystem cannot be identified = %v, want ErrUnsupportedFilesystem (fail closed)", err)
+	}
+	// A temp directory that cannot be read does not stop the store opening:
+	// the sweep is best-effort.
+	tmp := filepath.Join(dir, "tmp")
+	if err := os.Chmod(tmp, 0o000); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(tmp, 0o700) })
+	if _, err := local.Open(dir, local.Options{}); err != nil {
+		t.Fatalf("Open failed because the temp sweep could not read tmp/: %v", err)
+	}
 }

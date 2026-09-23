@@ -579,3 +579,38 @@ find: if _, err := os.Stat(filepath.Join(paths[0], mapName)); err == nil {
 replace: if _, err := os.Stat(filepath.Join(paths[0], mapName)); err == nil && false {
 pkg: ./core/blob/multivol
 run: ^TestCreateNeverOverwritesAVolumeMap$
+
+id: local-unreadable-root-is-not-no-root
+file: core/blob/local/local.go
+find: if errors.Is(err, fs.ErrNotExist) {\n\t\treturn blob.Root{}, nil\n\t}\n\tif err != nil {\n\t\treturn blob.Root{}, err\n\t}
+replace: if err != nil {\n\t\treturn blob.Root{}, nil\n\t}
+pkg: ./core/blob/local
+run: ^TestUnreadableRootIsAnErrorNeverNoRoot$
+
+id: local-list-unreadable-dir-fails
+file: core/blob/local/local.go
+find: des, err := os.ReadDir(dir)\n\tif errors.Is(err, fs.ErrNotExist) {\n\t\treturn nil\n\t}\n\tif err != nil {\n\t\treturn err\n\t}
+replace: des, err := os.ReadDir(dir)\n\tif err != nil {\n\t\treturn nil\n\t}
+pkg: ./core/blob/local
+run: ^TestUnreadableDirectoryFailsTheListing$
+
+id: local-link-error-is-not-exists
+file: core/blob/local/local.go
+find: if errors.Is(err, fs.ErrExist) {\n\t\t\treturn blob.ErrExists\n\t\t}\n\t\treturn err
+replace: return blob.ErrExists
+pkg: ./core/blob/local
+run: ^TestUnwritableDirectoryIsNeverErrExists$
+
+id: local-stat-permission-is-not-not-found
+file: core/blob/local/local.go
+find: info, err := os.Stat(s.objectPath(name))\n\tif errors.Is(err, fs.ErrNotExist) {\n\t\treturn blob.Info{}, blob.ErrNotFound\n\t}
+replace: info, err := os.Stat(s.objectPath(name))\n\tif err != nil {\n\t\treturn blob.Info{}, blob.ErrNotFound\n\t}
+pkg: ./core/blob/local
+run: ^TestStatPermissionErrorIsNotNotFound$
+
+id: local-swap-requires-lock
+file: core/blob/local/local.go
+find: unlock, err := fsutil.Lock(filepath.Join(s.dir, lockName))\n\tif err != nil {\n\t\treturn blob.NoVersion, err\n\t}
+replace: unlock, err := fsutil.Lock(filepath.Join(s.dir, lockName))\n\tif err != nil {\n\t\tunlock = func() {}\n\t}
+pkg: ./core/blob/local
+run: ^TestSwapRootRefusesWithoutItsLock$
