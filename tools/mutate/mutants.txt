@@ -1197,8 +1197,8 @@ run: ^TestForgedManifestsAreRefused$
 
 id: manifest-condemned-kind
 file: core/chunk/packstore/manifest.go
-find: (e.kind != 1 && e.kind != 2)
-replace: (e.kind != 1 && e.kind != 2 && false)
+find: (e.kind != condemnedPack && e.kind != condemnedIndex)
+replace: (e.kind != condemnedPack && e.kind != condemnedIndex && false)
 pkg: ./core/chunk/packstore
 run: ^TestForgedManifestsAreRefused$
 
@@ -1337,15 +1337,15 @@ run: ^TestWriterEmitsTheDocumentedIndexFormat$|^TestAOnePieceStreamIsItsOwnRoot$
 
 id: stream-node-sum-checked
 file: core/stream/stream.go
-find: if sum != want {
-replace: if sum != want && false {
+find: if sum != want {\n\t\t\treturn nil, 0, corrupt(
+replace: if sum != want && false {\n\t\t\treturn nil, 0, corrupt(
 pkg: ./core/stream
 run: ^TestForgeriesThatWouldReadCleanly$
 
 id: stream-level-matches-depth
 file: core/stream/stream.go
-find: if level != depth {
-replace: if level != depth && false {
+find: if level != depth {\n\t\t\treturn nil, 0, corrupt(
+replace: if level != depth && false {\n\t\t\treturn nil, 0, corrupt(
 pkg: ./core/stream
 run: ^TestForgeriesThatWouldReadCleanly$
 
@@ -1759,8 +1759,8 @@ run: ^TestValidateReadsTheWholeBlob$
 
 id: blob-open-checks-the-format
 file: model/blob/blob.go
-find: if root.Format != Format {
-replace: if root.Format != Format && false {
+find: if root.Format != Format {\n\t\treturn nil, fmt.Errorf(
+replace: if root.Format != Format && false {\n\t\treturn nil, fmt.Errorf(
 pkg: ./model/blob
 run: ^TestOpenRefusesAnotherFormat$
 
@@ -2396,8 +2396,8 @@ run: ^TestTheConfigIsCheckedBeforeItIsUsed$
 
 id: repo-init-authorized-before-writing
 file: core/repo/repo.go
-find: if err := auth.Check(ctx, o.Authorizer, p, auth.Admin, "repo"); err != nil {
-replace: if err := auth.Check(ctx, o.Authorizer, p, auth.Admin, "repo"); err != nil && false {
+find: if err := auth.Check(ctx, o.Authorizer, p, auth.Admin, "repo"); err != nil {\n\t\treturn nil, err
+replace: if err := auth.Check(ctx, o.Authorizer, p, auth.Admin, "repo"); err != nil && false {\n\t\treturn nil, err
 pkg: ./core/repo
 run: ^TestARefusedInitWritesNothing$
 
@@ -2431,8 +2431,8 @@ run: ^TestEveryStoreFailureIsSurvivable$
 
 id: tree-root-format-checked
 file: model/tree/tree.go
-find: if root.Format != Format {
-replace: if root.Format != Format && false {
+find: if root.Format != Format {\n\t\treturn nil, fmt.Errorf(
+replace: if root.Format != Format && false {\n\t\treturn nil, fmt.Errorf(
 pkg: ./model/tree
 run: ^TestTreesRefuseWhatTheyCannotServe$
 
