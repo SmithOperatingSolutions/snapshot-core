@@ -372,6 +372,9 @@ func (s *Store) locate(ctx context.Context, h hash.Hash) (dedup.Location, []byte
 
 // Has implements chunk.Store.
 func (s *Store) Has(ctx context.Context, hs []hash.Hash) (map[hash.Hash]bool, error) {
+	if s.isClosed() {
+		return nil, chunk.ErrClosed
+	}
 	out := make(map[hash.Hash]bool, len(hs))
 	check := func() (missing bool) {
 		s.mu.Lock()
@@ -394,6 +397,9 @@ func (s *Store) Has(ctx context.Context, hs []hash.Hash) (map[hash.Hash]bool, er
 
 // Root implements chunk.Store.
 func (s *Store) Root(ctx context.Context) (hash.Hash, error) {
+	if s.isClosed() {
+		return hash.Hash{}, chunk.ErrClosed
+	}
 	if err := s.refresh(ctx); err != nil {
 		return hash.Hash{}, err
 	}
@@ -492,11 +498,20 @@ func (s *Store) CompareAndSetRoot(ctx context.Context, expected, next hash.Hash)
 func (s *Store) Stats(ctx context.Context) (chunk.Stats, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.closed {
+		return chunk.Stats{}, chunk.ErrClosed
+	}
 	n := int64(s.index.Len())
 	if s.pending != nil {
 		n += int64(s.pending.Count())
 	}
 	return chunk.Stats{Chunks: n}, nil
+}
+
+func (s *Store) isClosed() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.closed
 }
 
 // Close implements chunk.Store. Chunks never published are dropped.

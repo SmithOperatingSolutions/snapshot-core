@@ -78,6 +78,9 @@ func (s *Store) Get(ctx context.Context, h hash.Hash) ([]byte, error) {
 func (s *Store) Has(ctx context.Context, hs []hash.Hash) (map[hash.Hash]bool, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.closed {
+		return nil, chunk.ErrClosed
+	}
 	out := make(map[hash.Hash]bool, len(hs))
 	for _, h := range hs {
 		_, out[h] = s.chunks[h]
@@ -89,6 +92,9 @@ func (s *Store) Has(ctx context.Context, hs []hash.Hash) (map[hash.Hash]bool, er
 func (s *Store) Root(ctx context.Context) (hash.Hash, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.closed {
+		return hash.Hash{}, chunk.ErrClosed
+	}
 	return s.root, nil
 }
 
@@ -96,6 +102,9 @@ func (s *Store) Root(ctx context.Context) (hash.Hash, error) {
 func (s *Store) CompareAndSetRoot(ctx context.Context, expected, next hash.Hash) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.closed {
+		return chunk.ErrClosed
+	}
 	if _, ok := s.chunks[next]; !ok || next.IsZero() {
 		return fmt.Errorf("%w: %s", chunk.ErrRootMissing, next.Short())
 	}
@@ -110,6 +119,9 @@ func (s *Store) CompareAndSetRoot(ctx context.Context, expected, next hash.Hash)
 func (s *Store) Stats(ctx context.Context) (chunk.Stats, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.closed {
+		return chunk.Stats{}, chunk.ErrClosed
+	}
 	return chunk.Stats{Chunks: int64(len(s.chunks))}, nil
 }
 
