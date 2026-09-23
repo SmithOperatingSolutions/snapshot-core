@@ -1,0 +1,13 @@
+# Checked-in mutants: each severs a load-bearing guard, and the named test must
+# go red. `mise run mutate` re-runs them all (nightly in CI). A backfilled test
+# names its mutant in a "Red-Check: mutants <id>" trailer (CONTRIBUTING.md).
+#
+# Format: stanzas of key: value, separated by blank lines. In find/replace,
+# \n, \t and \\ are escapes. `find` must occur exactly once in `file`.
+
+id: redcheck-judges-changed-bodies
+file: tools/redcheck/redcheck.go
+find: if prev, ok := beforeFns[name]; !ok || prev != body {
+replace: if prev, ok := beforeFns[name]; !ok || (prev != body && false) {
+pkg: ./tools/redcheck
+run: ^TestChangedTestIsJudged$

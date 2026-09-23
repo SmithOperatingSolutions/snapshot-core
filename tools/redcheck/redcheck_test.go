@@ -210,3 +210,19 @@ func TestDocsAndChoresNeedNoRed(t *testing.T) {
 		t.Fatalf("a docs-only history was blocked (commits=%d):\n%s", rep.Commits, reasons(rep))
 	}
 }
+
+// A test: commit that strengthens an EXISTING test is judged on that test.
+func TestChangedTestIsJudged(t *testing.T) {
+	f := newFixture(t)
+	f.write("calc/calc_test.go", "package calc\n\nimport \"testing\"\n\nfunc TestAdd(t *testing.T) { _ = Add(1, 2) }\n")
+	f.commit("chore: a test that asserts nothing")
+	f.write("calc/calc_test.go", addTest)
+	f.commit("test(calc): TestAdd asserts the sum")
+	f.write("calc/calc.go", addImpl)
+	f.commit("feat(calc): Add adds")
+
+	rep := f.check()
+	if len(rep.Violations) != 0 || rep.TestsRun != 1 {
+		t.Fatalf("a strengthened existing test was not judged as the commit's red (ran %d):\n%s", rep.TestsRun, reasons(rep))
+	}
+}
