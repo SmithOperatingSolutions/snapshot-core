@@ -147,11 +147,11 @@ func TestAPackAboveTheThresholdIsKeptWhole(t *testing.T) {
 	if got := repackedNames(t, bs, kr); len(got) != 0 {
 		t.Fatalf("the manifest records %q as repacked", got)
 	}
+	if out := repackRound(t, bs, kr, liveSet(hs[0], hs[1]), t0, packstore.Repack{MaxLive: 0.9, Off: true}); out.Repacked != 0 {
+		t.Fatalf("with repacking off the round repacked %d packs", out.Repacked)
+	}
 	if out := repackRound(t, bs, kr, liveSet(hs[0], hs[1]), t0, packstore.Repack{MaxLive: 0.9}); out.Repacked != 1 {
 		t.Fatalf("with the threshold at nine tenths the pack was not repacked")
-	}
-	if out := repackRound(t, bs, kr, liveSet(hs[0], hs[1]), t0.Add(time.Minute), packstore.Repack{Off: true}); out.Repacked != 0 {
-		t.Fatalf("with repacking off the round repacked %d packs", out.Repacked)
 	}
 }
 
@@ -207,12 +207,14 @@ func TestRepackingSpendsItsBudgetOnTheEmptiestPacksFirst(t *testing.T) {
 
 // A repack round moves gcGen and every store rebuilds, resolving the live
 // chunks to the new packs first: a writer that deduplicates one afterwards
-// writes no new pack.
+// writes no new pack. A chunk only the repacked pack holds is another
+// matter: that pack is on its way out, so a writer storing its bytes again
+// writes them afresh.
 func TestAfterARepackWritersFindTheNewPacks(t *testing.T) {
 	bs, kr := mem.New(), keyring(t)
 	s := open(t, bs, kr)
-	live := payload("live", 1<<10)
-	hs := packed(t, s, hash.Hash{}, []byte("the root"), payload("dead one", 3<<10), payload("dead two", 3<<10), live)
+	live, dead := payload("live", 1<<10), payload("dead one", 3<<10)
+	hs := packed(t, s, hash.Hash{}, []byte("the root"), dead, payload("dead two", 3<<10), live)
 	writer := open(t, bs, kr) // its index resolves the live chunk to the old pack
 	if out := repackRound(t, bs, kr, liveSet(hs[0], hs[3]), t0, packstore.Repack{}); out.Repacked != 1 {
 		t.Fatalf("fixture: repacked %d", out.Repacked)
@@ -229,6 +231,15 @@ func TestAfterARepackWritersFindTheNewPacks(t *testing.T) {
 	}
 	if n := len(newNames(packs, objects(t, bs, "packs/"))); n != 0 {
 		t.Fatalf("after the repack a writer storing the live chunk wrote %d new packs, want none: it must deduplicate against the new pack", n)
+	}
+	if _, err := writer.Put(ctx, dead); err != nil {
+		t.Fatal(err)
+	}
+	if err := writer.CompareAndSetRoot(ctx, hs[0], hs[0]); err != nil {
+		t.Fatal(err)
+	}
+	if n := len(newNames(packs, objects(t, bs, "packs/"))); n != 1 {
+		t.Fatalf("after the repack a writer storing a chunk only the repacked pack holds wrote %d new packs, want one: the repacked pack expires", n)
 	}
 }
 
