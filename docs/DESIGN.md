@@ -20,7 +20,8 @@ exact commit the spec's package map was reviewed at. That is the pin.
 | D5 | `core/seal` and per-pack keys | `seal` owns the raw master key and derives every object key with stdlib HKDF-SHA-256. disknexus supplies the AEAD (`MasterKeyFromBytes(k).EncryptWithAAD`), Argon2id (`DeriveKEK`, `Argon2Params.Validate`) and X25519 wrapping (`WrapSecretAsymmetric`) | disknexus's `MasterKey` never exposes its bytes, so HKDF from it is impossible; its `KeyFile`/`WrapKey` seal the key with **no** domain tag, which the spec forbids. So we do not use `KeyFile`, `GenerateKeyFile`, `OpenMasterKey`, `Encrypt`/`Decrypt` (untagged) |
 | D6 | `core/hash` reuse | Routed through `core/dnx` as specified (`hasher.Sum(b).StrongHash`); the compat suite pins it equal to `crypto/sha256` | `hasher.Sum` is `sha256.Sum256` plus an xxHash filter hint. The reuse is nominal; the pin is what matters |
 | D7 | `core/cdc` geometry | `cdc` validates geometry before handing it to disknexus (min ≥ 64 B, max ≤ 1 MiB chunk limit, min < max, mask non-zero and of the form 2ⁿ−1) | `chunker.New` accepts `max = 0` (a chunk per byte) and `min > max` silently |
-| D8 | What "reuse" amounts to | chunker (geometry, rolling hash, table), hasher (identity), crypto (AEAD, Argon2id, X25519). Everything else is ours | Matches the spec's "hardest-won quarter" |
+| D8 | What "reuse" amounts to | hasher (identity), crypto (AEAD, Argon2id, X25519). The chunker was reused through `core/dnx` until #10; `core/cdc` now cuts disknexus's boundaries itself (D10). Everything else is ours | Matches the spec's "hardest-won quarter" |
+| D10 | The chunker (2026-09-23, #10) | `core/cdc` rolls disknexus's Buzhash and cut rules over each read buffer, byte for byte disknexus's boundaries; disknexus stays the oracle, imported in `core/dnx` and held to by `core/dnx/compat`'s goldens and a differential test | disknexus reads a byte at a time and bounds a write at about 200 MB/s on one core; ours cuts the same 8,531 chunks of 256 MiB at over 800 MB/s. The spec's rule 3 allows a package of our own beside it |
 | D9 | Where the Engine Spec lives | Its L4 (tables) is implemented in a separate, consuming repository. Its L0–L3 rules apply here as below | Owner decision |
 
 ## 2. How the Engine Spec's L0–L3 land here
@@ -49,7 +50,7 @@ Lower rows never import higher rows.
 | --- | --- | --- |
 | Adapter | `core/dnx` | disknexus-engine (the only importer), stdlib |
 | Primitives | `core/hash`, `core/auth`, `core/internal/wire` | `core/dnx` (hash only), stdlib |
-| Crypto, chunking | `core/seal`, `core/cdc`, `core/boundary` | primitives, `core/dnx` |
+| Crypto, chunking | `core/seal`, `core/cdc`, `core/boundary` | primitives, `core/dnx` (seal only) |
 | Backends | `core/blob`, `core/blob/{mem,local,multivol,s3,cache}` | stdlib, AWS SDK (s3 only) |
 | Packs | `core/pack`, `core/dedup` | seal, hash, zstd |
 | Chunk layer | `core/chunk` (port), `core/chunk/{memstore,packstore}` | blob, pack, dedup, seal |
@@ -164,6 +165,20 @@ can refuse them) and a fuzz target.
   the in-memory index, and uploaded; until the upload is confirmed its bytes
   stay readable from memory. A failed upload is kept and retried by the next
   CompareAndSetRoot, which refuses to publish while any pack is unstored.
+  Put is two halves (`chunk.Preparer`, #10): **Prepare**, the hash and the
+  compression, on the caller's goroutine with no lock; **PutPrepared**, the
+  deduplication check and the seal into the pending pack, under the lock.
+  `stream.Write` uses the halves to hash and compress on `Config.Workers`
+  goroutines (GOMAXPROCS by default; 1 is the serial path) while one reads
+  ahead, one cuts and the caller's stores in stream order, so the stream is
+  the same at any worker count; at most about 2×Workers chunks and four
+  read buffers are in flight. The pending pack's buffer is allocated at the
+  pack's size once. Measured on an i7-1360P (`TestSlowThroughputOnLocalDisk`,
+  the weekly run): a gibibyte of random data writes to `blob/local` at 175
+  MB/s where it wrote at 114, compressible text at 328 where it wrote at
+  188, a one-byte re-snapshot deduplicates at 321; reads 0.5–1.2 GB/s and
+  commits about 100 ms are unchanged. What bounds a write now is the storer:
+  the seal and the pack's bytes on one goroutine, and the backend's write.
 - **CompareAndSetRoot(expected, next)** refuses a `next` that is not a stored
   chunk, uploads every pending pack, writes one index object for the session's
   packs, then swaps the manifest (root := next, index list += the session's

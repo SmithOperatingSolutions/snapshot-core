@@ -117,7 +117,7 @@ packages have no gate: their callers exercise them.
 - [x] `s3` startup probe refuses an endpoint that ignores `If-Match` (`TestProbeRefusesEndpointsThatIgnoreConditionalWrites`)
 
 ### Chunkers
-- [x] `cdc` via `core/dnx`: golden boundaries for a fixed 64 MiB corpus match a checked-in list (`TestCDCGoldenBoundariesRepoGeometry64MiB`, cross-checked against an independent reference implementation)
+- [x] `cdc` cuts disknexus's boundaries: golden boundaries for a fixed 64 MiB corpus match a checked-in list (`TestCDCGoldenBoundariesRepoGeometry64MiB`, cross-checked against an independent reference implementation), and `core/cdc`'s own Buzhash cuts where disknexus cuts byte for byte over every stream shape and reader behaviour (`TestTheChunkerCutsWhereDisknexusCuts`, #10)
 - [x] `cdc`: inserting 1 byte near the start of a 1 GiB file changes at most 3 chunks (`TestSlowOneByteInsertChangesAtMostThreeChunks1GiB`, `-tags slow`; 16 MiB on every run)
 - [x] `cdc`: stored bytes re-hash to their chunk id on every read path: unfinished pack, in-flight pack, cache and backend (chunk contract `IdentityIsSHA256` and `FlippedByteIsCorrupt` on every backend, `TestCachedReadsAreVerified`, `TestFailedUploadStaysReadableAndIsRetried`)
 - [x] `prolly`: all Engine Spec L1 tests (determinism, history independence, bounded diff cost); see the L1 list below
@@ -267,6 +267,14 @@ Beyond the list: merging what a branch already holds changes nothing (`TestMergi
   harness, the mutant catalog, the slow tier and the real-provider S3
   suites every Sunday and on demand.
 
+- **`core/cdc` cuts disknexus's boundaries itself** (2026-09-23, #10).
+  The spec marks the chunker "reuse" through `core/dnx`; disknexus reads a
+  byte at a time and a write could not go past about 200 MB/s whatever
+  ran in parallel. `core/cdc` rolls the same Buzhash with the same rules
+  over each read buffer; disknexus stays the oracle in `core/dnx/compat`
+  (the goldens, and a differential test over every stream shape and reader
+  behaviour), as the spec's rule 3 allows: a package of our own beside it.
+
 ## What testing has found so far
 
 | Found by | What it showed | Fix |
@@ -320,6 +328,9 @@ Beyond the list: merging what a branch already holds changes nothing (`TestMergi
 | the memory measurement (#6) | A session's packs went into one index object whatever their number, so a session of about 1.5 million chunks could not publish (`dedup.MaxObjectSize`), and every store decoded that object whole | Index objects are written in batches of at most 8 MiB estimated (`TestALargeSessionPublishesSeveralIndexObjects`) |
 | the memory measurement (#6) | With the index and the mark on disk a collection still peaked at 185 bytes a chunk: GC's reader kept a 64 MiB chunk cache the walk never read twice from, and a candidate pack was read whole to repack it | The reader runs without a cache; a candidate's frames stream from one GET |
 | the measurement at two million (#6) | The peak grew 48 bytes a chunk from one million to two: a refresh decoded every index object into memory before deciding to spill, and, larger, the in-memory blob backend held what the collection stored (it repacked one small mixed pack and rewrote every index object), which a heap measure cannot tell from the collector's own memory | A refresh keeps at most the bound's worth of decoded objects; the measurement's repository is on disk |
+| the write path's profile (#10) | With hashing and compression on sixteen workers a write went 1.3× faster, not 3×: three quarters of the wall time was disknexus's chunker, serial by nature | `core/cdc` cuts the same boundaries itself at 800 MB/s (`TestSlowTheChunkerOutrunsDisknexus`) |
+| the write path's profile, again (#10) | With the chunker fast the storer bound the write: appending frames to the pending pack grew and copied its buffer over and over, a third of the storer's time | The pending pack's buffer is allocated at the pack's size once |
+| the chunker's differential test (#10) | Two mutants survived: the byte that makes a chunk exactly Min long is judged by the easy mask, which random streams reach one chunk in thousands, and bytes returned together with a read error, which no `iotest` reader does | A stream drawn from the corpus so a chunk is exactly Min by the easy mask alone; a reader that hands 64 KiB over with its error |
 | (redcheck on this branch) | Build-tagged tests unjudged; `TestMain` judged; pairs not matched by scope; contract changes invisible; environment-bound callers refused; no `main` in a new clone; a tagged backfill's mutants built without its tag; fuzz targets not counted as tests | Tool fixed each time, with a red test |
 
 ### Batch 2 (in progress)
@@ -367,9 +378,12 @@ them, each tracked as an issue:
    in memory open in 16 KiB and collect in a 31 MiB peak, against 117 MiB
    and 371 MiB before, and two million in 20 KiB and 34 MiB
    (`TestSlowMemoryPerChunkOn1MChunks`).
-7. **The write path is single-threaded** (#10): measured on a laptop
-   over `blob/local`, 113 MB/s writing random data, 187 compressible,
-   188 re-snapshotting a deduplicated file, 0.5–1.2 GB/s reading, 80 ms
-   a commit. First a slow-tier test that reports the figures weekly,
-   then hashing, compressing and sealing chunks on N workers with the
-   memory in flight bounded.
+7. ✅ **The write path was single-threaded** (#10): chunks are hashed and
+   compressed on `stream.Config.Workers` goroutines and stored in order
+   (`TestSlowWorkersOutrunOneWorker`, `TestTheStreamIsTheSameAtAnyWorkerCount`),
+   and `core/cdc` cuts disknexus's boundaries itself three times as fast
+   (`TestSlowTheChunkerOutrunsDisknexus`). On the same laptop over
+   `blob/local`: 175 MB/s writing random data (from 114), 328 compressible
+   (from 188), 321 re-snapshotting (from 203); reads and commits unchanged
+   (`TestSlowThroughputOnLocalDisk`, weekly). The storer, one goroutine
+   sealing and appending to the pack, and the backend's write bound it now.
