@@ -55,6 +55,7 @@ var steps = []step{
 	{"cover", false, stepCover},
 	{"redcheck", false, stepRedcheck},
 	{"crash", false, stepCrash},
+	{"slow", false, stepSlow},
 	{"fuzz", false, stepFuzz},
 	{"mutate", false, stepMutate},
 	{"minio", false, stepMinio},
@@ -255,6 +256,20 @@ func stepCrash(ctx context.Context, c *config) error {
 	}
 	args := append([]string{"test", "-count=1", "-run", "Crash", "-timeout", "60m"}, pkgs...)
 	return stream(ctx, []string{fmt.Sprintf("SNAPSHOT_CRASH_ITERATIONS=%d", c.crashIterations)}, "go", args...)
+}
+
+// stepSlow runs the scale guards behind -tags slow (the spec's 1 GiB file,
+// 1M-entry maps): too slow for every push, run nightly and by `mise run ci`.
+func stepSlow(ctx context.Context, _ *config) error {
+	pkgs, err := productPackages(ctx)
+	if err != nil {
+		return err
+	}
+	if len(pkgs) == 0 {
+		return errSkip{"no core/ packages yet"}
+	}
+	args := append([]string{"test", "-count=1", "-tags", "slow", "-run", "Slow", "-timeout", "60m"}, pkgs...)
+	return stream(ctx, nil, "go", args...)
 }
 
 var fuzzName = regexp.MustCompile(`^Fuzz\w+$`)

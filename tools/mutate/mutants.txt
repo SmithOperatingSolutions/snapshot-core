@@ -67,3 +67,31 @@ find: if len(b) != Size {
 replace: if len(b) < Size {
 pkg: ./core/hash
 run: ^TestFromBytesRequiresExactlyThirtyTwo$
+
+id: cdc-max-within-chunk-limit
+file: core/cdc/cdc.go
+find: case g.Max > MaxChunkSize:
+replace: case g.Max > 2*MaxChunkSize:
+pkg: ./core/cdc
+run: ^TestValidateRefusesUnusableGeometry$
+
+id: cdc-mask-is-2n-minus-1
+file: core/cdc/cdc.go
+find: case g.Mask == 0 || g.Mask&(g.Mask+1) != 0:
+replace: case g.Mask == 0:
+pkg: ./core/cdc
+run: ^TestValidateRefusesUnusableGeometry$
+
+id: cdc-max-exceeds-min
+file: core/cdc/cdc.go
+find: case g.Max <= g.Min:
+replace: case g.Max < g.Min:
+pkg: ./core/cdc
+run: ^TestValidateRefusesUnusableGeometry$
+
+id: cdc-new-validates
+file: core/cdc/cdc.go
+find: if err := g.Validate(); err != nil {\n\t\treturn nil, err\n\t}\n\treturn &Chunker
+replace: return &Chunker
+pkg: ./core/cdc
+run: ^TestValidateRefusesUnusableGeometry$

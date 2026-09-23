@@ -169,10 +169,10 @@ func TestChunksReassembleAndAreDeterministic(t *testing.T) {
 }
 
 // Storage Core Spec: "inserting 1 byte near the start of a 1 GiB file changes
-// at most 3 chunks". The property is local, so it is checked here at 64 MiB on
+// at most 3 chunks". The property is local, so it is checked here at 16 MiB on
 // every run and at the full 1 GiB under -tags slow (TestSlow...).
-func TestOneByteInsertChangesAtMostThreeChunks64MiB(t *testing.T) {
-	checkInsert(t, 64<<20)
+func TestOneByteInsertChangesAtMostThreeChunks16MiB(t *testing.T) {
+	checkInsert(t, 16<<20)
 }
 
 func checkInsert(t *testing.T, size int64) {

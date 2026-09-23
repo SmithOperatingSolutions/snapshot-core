@@ -33,6 +33,15 @@ jobs:
         with: { go-version-file: go.mod, cache: true }
       - run: go run ./tools/ci -only crash -crash-iterations 1000
 
+  slow:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with: { go-version-file: go.mod, cache: true }
+      - run: go run ./tools/ci -only slow
+
   mutate:
     runs-on: ubuntu-latest
     timeout-minutes: 120
