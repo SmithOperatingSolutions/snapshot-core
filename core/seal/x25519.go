@@ -40,7 +40,7 @@ func (w *X25519Wrapper) Wrap(_ context.Context, secret []byte) ([]byte, error) {
 // Unwrap implements Wrapper.
 func (w *X25519Wrapper) Unwrap(_ context.Context, wrapped []byte) ([]byte, error) {
 	if w.priv == nil {
-		return nil, errors.New("seal: this X25519 wrapper holds only a public key")
+		return nil, ErrWrapOnly
 	}
 	return dnx.UnwrapSecret(w.priv, wrapped)
 }

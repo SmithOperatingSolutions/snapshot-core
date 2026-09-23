@@ -200,3 +200,10 @@ find: if kid := kr.ID(); !bytes.Equal(kid[:], id) {\n\t\tkr.Destroy()
 replace: if kid := kr.ID(); !bytes.Equal(kid[:], id) && false {\n\t\tkr.Destroy()
 pkg: ./core/seal
 run: ^TestWrapKeyringRoundTripAndWrongKMS$
+
+id: seal-x25519-wrap-only
+file: core/seal/x25519.go
+find: if w.priv == nil {
+replace: if w.priv == nil && false {
+pkg: ./core/seal
+run: ^TestX25519WrapOnlyWithoutPrivateKey$
