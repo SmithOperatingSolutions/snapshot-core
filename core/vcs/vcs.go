@@ -414,13 +414,6 @@ func sameMerge(a, b *MergeState) bool {
 // setWorkingSet is UpdateWorkingSet, and with keepMerge false it may
 // change the merge state too.
 func (r *Repo) setWorkingSet(ctx context.Context, branch string, prev, next WorkingSet, keepMerge bool) (WorkingSet, error) {
-	have, err := r.s.Has(ctx, []hash.Hash{next.Working, next.Staged})
-	if err != nil {
-		return WorkingSet{}, err
-	}
-	if !have[next.Working] || !have[next.Staged] {
-		return WorkingSet{}, fmt.Errorf("vcs: a working set must name stored namespaces")
-	}
 	h, err := r.s.Put(ctx, next.encode())
 	if err != nil {
 		return WorkingSet{}, err

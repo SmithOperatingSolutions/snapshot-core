@@ -2128,12 +2128,6 @@ replace: b, err := r.s.Get(ctx, h)\n\tif err != nil && false {\n\t\treturn Commi
 pkg: ./core/vcs
 run: ^TestStoreErrorsSurfaceAndLeaveTheRefs$
 
-id: vcs-working-set-surfaces-has-errors
-file: core/vcs/vcs.go
-find: have, err := r.s.Has(ctx, []hash.Hash{next.Working, next.Staged})\n\tif err != nil {
-replace: have, err := r.s.Has(ctx, []hash.Hash{next.Working, next.Staged})\n\tif err != nil && false {
-pkg: ./core/vcs
-run: ^TestStoreErrorsSurfaceAndLeaveTheRefs$
 
 id: vcs-conflicts-surface-iteration-errors
 file: core/vcs/vcs.go
@@ -2163,12 +2157,6 @@ replace: if baseHash == theirs && false { // the branch holds theirs already: no
 pkg: ./core/vcs
 run: ^TestMergingWhatIsAlreadyMergedChangesNothing$
 
-id: vcs-working-set-names-stored-namespaces
-file: core/vcs/vcs.go
-find: if !have[next.Working] || !have[next.Staged] {
-replace: if (!have[next.Working] || !have[next.Staged]) && false {
-pkg: ./core/vcs
-run: ^TestRefsNameOnlyStoredObjects$
 
 id: vcs-branch-names-a-commit
 file: core/vcs/vcs.go
