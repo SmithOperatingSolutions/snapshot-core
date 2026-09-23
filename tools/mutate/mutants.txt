@@ -714,8 +714,8 @@ run: ^TestListFillsPagesAcrossShortServerPages$
 
 id: pack-refuses-oversized-chunks
 file: core/pack/pack.go
-find: case len(data) > MaxChunkSize:
-replace: case len(data) > MaxChunkSize+1:
+find: case rawLen > MaxChunkSize:
+replace: case rawLen > MaxChunkSize+1:
 pkg: ./core/pack
 run: ^TestWriterLimits$
 
@@ -735,8 +735,8 @@ run: ^TestWriterLimits$
 
 id: pack-compresses-only-when-smaller
 file: core/pack/pack.go
-find: if z := w.codec.enc.EncodeAll(data, nil); len(z) < len(data) {
-replace: if z := w.codec.enc.EncodeAll(data, nil); len(z) < len(data)+1<<20 {
+find: if z := c.enc.EncodeAll(data, nil); len(z) < len(data) {
+replace: if z := c.enc.EncodeAll(data, nil); len(z) < len(data)+1<<20 {
 pkg: ./core/pack
 run: ^TestCompressesOnlyWhenItHelps$
 
@@ -3861,8 +3861,8 @@ run: ^TestATableAnswersEveryRecordItWasBuiltFrom$
 
 id: table-finish-removes-the-runs
 file: core/dedup/table.go
-find: removeAll(b.runs)\n\tb.runs = nil\n\tt, err := OpenTable(path)
-replace: b.runs = nil\n\tt, err := OpenTable(path)
+find: removeAll(b.runs)\n\tb.runs = nil\n\treturn OpenTable(path)
+replace: b.runs = nil\n\treturn OpenTable(path)
 pkg: ./core/dedup
 run: ^TestATableAnswersEveryRecordItWasBuiltFrom$
 
@@ -4201,3 +4201,31 @@ find: p, ok := cp.(*prepared)\n\tif !ok {
 replace: p, ok := cp.(*prepared)\n\tif !ok && false {
 pkg: ./core/chunk/packstore
 run: ^TestAChunkPreparedByAnotherStoreIsRefused$
+
+id: finisher-publish-waits-for-the-finishers
+file: core/chunk/packstore/packstore.go
+find: // Every finisher has landed its pack or left it to retry here.\n\ts.finishers.Wait()
+replace: // Every finisher has landed its pack or left it to retry here.\n\t_ = s.finishers
+pkg: ./core/chunk/packstore
+run: ^TestAPublishWaitsForItsUploads$
+
+id: finisher-bounds-the-packs-in-flight
+file: core/chunk/packstore/packstore.go
+find: const maxInFlight = 2
+replace: const maxInFlight = 64
+pkg: ./core/chunk/packstore
+run: ^TestAtMostTwoPacksAreInFlight$
+
+id: finisher-keeps-a-finishing-pack-readable
+file: core/chunk/packstore/packstore.go
+find: if data, ok, err := s.finishingGetLocked(h); ok {
+replace: if data, ok, err := s.finishingGetLocked(h); ok && false {
+pkg: ./core/chunk/packstore
+run: ^TestAChunkOfAPackBeingFinishedReads$
+
+id: finisher-finishes-beside-the-writer
+file: core/chunk/packstore/packstore.go
+find: go func() {\n\t\tdefer s.finishers.Done()\n\t\tdefer func() { <-s.slots }()\n\t\ts.finish(context.WithoutCancel(ctx), w)\n\t}()
+replace: func() {\n\t\tdefer s.finishers.Done()\n\t\tdefer func() { <-s.slots }()\n\t\ts.finish(context.WithoutCancel(ctx), w)\n\t}()
+pkg: ./core/chunk/packstore
+run: ^TestAnUploadDoesNotHoldUpTheWriter$

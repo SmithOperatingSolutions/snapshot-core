@@ -20,6 +20,8 @@ type gatedPacks struct {
 	blob.BlobStore
 	mu      sync.Mutex
 	gate    chan struct{} // closed to release every waiting put
+	hold    int           // pack puts the gate holds; the rest pass (0: every one)
+	held    int
 	waiting int
 	peak    int
 	landed  []string // pack and root events in the order they completed
@@ -30,7 +32,13 @@ func newGated(bs blob.BlobStore) *gatedPacks {
 }
 
 func (g *gatedPacks) Put(ctx context.Context, name string, r io.Reader, size int64) error {
-	if strings.HasPrefix(name, "packs/") {
+	g.mu.Lock()
+	holdThis := strings.HasPrefix(name, "packs/") && (g.hold == 0 || g.held < g.hold)
+	if holdThis {
+		g.held++
+	}
+	g.mu.Unlock()
+	if holdThis {
 		g.mu.Lock()
 		g.waiting++
 		g.peak = max(g.peak, g.waiting)
@@ -167,5 +175,100 @@ func TestAtMostTwoPacksAreInFlight(t *testing.T) {
 	g.mu.Unlock()
 	if peak != 2 {
 		t.Fatalf("%d pack uploads were in flight at once, want two: the bound", peak)
+	}
+}
+
+// A publish waits for every upload: the root is swapped only once each
+// pack the chunks are in has landed.
+func TestAPublishWaitsForItsUploads(t *testing.T) {
+	g := newGated(mem.New())
+	g.hold = 1 // the first pack alone is held; the publish's own upload passes
+	s := smallPacks(t, g)
+	chunks, hs := chunksOf("published", 16)
+	if err := <-putAll(s, chunks); err != nil {
+		t.Fatal(err)
+	}
+	go func() {
+		g.waitingPuts(t, 1)
+		time.Sleep(50 * time.Millisecond) // the swap must not come before the release
+		close(g.gate)
+	}()
+	if err := s.CompareAndSetRoot(ctx, hash.Hash{}, hs[0]); err != nil {
+		t.Fatal(err)
+	}
+	// Every pack lands eventually, held or not; the question is whether the
+	// root came before one of them.
+	landed := g.landedPacks(t, 3)
+	root := -1
+	for i, e := range landed {
+		switch {
+		case e == "root":
+			root = i
+		case strings.HasPrefix(e, "packs/") && root >= 0:
+			t.Fatalf("pack %s landed after the root was swapped: the publish did not wait for its uploads (%v)", e, landed)
+		}
+	}
+	if root < 0 {
+		t.Fatalf("positive control: no root in %v", landed)
+	}
+}
+
+// landedPacks waits until n packs have landed and returns every event so far.
+func (g *gatedPacks) landedPacks(t *testing.T, n int) []string {
+	t.Helper()
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		g.mu.Lock()
+		packs := 0
+		for _, e := range g.landed {
+			if strings.HasPrefix(e, "packs/") {
+				packs++
+			}
+		}
+		landed := append([]string(nil), g.landed...)
+		g.mu.Unlock()
+		if packs >= n {
+			return landed
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("ten seconds on, %d packs have landed, want %d: %v", packs, n, landed)
+		}
+		time.Sleep(time.Millisecond)
+	}
+}
+
+// A chunk of a pack being finished (named and built, before its upload
+// even starts) reads from the unfinished pack: the finisher is held at
+// that point and the read must not wait for it.
+func TestAChunkOfAPackBeingFinishedReads(t *testing.T) {
+	g := newGated(mem.New())
+	close(g.gate) // uploads pass; the hold is on the finish
+	s := smallPacks(t, g)
+	held := make(chan struct{})
+	release := make(chan struct{})
+	var once sync.Once
+	packstore.HoldFinish(s, func() { // every finisher waits; the first one's arrival is the signal
+		once.Do(func() { close(held) })
+		<-release
+	})
+	chunks, hs := chunksOf("finishing", 16)
+	done := putAll(s, chunks)
+	<-held
+	got, err := s.Get(ctx, hs[0])
+	if err != nil || len(got) != 4<<10 {
+		t.Fatalf("a chunk of a pack being finished reads as %d bytes, %v; want it from the unfinished pack", len(got), err)
+	}
+	if _, err := s.Put(ctx, chunks[0]); err != nil {
+		t.Fatalf("storing a chunk of a pack being finished again: %v", err)
+	}
+	close(release)
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+	if err := s.CompareAndSetRoot(ctx, hash.Hash{}, hs[0]); err != nil {
+		t.Fatal(err)
+	}
+	if n := len(objects(t, g, "packs/")); n != 3 {
+		t.Fatalf("after storing a chunk of a finishing pack again the store holds %d packs, want the three sixteen chunks make: the chunk must be found there, not stored twice", n)
 	}
 }

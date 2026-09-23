@@ -85,6 +85,11 @@ type Store struct {
 	published  int               // chunks of published packs in mem
 	inflight   map[string][]byte // finished packs whose upload is not yet confirmed
 	unuploaded []pack.Built      // finished packs whose upload failed; retried at CAS
+	finishing  []*pack.Writer    // full packs a finisher is naming and uploading; their chunks read from here meanwhile
+	finishers  sync.WaitGroup    // one per pack finishing
+	finishErr  error             // a finisher's failure to build its pack, surfaced at the next publish
+	slots      chan struct{}     // a token per pack that may be finishing or uploading at once (#10)
+	holdFinish func()            // tests: called by a finisher before it names its pack
 	pending    *pack.Writer
 	session    []pack.Info  // uploaded packs not yet in a published index object
 	sessionIdx [][32]byte   // index objects written but not yet in a published manifest
@@ -102,6 +107,11 @@ type Store struct {
 	uploaded    map[string]time.Time  // this store's unpublished packs and index objects, dated by o.Clock
 	lost        error                 // chunk.ErrSessionLost once GC deleted unpublished work: writes refuse
 }
+
+// maxInFlight bounds the packs finishing or uploading at once (#10): a
+// writer with another full pack waits for one to land, so a slow backend
+// costs time, never memory.
+const maxInFlight = 2
 
 // recheckAfter is how old an unpublished upload is before a publish looks it
 // up; GC keeps its record of a deleted orphan this much past the grace
@@ -143,7 +153,7 @@ func Open(ctx context.Context, o Options) (*Store, error) {
 	if err != nil {
 		return nil, err
 	}
-	s := &Store{o: o, codec: codec, mem: dedup.New(), inflight: map[string][]byte{},
+	s := &Store{o: o, codec: codec, mem: dedup.New(), inflight: map[string][]byte{}, slots: make(chan struct{}, maxInFlight),
 		loaded: map[[32]byte]bool{}, keys: map[seal.Salt]*pack.Keys{}, condemned: map[string]bool{},
 		unpublished: map[string]pack.Info{}, inIndex: map[[32]byte][]string{}, deduped: map[hash.Hash]bool{},
 		uploaded: map[string]time.Time{}}
@@ -369,8 +379,9 @@ func (s *Store) newWriter() (*pack.Writer, error) {
 	return pack.NewWriter(s.o.Keys, s.o.Repo, s.codec, s.o.PackSize)
 }
 
-// finishPendingLocked seals the pending pack, makes its chunks locatable, and
-// keeps its bytes readable until its upload is confirmed. Callers hold s.mu.
+// finishPendingLocked names and builds the pending pack on the caller's
+// goroutine, makes its chunks locatable, and keeps its bytes readable
+// until its upload is confirmed. Callers hold s.mu.
 func (s *Store) finishPendingLocked() (*pack.Built, error) {
 	if s.pending == nil || s.pending.Count() == 0 {
 		return nil, nil
@@ -384,6 +395,88 @@ func (s *Store) finishPendingLocked() (*pack.Built, error) {
 	s.inflight[b.Name] = b.Bytes
 	s.unpublished[b.Name] = b.Info
 	return &b, nil
+}
+
+// takePendingLocked hands the pending pack, if it holds anything, to a
+// finisher: its chunks read and deduplicate from the unfinished writer
+// until the finisher has named it. Callers hold s.mu and then call
+// startFinisher with what it returns, outside the lock.
+func (s *Store) takePendingLocked() *pack.Writer {
+	w := s.pending
+	s.pending = nil
+	if w == nil || w.Count() == 0 {
+		return nil
+	}
+	s.finishing = append(s.finishing, w)
+	s.finishers.Add(1)
+	return w
+}
+
+// startFinisher takes a slot, waiting while maxInFlight packs are still
+// finishing or uploading, then finishes and uploads w on its own goroutine
+// (#10): the writer's goroutine is not the one hashing a pack's name,
+// building it and writing it to the backend. The upload outlives the
+// caller's cancellation: a pack half uploaded would be a chunk the next
+// root reaches that nothing durable holds.
+func (s *Store) startFinisher(ctx context.Context, w *pack.Writer) {
+	if w == nil {
+		return
+	}
+	s.slots <- struct{}{}
+	go func() {
+		defer s.finishers.Done()
+		defer func() { <-s.slots }()
+		s.finish(context.WithoutCancel(ctx), w)
+	}()
+}
+
+// finish names and builds a full pack, makes its chunks locatable, keeps
+// its bytes readable until its upload is confirmed, and uploads it.
+func (s *Store) finish(ctx context.Context, w *pack.Writer) {
+	if s.holdFinish != nil {
+		s.holdFinish()
+	}
+	b, err := w.Finish()
+	s.mu.Lock()
+	for i, f := range s.finishing {
+		if f == w {
+			s.finishing = append(s.finishing[:i], s.finishing[i+1:]...)
+			break
+		}
+	}
+	if err != nil {
+		if s.finishErr == nil {
+			s.finishErr = err
+		}
+		s.mu.Unlock()
+		return
+	}
+	s.mem.Add(b.Info)
+	s.inflight[b.Name] = b.Bytes
+	s.unpublished[b.Name] = b.Info
+	s.mu.Unlock()
+	// A failed upload is kept and retried at CAS; the chunk stays readable.
+	_ = s.upload(ctx, []pack.Built{b})
+}
+
+// finishingGetLocked reads h from a pack being finished, if one holds it.
+// Callers hold s.mu.
+func (s *Store) finishingGetLocked(h hash.Hash) ([]byte, bool, error) {
+	for _, w := range s.finishing {
+		if data, ok, err := w.Get(h); ok {
+			return data, true, err
+		}
+	}
+	return nil, false, nil
+}
+
+func (s *Store) finishingHasLocked(h hash.Hash) bool {
+	for _, w := range s.finishing {
+		if w.Has(h) {
+			return true
+		}
+	}
+	return false
 }
 
 // upload stores packs; an object that already exists under a pack's name is
@@ -462,7 +555,7 @@ func (s *Store) PutPrepared(ctx context.Context, cp chunk.Prepared) (hash.Hash, 
 		s.mu.Unlock()
 		return hash.Hash{}, s.lost
 	}
-	if s.pending != nil && s.pending.Has(h) {
+	if (s.pending != nil && s.pending.Has(h)) || s.finishingHasLocked(h) {
 		s.mu.Unlock()
 		return h, nil
 	}
@@ -486,21 +579,17 @@ func (s *Store) PutPrepared(ctx context.Context, cp chunk.Prepared) (hash.Hash, 
 		s.pending = w
 	}
 	err = s.pending.AddCompressed(h, p.n, p.payload, p.codec)
-	var full *pack.Built
+	var full *pack.Writer
 	if errors.Is(err, pack.ErrFull) {
-		if full, err = s.finishPendingLocked(); err == nil {
-			if s.pending, err = s.newWriter(); err == nil {
-				err = s.pending.AddCompressed(h, p.n, p.payload, p.codec)
-			}
+		full = s.takePendingLocked()
+		if s.pending, err = s.newWriter(); err == nil {
+			err = s.pending.AddCompressed(h, p.n, p.payload, p.codec)
 		}
 	}
 	s.mu.Unlock()
+	s.startFinisher(ctx, full)
 	if err != nil {
 		return hash.Hash{}, err
-	}
-	if full != nil {
-		// A failed upload is kept and retried at CAS; the chunk stays readable.
-		_ = s.upload(ctx, []pack.Built{*full})
 	}
 	return h, nil
 }
@@ -539,6 +628,13 @@ func (s *Store) Get(ctx context.Context, h hash.Hash) ([]byte, error) {
 			}
 			return data, nil
 		}
+	}
+	if data, ok, err := s.finishingGetLocked(h); ok {
+		s.mu.Unlock()
+		if err != nil {
+			return nil, fmt.Errorf("%w: %w", chunk.ErrCorrupt, err)
+		}
+		return data, nil
 	}
 	s.mu.Unlock()
 	if data, ok := s.cache.get(h); ok {
@@ -697,7 +793,7 @@ func (s *Store) CompareAndSetRoot(ctx context.Context, expected, next hash.Hash)
 		s.mu.Unlock()
 		return s.lost
 	}
-	stored := !next.IsZero() && s.pending != nil && s.pending.Has(next)
+	stored := !next.IsZero() && ((s.pending != nil && s.pending.Has(next)) || s.finishingHasLocked(next))
 	if !next.IsZero() && !stored {
 		var err error
 		if stored, err = s.hasLocked(next); err != nil {
@@ -709,6 +805,17 @@ func (s *Store) CompareAndSetRoot(ctx context.Context, expected, next hash.Hash)
 		s.mu.Unlock()
 		return fmt.Errorf("%w: %s", chunk.ErrRootMissing, next.Short())
 	}
+	s.mu.Unlock()
+	// Every finisher has landed its pack or left it to retry here.
+	s.finishers.Wait()
+	s.mu.Lock()
+	if s.finishErr != nil {
+		err := s.finishErr
+		s.mu.Unlock()
+		return err
+	}
+	// The pending pack is finished and uploaded here, on this goroutine: a
+	// failure to store it is this publish's error, not a retry's.
 	built, err := s.finishPendingLocked()
 	if err != nil {
 		s.mu.Unlock()
@@ -813,6 +920,9 @@ func (s *Store) Stats(ctx context.Context) (chunk.Stats, error) {
 	if s.pending != nil {
 		n += int64(s.pending.Count())
 	}
+	for _, w := range s.finishing {
+		n += int64(w.Count())
+	}
 	return chunk.Stats{Chunks: n}, nil
 }
 
@@ -822,8 +932,10 @@ func (s *Store) isClosed() bool {
 	return s.closed
 }
 
-// Close implements chunk.Store. Chunks never published are dropped.
+// Close implements chunk.Store. Chunks never published are dropped; a
+// pack still uploading is waited for, so nothing writes after Close.
 func (s *Store) Close() error {
+	s.finishers.Wait()
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	var err error
@@ -954,7 +1066,7 @@ func (s *Store) survived(m manifest) error {
 		return nil
 	}
 	for h := range s.deduped {
-		if s.pending != nil && s.pending.Has(h) {
+		if (s.pending != nil && s.pending.Has(h)) || s.finishingHasLocked(h) {
 			continue
 		}
 		ok, err := s.hasLocked(h)

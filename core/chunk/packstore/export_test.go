@@ -130,3 +130,11 @@ func JoinForged(t *dedup.Table, packs int, live Live) error {
 	_, _, err := r.join(live)
 	return err
 }
+
+// WaitUploads waits for every pack a finisher is naming and uploading, so a
+// test can count on what filled being in the backend.
+func WaitUploads(s *Store) { s.finishers.Wait() }
+
+// HoldFinish makes every finisher call f before it names and builds its
+// pack, so a test can hold a pack at that point.
+func HoldFinish(s *Store, f func()) { s.holdFinish = f }

@@ -579,6 +579,7 @@ func TestAWriterCannotPublishAPackGCDeletedAsAnOrphan(t *testing.T) {
 	for _, n := range notes { // the third fills the pack holding the first two: uploaded, not published
 		refs = append(refs, w.note(7, n))
 	}
+	waitForPacks(t, w.blobs, packs+1) // the upload lands beside the writer
 	if n := count(t, w.blobs, "packs/"); n != packs+1 {
 		t.Fatalf("fixture: the writer left %d packs, want one more than the %d published", n, packs)
 	}
@@ -798,5 +799,18 @@ func TestGCLeavesNoProbeBehind(t *testing.T) {
 	}
 	if n := count(t, w.blobs, "gc/"); n != 0 {
 		t.Fatalf("a grace window on, %d objects under gc/, want none", n)
+	}
+}
+
+// waitForPacks waits for the store to hold n packs: a full pack is uploaded
+// beside the writer, and lands a moment after the put that filled it.
+func waitForPacks(t *testing.T, bs blob.BlobStore, n int) {
+	t.Helper()
+	deadline := time.Now().Add(10 * time.Second)
+	for count(t, bs, "packs/") < n {
+		if time.Now().After(deadline) {
+			t.Fatalf("ten seconds on, the store holds %d packs, want %d", count(t, bs, "packs/"), n)
+		}
+		time.Sleep(time.Millisecond)
 	}
 }
