@@ -8,6 +8,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/rand"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
@@ -37,18 +38,18 @@ var (
 	ErrConfig   = errors.New("repo: the config does not authenticate or decode")
 )
 
-// The config object: "SCRC" · version u16 · repo id [16] · key id [32] ·
-// salt [32] · seal(Config, ctx = header, "SCRP" · version u16 · cdc min u32 ·
-// cdc max u32 · cdc mask u64 · node min u32 · node target u32 · node max u32 ·
-// inline limit u32 · pack size u32).
+// The config object, config/<repo id>: "SCRC" · version u16 · repo id [16] ·
+// key id [32] · salt [32] · seal(Config, ctx = header, "SCRP" · version u16 ·
+// cdc min u32 · cdc max u32 · cdc mask u64 · node min u32 · node target u32 ·
+// node max u32 · inline limit u32 · pack size u32).
 const (
-	configName  = "config"
-	configMagic = "SCRC"
-	plainMagic  = "SCRP"
-	configV1    = 1
-	headerLen   = 4 + 2 + 16 + 32 + 32
-	maxConfig   = 4 << 10
-	maxInline   = 512 << 10
+	configPrefix = "config/"
+	configMagic  = "SCRC"
+	plainMagic   = "SCRP"
+	configV1     = 1
+	headerLen    = 4 + 2 + 16 + 32 + 32
+	maxConfig    = 4 << 10
+	maxInline    = 512 << 10
 )
 
 // Geometry is how a repository writes: fixed at Init, read back by Open.
@@ -212,26 +213,37 @@ func Init(ctx context.Context, p auth.Principal, o Options) (*Repo, error) {
 	if err := auth.Check(ctx, o.Authorizer, p, auth.Admin, "repo"); err != nil {
 		return nil, err
 	}
-	c := Config{KeyID: o.Keys.ID(), Geometry: g}
-	if _, err := rand.Read(c.RepoID[:]); err != nil {
-		return nil, err
-	}
-	b, err := c.seal(o.Keys)
+	ours, others, err := configs(ctx, o)
 	if err != nil {
 		return nil, err
 	}
-	if err := o.Blobs.Put(ctx, configName, bytes.NewReader(b), int64(len(b))); err != nil {
-		if !errors.Is(err, blob.ErrExists) {
+	if len(ours) == 0 && others != nil { // claimed by another key, or damaged
+		return nil, fmt.Errorf("%w: %w", ErrExists, others)
+	}
+	var c Config
+	if len(ours) > 0 {
+		c = ours[0] // an Init that stopped: finish it on the config it left
+	} else {
+		c = Config{KeyID: o.Keys.ID(), Geometry: g}
+		if _, err := rand.Read(c.RepoID[:]); err != nil {
 			return nil, err
 		}
-		if c, err = readConfig(ctx, o); err != nil {
-			return nil, fmt.Errorf("%w: %w", ErrExists, err)
+		b, err := c.seal(o.Keys)
+		if err != nil {
+			return nil, err
+		}
+		if err := o.Blobs.Put(ctx, configName(c.RepoID), bytes.NewReader(b), int64(len(b))); err != nil {
+			return nil, err
 		}
 	}
-	chunks, err := packstore.Open(ctx, packstore.Options{Blobs: blob.NoDelete(o.Blobs), Keys: o.Keys, Repo: c.RepoID, PackSize: c.Geometry.PackSize})
+	chunks, err := packstore.Open(ctx, packOptions(o, c))
+	if errors.Is(err, packstore.ErrManifest) {
+		return nil, fmt.Errorf("%w: another Init landed first", ErrExists) // a root not this config's
+	}
 	if err != nil {
 		return nil, err
 	}
+	// The claim: the first swap of the root, atomic wherever the root lives.
 	v, err := vcs.Init(ctx, chunks, p, o.vcs(c.Geometry))
 	if err != nil {
 		_ = chunks.Close()
@@ -243,12 +255,74 @@ func Init(ctx context.Context, p auth.Principal, o Options) (*Repo, error) {
 	return &Repo{Repo: v, Config: c, chunks: chunks}, nil
 }
 
-// readConfig reads and opens the config object.
-func readConfig(ctx context.Context, o Options) (Config, error) {
-	rc, err := o.Blobs.Get(ctx, configName, 0, -1)
-	if errors.Is(err, blob.ErrNotFound) {
+// configName is where an Init writes its config: a name of its own, so no
+// two Inits ever write one name.
+func configName(id seal.RepoID) string { return configPrefix + hex.EncodeToString(id[:]) }
+
+func packOptions(o Options, c Config) packstore.Options {
+	return packstore.Options{Blobs: blob.NoDelete(o.Blobs), Keys: o.Keys, Repo: c.RepoID, PackSize: c.Geometry.PackSize}
+}
+
+// configs reads the store's configs in name order: those that open under
+// o.Keys, and the first error among the rest (a damaged one, ErrConfig, or
+// another key's, ErrWrongKey).
+func configs(ctx context.Context, o Options) (ours []Config, others error, err error) {
+	after := ""
+	for {
+		page, err := o.Blobs.List(ctx, configPrefix, after, blob.MaxListPage)
+		if err != nil {
+			return nil, nil, err
+		}
+		for _, info := range page {
+			c, err := readConfig(ctx, o, info.Name)
+			switch {
+			case err == nil:
+				ours = append(ours, c)
+			case errors.Is(err, ErrConfig) || errors.Is(err, ErrWrongKey):
+				if others == nil {
+					others = err
+				}
+			default:
+				return nil, nil, err
+			}
+		}
+		if len(page) < blob.MaxListPage {
+			return ours, others, nil
+		}
+		after = page[len(page)-1].Name
+	}
+}
+
+// current is the repository's config: the one of this key whose repo id
+// authenticates the root's manifest (with no root yet, the first).
+func current(ctx context.Context, o Options) (Config, error) {
+	ours, others, err := configs(ctx, o)
+	if err != nil {
+		return Config{}, err
+	}
+	if len(ours) == 0 {
+		if others != nil {
+			return Config{}, others
+		}
 		return Config{}, ErrNoRepo
 	}
+	for _, c := range ours {
+		chunks, err := packstore.Open(ctx, packOptions(o, c))
+		if errors.Is(err, packstore.ErrManifest) {
+			continue // the root is not this config's: another Init's, or a race it lost
+		}
+		if err != nil {
+			return Config{}, err
+		}
+		_ = chunks.Close()
+		return c, nil
+	}
+	return Config{}, fmt.Errorf("%w: no config of this key authenticates the root", ErrWrongKey)
+}
+
+// readConfig reads and opens one config object.
+func readConfig(ctx context.Context, o Options, name string) (Config, error) {
+	rc, err := o.Blobs.Get(ctx, name, 0, -1)
 	if err != nil {
 		return Config{}, err
 	}
@@ -269,11 +343,11 @@ func Open(ctx context.Context, o Options) (*Repo, error) {
 	if err := o.check(); err != nil {
 		return nil, err
 	}
-	c, err := readConfig(ctx, o)
+	c, err := current(ctx, o)
 	if err != nil {
 		return nil, err
 	}
-	chunks, err := packstore.Open(ctx, packstore.Options{Blobs: blob.NoDelete(o.Blobs), Keys: o.Keys, Repo: c.RepoID, PackSize: c.Geometry.PackSize})
+	chunks, err := packstore.Open(ctx, packOptions(o, c))
 	if err != nil {
 		return nil, err
 	}
@@ -320,7 +394,7 @@ func GC(ctx context.Context, p auth.Principal, o Options, grace time.Duration) (
 	if err := auth.Check(ctx, o.Authorizer, p, auth.Admin, "repo"); err != nil {
 		return gc.Report{}, err
 	}
-	c, err := readConfig(ctx, o)
+	c, err := current(ctx, o)
 	if err != nil {
 		return gc.Report{}, err
 	}

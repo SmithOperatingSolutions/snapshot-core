@@ -136,6 +136,20 @@ func TestContractOverEveryBackend(t *testing.T) {
 	})
 }
 
+// The chunk contract, unchanged, over a store whose index is spilled to
+// disk past one chunk (#6).
+func TestContractOverASpilledIndex(t *testing.T) {
+	contract.Run(t, func(t *testing.T) contract.Subject {
+		bs, kr, dir := mem.New(), keyring(t), t.TempDir()
+		s := openSpilled(t, bs, kr, dir)
+		return contract.Subject{
+			Store:  s,
+			Tamper: func(t *testing.T, h hash.Hash) { tamper(t, bs, s, h) },
+			Reopen: func(t *testing.T) chunk.Store { return openSpilled(t, bs, kr, dir) },
+		}
+	}, contract.Options{})
+}
+
 // Security table: no chunk hash and no chunk plaintext on disk, anywhere in
 // the store (packs, index objects, manifest).
 func TestNoPlaintextOnDisk(t *testing.T) {

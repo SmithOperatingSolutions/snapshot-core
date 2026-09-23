@@ -29,6 +29,9 @@ var (
 	ErrEmptyRoot       = errors.New("blob: root value is empty")
 	ErrReadOnly        = errors.New("blob: store is read-only")
 	ErrDeleteForbidden = errors.New("blob: delete is reserved for the GC role")
+	// ErrNoRoot: this store holds objects only; the root lives elsewhere
+	// (blob/split).
+	ErrNoRoot = errors.New("blob: this store holds no root")
 )
 
 // Limits every backend enforces.

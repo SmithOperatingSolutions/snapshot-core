@@ -72,13 +72,57 @@ so tests that drive the core through real models live in `e2e`.
 | Name | Mutable | Sealed under | Holds |
 | --- | --- | --- | --- |
 | *(root)* | yes, CAS only | `vdb/refs/v1` | the manifest: refs root hash, live index objects, GC generation, condemned objects |
-| `config` | no | `vdb/config/v1` | repo id, key id, CDC and prolly geometry, pack limits |
+| `config/<repo id>` | no | `vdb/config/v1` | repo id, key id, CDC and prolly geometry, pack limits; one per `Init` that started, and the root's manifest names the one that counts |
 | `packs/<sha256 of pack bytes>` | no | `vdb/chunk/v1` (frames), `vdb/pack-index/v1` (trailer) | many chunks, each compressed then sealed, plus an in-pack index |
 | `index/<sha256 of object bytes>` | no | `vdb/index/v1` | chunk hash → pack and offset, for the packs of one or more commits |
 
 Keys never live in the BlobStore ("keys never stored beside data"): the host
 holds the master key through a KMS wrapper or a passphrase key file it stores
 elsewhere.
+
+### A root apart from the objects (`core/blob/split`, #8)
+
+Some S3-compatible providers ignore `If-None-Match` and `If-Match`
+(Backblaze B2 and Google Cloud Storage's S3 API among them), and `s3.Open`
+refuses them: without those two headers no root swap is atomic. To run on
+one, a repository keeps its objects there and its root elsewhere.
+
+- **Objects only.** With `s3.Options.ObjectsOnly`, the S3 store serves
+  objects and no root. `Put` asks with HEAD and then PUTs without a
+  condition: one writer at a time still gets `ErrExists`, and two writers
+  racing on one name may both land, which is harmless because every name a
+  repository writes is unique (packs and index objects by their hash, the
+  config by its repository id, probes at random). `Root` and `SwapRoot` are
+  `ErrObjectsOnly`. `Open` probes reading, writing and deleting, not the
+  conditions. The blob contract runs on such a store with
+  `contract.Options{ObjectsOnly: true}`: no root cases, and racing puts need
+  no single winner.
+- **The split store.** `split.Store{Objects, Roots}` sends objects to the
+  first and the root to the second, which must compare-and-swap:
+  `blob/local` on one host today, a SQL row or etcd later through the same
+  seam. The repository, the chunk layer and GC see one store; GC's clock
+  probe lands on the objects store, whose clock stamps the orphans.
+- **The mirror.** The root is the only record of the repository's state,
+  and it now lives on one disk, so the split store keeps a copy of it on
+  the objects store (`WriteMirror` and `ReadMirror`, the unconditional
+  replacement of one object, `<prefix>mirror` on S3). The mode is the
+  host's: `MirrorWait` (the zero value) returns from a swap once the copy
+  has landed; `MirrorBackground` has one writer upload the newest root after
+  each swap, skipping any it was superseded on; `MirrorPeriodic` uploads the
+  newest root every `Every` if it changed; `MirrorOff` keeps none, and the
+  host backs up the root store. `Close` flushes the copy. `MirrorStatus`
+  says whether the newest root is mirrored, when the last copy landed and
+  what last went wrong. In `MirrorWait` a copy that fails is retried within
+  the call; if it still fails the swap is reported all the same, since it
+  happened and cannot be undone, and the copy trails until a later attempt
+  lands: a host that must not lose a commit reads the status. Within one
+  process the copy never goes backwards; several processes on one host can
+  leave it a swap behind until the next swap. `Recover(ctx, objects, roots)`
+  seeds a root store that has no root from the copy. A root store restored
+  some other way, from an older backup, would carry an older root than the
+  copy and nothing detects it: recover from the copy instead.
+- Only GC deletes, still: the copy lies outside `objects/`, no listing
+  reaches it, and GC never names it.
 
 ## 5. On-disk formats (a compatibility contract)
 
@@ -99,10 +143,10 @@ associated data is `tag 0 context`. The key id is
 | KMS envelope | `"SCKW"` · version u16 · key id [32] · wrapped (len-prefixed, ≤ 8 KiB) |
 | Pack | header `"SCPK"` · version u16 · flags u16 · salt [32]; frames `seal(Chunk, ctx = chunk hash, zstd-or-raw)`; index `seal(PackIndex, ctx = header, "SCPI" · version · count · entries sorted by hash: hash [32] · offset · stored · raw · codec)`; trailer index-offset u64 · index-length u32 · `"SCPE"` |
 | Index object | `"SCIX"` · version u16 · salt [32] · `seal(Index, ctx = header, "SCIP" · version · packs: pack hash [32] · salt [32] · size · entries …)`, packs and entries strictly sorted |
-| Manifest (the root value) | `"SCMF"` · version u16 · salt [32] · `seal(Refs, ctx = header, "SCMP" · version · seq u64 · gcGen u64 · root [32] · count · index-object hashes [32] strictly sorted · count · condemned (kind u8: 1 pack, 2 index object, 3 orphan pack deleted, 4 orphan index object deleted · hash [32] · at i64 unix ns))` |
+| Manifest (the root value) | `"SCMF"` · version u16 · salt [32] · `seal(Refs, ctx = header, "SCMP" · version · seq u64 · gcGen u64 · root [32] · count · index-object hashes [32] strictly sorted · count · condemned (kind u8: 1 pack, 2 index object, 3 orphan pack deleted, 4 orphan index object deleted, 5 pack repacked · hash [32] · at i64 unix ns))` |
 | local store | `.snapshot-core` marker (`"SCLS"` · version · store id [16]) · `objects/<segment>~` · `tmp/` · `root` (`"SCRF"` · version · value · SHA-256) · `root.lock` |
 | multivol map | `"SCMV"` · version u16 · count u16 · (volume id [16] · path) … · SHA-256 |
-| S3 keys | `<prefix>objects/<name>!` (the `!` keeps any key from being both an object and a path prefix, which MinIO hides from listings; it sorts below every name byte) · `<prefix>root` = 16-byte nonce ‖ value · `<prefix>probe/…` |
+| S3 keys | `<prefix>objects/<name>!` (the `!` keeps any key from being both an object and a path prefix, which MinIO hides from listings; it sorts below every name byte) · `<prefix>root` = 16-byte nonce ‖ value · `<prefix>mirror` = the root's copy, replaced in place · `<prefix>probe/…` |
 | Disk cache entry | `"SCCE"` · object name · SHA-256 of content · content |
 
 Object names: packs are `packs/<first byte hex>/<SHA-256 of the pack bytes>`,
@@ -132,8 +176,27 @@ can refuse them) and a fuzz target.
   backend by one range read (the index object carries each pack's salt, so no
   header fetch). A hash the index does not know triggers one manifest refresh.
   Every path re-hashes what it returns.
-- Scale limit (v1): the whole index lives in memory (~70–80 bytes per chunk),
-  and the manifest lists every index object until GC compacts them (§9).
+- **Memory does not grow with the repository** (#6). A store indexes the
+  published chunks in memory up to `Options.IndexInMemory` (512 Ki chunks,
+  about 60 MiB, by default) and past that spills the whole published index
+  to a *table* in `Options.IndexDir` (the system's temporary directory by
+  default): `dedup.Builder` sorts records a run at a time, spills each run
+  and merges them into a file of fixed-width records in hash order with one
+  sample key per block of 256; `dedup.Table` keeps one sample in 256 in
+  memory (a key per 65,536 chunks) and answers a lookup with two range
+  reads, the sample block then the record block. The packs in service are
+  added before the condemned and repacked ones, so a chunk two packs hold
+  resolves to the one staying; the session's own packs, and what other
+  writers publish until the bound is passed again, stay in memory. GC
+  moving gcGen rebuilds the table; Close removes it. Index objects are
+  written in batches of at most 8 MiB (estimated), since an object is
+  decoded whole; a refresh keeps at most the bound's worth of decoded
+  objects before it switches to streaming them into the table. Measured on
+  64-byte chunks with 64 Ki in memory, the repository on disk
+  (`TestSlowMemoryPerChunkOn1MChunks`, the slow tier): a million chunks open
+  in 16 KiB where they took 117 MiB, and collect in a peak of 31 MiB where
+  they took 371; two million open in 20 KiB and collect in 34 MiB (§9).
+- The manifest lists every index object until GC compacts them (§9).
 
 *(The prolly tree, the version graph and merge are §7–8; GC is §9.)*
 
@@ -270,7 +333,7 @@ graph"). The Engine Spec's L2 and L3 rules apply unchanged.
 | `0x04` | tag, v1 |
 | `0x05` | working set, v1 |
 
-### The repository config (`config`, in the BlobStore)
+### The repository config (`config/<repo id>`, in the BlobStore)
 
 Written once by `Init`, never changed, and read by `Open` before the chunk
 layer: it says how everything else was written.
@@ -289,13 +352,21 @@ config (`ErrConfig`). A header or plaintext of another magic or version, a
 plaintext with bytes left over, and a geometry the core cannot use are
 `ErrConfig` even when they authenticate.
 
-`Init` asks for admin before it writes anything, then claims the store by
-writing the config (put-if-absent), then writes the version graph. An
-`Init` that stops in between (a crash, a backend that went away) leaves a
-config and no refs: `Open` reports that store as `ErrNoRepo`, and the next
-`Init` with the same key finishes it, on the repo id and geometry its config
-records. A store claimed by another key, or holding a finished repository,
-is `ErrExists`.
+`Init` asks for admin before it writes anything. It writes its config under
+a name of its own, `config/<repo id>`, so no two `Init`s ever write one
+name, and then claims the store with the first swap of the root, which is
+atomic wherever the root lives: the `Init` whose swap lands owns the store,
+and another's config is garbage nothing reads. (`Init` once claimed the
+store by writing one `config` object put-if-absent, which a store whose
+put-if-absent is best effort could let two `Init`s overwrite.) `Open` reads
+the configs that open under its key and takes the one whose repo id
+authenticates the root's manifest; with a root and none of them, the key did
+not create the repository (`ErrWrongKey`). Configs and no root mean an
+`Init` stopped before the version graph (a crash, a backend that went away):
+`Open` reports the store as `ErrNoRepo`, and the next `Init` with the same
+key finishes it, on the repo id and geometry of the config it left (the
+first by name). A store holding a finished repository is `ErrExists` to
+`Init`.
 
 ### Objects (`core/object`, `core/model`)
 
@@ -514,10 +585,40 @@ the raw store. Run on a `NoDelete` store it condemns but cannot delete
 (`ErrDeleteForbidden`); what it expired is an orphan by then, and the next
 run on the raw store deletes it.
 
-**Reclaiming space.** GC frees whole packs. At the default pack size a
-session's packs mix what later dies with what lives, and such a pack is
-kept whole; rewriting mostly-dead packs (copying their live chunks out and
-condemning them) is the next step, not v1's.
+**Reclaiming space.** GC frees whole packs, and a pack that is mostly dead
+is rewritten (#1): in a round, a kept pack whose live bytes are under half
+its size (`Repack.MaxLive`) is a candidate, and candidates are repacked
+emptiest first until the round has copied its budget (`Repack.Budget`, a
+GiB by default; `Repack.Off` turns it off). The round reads each candidate
+in one GET, opens its live frames and seals them into new packs, uploads
+those before its swap (a swap that loses leaves them orphans, which a later
+run deletes), lists them in its index objects, and records the old pack as
+repacked (condemned kind 5): a repacked pack is never reprieved by the
+chunks it still holds, since the new packs hold them; it stays listed in
+the index objects and expires a grace window later like any condemned
+pack, so a reader that located a chunk in it still reads it, and one that
+reads it after it is gone refreshes and finds the chunk in its new pack.
+A pack whose every chunk is live is never a candidate, whatever its
+overhead; a condemned pack found live again and mostly dead is repacked in
+the round that reprieves it. The round moves gcGen, so every store
+rebuilds its index, adding the packs still in service before the
+condemned and repacked ones, and finds the live chunks in the new packs
+at once; a writer never deduplicates against a repacked pack.
+
+**Memory** (#6). A round holds a record per pack and none per chunk: Begin
+indexes every listed pack's chunks in a `dedup` table under
+`Options.IndexDir` (the packs in service first, the condemned and repacked
+after, in a second pass over the objects listing them), and the mark is a
+table too, built as the walk visits chunks; the walk remembers up to
+`gc.Options.MarkNodes` nodes (1 Mi by default) to skip when reached again,
+and past that walks a shared subtree again, at a cost in time and never in
+chunks. Apply joins the two tables in one pass over both, in hash order,
+counting each pack's live chunks and frame bytes (a chunk two packs hold
+counts for the first, the one in service if either is), decides each pack
+on the counts, checks a candidate's frames against the mark as it streams
+the pack's bytes from one GET, and rewrites the index objects by streaming
+the old ones through, one object's packs in memory at a time. GC's reader
+runs without a chunk cache, since the walk reads each chunk once.
 
 **Proof.** `TestGCSafetyProperty` drives random histories the way a host
 following the contract does, with GC between the steps as the clock moves

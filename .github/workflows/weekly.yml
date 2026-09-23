@@ -1,0 +1,78 @@
+# The slow tiers, once a week (Sunday morning UTC) and on demand: fuzzers
+# for 10 minutes per target, the kill -9 crash harness at its full 1,000
+# iterations, every checked-in mutant re-run to prove the guards still have
+# teeth, the slow-tier scale tests, and the S3 suites against the real
+# provider. Weekly, not nightly: the fuzz job alone is hours, and the code
+# changes in batches (docs/PROGRESS.md, decisions).
+name: Weekly
+
+on:
+  schedule:
+    - cron: "17 6 * * 0"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  CGO_ENABLED: "0"
+
+jobs:
+  fuzz:
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with: { go-version-file: go.mod, cache: true }
+      - run: go run ./tools/ci -only fuzz -fuzztime 10m
+
+  crash:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with: { go-version-file: go.mod, cache: true }
+      - run: go run ./tools/ci -only crash -crash-iterations 1000
+
+  slow:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with: { go-version-file: go.mod, cache: true }
+      - run: go run ./tools/ci -only slow
+
+  mutate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with: { go-version-file: go.mod, cache: true }
+      - run: go run ./tools/mutate
+
+  real-provider:
+    # The Engine Spec's run on real S3 (#4), weekly here, on the provider whose
+    # bucket and keys are the repository's SNAPSHOT_S3_* secrets: Backblaze B2
+    # or iDrive e2, which need not honor conditional writes, so the store
+    # runs objects only with the root on the runner's disk (DESIGN §4). No
+    # secrets is a failure, not a skip (docs/TESTING.md §7).
+    name: S3 suites / the real provider
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      SNAPSHOT_S3_REQUIRED: "1"
+      SNAPSHOT_S3_OBJECTS_ONLY: "1"
+      SNAPSHOT_S3_ENDPOINT: ${{ secrets.SNAPSHOT_S3_ENDPOINT }}
+      SNAPSHOT_S3_REGION: ${{ secrets.SNAPSHOT_S3_REGION }}
+      SNAPSHOT_S3_BUCKET: ${{ secrets.SNAPSHOT_S3_BUCKET }}
+      SNAPSHOT_S3_ACCESS_KEY: ${{ secrets.SNAPSHOT_S3_ACCESS_KEY }}
+      SNAPSHOT_S3_SECRET_KEY: ${{ secrets.SNAPSHOT_S3_SECRET_KEY }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with: { go-version-file: go.mod, cache: true }
+      - run: go test -count=1 -timeout 20m -run 'TestContractAgainstRealS3|TestARepositoryRunsOnTheRealProvider' ./core/blob/s3 ./e2e

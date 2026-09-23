@@ -494,3 +494,26 @@ func TestACacheThatCannotWriteStillServesReads(t *testing.T) {
 		t.Errorf("a cache that cannot write counts %d bytes", c.Used())
 	}
 }
+
+// plain is a store that keeps no copy of the root.
+type plain struct{ blob.BlobStore }
+
+// The root's copy a split store keeps passes through the cache to the store
+// behind it, never cached; a cache over a store that keeps none refuses it.
+func TestTheRootsCopyPassesThroughTheCache(t *testing.T) {
+	inner := mem.New()
+	c, _ := newCache(t, inner, 1<<20)
+	if err := c.WriteMirror(ctx, []byte("a root")); err != nil {
+		t.Fatalf("WriteMirror through the cache = %v", err)
+	}
+	if got, err := inner.ReadMirror(ctx); err != nil || string(got) != "a root" {
+		t.Fatalf("the store behind the cache holds the copy %q, %v; want %q", got, err, "a root")
+	}
+	if got, err := c.ReadMirror(ctx); err != nil || string(got) != "a root" {
+		t.Fatalf("the copy read through the cache is %q, %v; want %q", got, err, "a root")
+	}
+	over, _ := newCache(t, plain{mem.New()}, 1<<20)
+	if err := over.WriteMirror(ctx, []byte("a root")); err == nil {
+		t.Fatal("a cache over a store that keeps no copy of the root took one")
+	}
+}

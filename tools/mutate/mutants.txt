@@ -959,8 +959,8 @@ run: ^TestPublishedChunksAreDurableBeforeTheRoot$
 
 id: packstore-root-must-be-stored
 file: core/chunk/packstore/packstore.go
-find: if next.IsZero() || (!s.index.Has(next) && (s.pending == nil || !s.pending.Has(next))) {
-replace: if next.IsZero() {
+find: if !stored {\n\t\ts.mu.Unlock()\n\t\treturn fmt.Errorf("%w: %s", chunk.ErrRootMissing, next.Short())
+replace: if next.IsZero() {\n\t\ts.mu.Unlock()\n\t\treturn fmt.Errorf("%w: %s", chunk.ErrRootMissing, next.Short())
 pkg: ./core/chunk/packstore
 run: ^TestContractOverEveryBackend$/^mem$/^RootMustBeStored$
 
@@ -1197,7 +1197,7 @@ run: ^TestForgedManifestsAreRefused$
 
 id: manifest-condemned-kind
 file: core/chunk/packstore/manifest.go
-find: if r.Err() != nil || e.kind < condemnedPack || e.kind > deletedIndex {
+find: if r.Err() != nil || e.kind < condemnedPack || e.kind > repackedPack {
 replace: if r.Err() != nil {
 pkg: ./core/chunk/packstore
 run: ^TestForgedManifestsAreRefused$
@@ -2044,19 +2044,12 @@ replace: if o.Blobs == nil || o.Registry == nil {
 pkg: ./core/repo
 run: ^TestThereIsNoRepositoryWithoutAConfigOrAKey$
 
-id: repo-init-refuses-an-existing-repository
+id: repo-open-reports-why-no-config-opens
 file: core/repo/repo.go
-find: if errors.Is(err, vcs.ErrExists) {\n\t\t\treturn nil, ErrExists
-replace: if errors.Is(err, vcs.ErrExists) && false {\n\t\t\treturn nil, ErrExists
+find: if len(ours) == 0 {\n\t\tif others != nil {\n\t\t\treturn Config{}, others
+replace: if len(ours) == 0 {\n\t\tif others != nil && false {\n\t\t\treturn Config{}, others
 pkg: ./core/repo
-run: ^TestInitThenOpen$
-
-id: repo-open-finds-no-repository
-file: core/repo/repo.go
-find: if errors.Is(err, blob.ErrNotFound) {\n\t\treturn Config{}, ErrNoRepo
-replace: if errors.Is(err, blob.ErrNotFound) && false {\n\t\treturn Config{}, ErrNoRepo
-pkg: ./core/repo
-run: ^TestThereIsNoRepositoryWithoutAConfigOrAKey$
+run: ^TestOpenTellsAWrongKeyFromADamagedConfig$
 
 id: repo-zero-geometry-is-the-default
 file: core/repo/repo.go
@@ -2328,15 +2321,15 @@ run: ^(TestEveryCallIsAuthorized|TestAWriteNeedsTheBranchAsWellAsItsPaths)$
 
 id: repo-init-finishes-a-stopped-init
 file: core/repo/repo.go
-find: if c, err = readConfig(ctx, o); err != nil {\n\t\t\treturn nil, fmt.Errorf("%w: %w", ErrExists, err)\n\t\t}
-replace: return nil, ErrExists
+find: if len(ours) > 0 {\n\t\tc = ours[0]
+replace: if len(ours) > 0 && false {\n\t\tc = ours[0]
 pkg: ./core/repo
 run: ^TestAnInitThatStoppedIsFinishedByTheNext$
 
 id: repo-another-key-cannot-finish
 file: core/repo/repo.go
-find: if c, err = readConfig(ctx, o); err != nil {
-replace: if c, err = readConfig(ctx, o); err != nil && false {
+find: if len(ours) == 0 && others != nil { // claimed by another key, or damaged
+replace: if len(ours) == 0 && others != nil && false { // claimed by another key, or damaged
 pkg: ./core/repo
 run: ^TestAnInitThatStoppedIsFinishedByTheNext$
 
@@ -2391,8 +2384,8 @@ run: ^TestARefusedInitWritesNothing$
 
 id: repo-init-surfaces-put-errors
 file: core/repo/repo.go
-find: if !errors.Is(err, blob.ErrExists) {\n\t\t\treturn nil, err
-replace: if !errors.Is(err, blob.ErrExists) && false {\n\t\t\treturn nil, err
+find: if err := o.Blobs.Put(ctx, configName(c.RepoID), bytes.NewReader(b), int64(len(b))); err != nil {\n\t\t\treturn nil, err
+replace: if err := o.Blobs.Put(ctx, configName(c.RepoID), bytes.NewReader(b), int64(len(b))); err != nil && false {\n\t\t\treturn nil, err
 pkg: ./core/repo
 run: ^TestEveryStoreFailureIsSurvivable$
 
@@ -2839,8 +2832,8 @@ run: ^TestARoundCondemnsWaitsThenExpires$
 
 id: packstore-round-reprieves
 file: core/chunk/packstore/gc.go
-find: case isLive(p, live):
-replace: case isLive(p, live) && !was:
+find: case liveCount[i] > 0:
+replace: case liveCount[i] > 0 && !was:
 pkg: ./core/chunk/packstore
 run: ^TestAReachedPackIsReprieved$
 
@@ -2867,15 +2860,15 @@ run: ^TestARoundLosesToAWriterThatPublished$
 
 id: packstore-round-refuses-a-rootless-live-set
 file: core/chunk/packstore/gc.go
-find: if !live(r.man.root) {
-replace: if !live(r.man.root) && false {
+find: } else if !ok {\n\t\treturn Outcome{}, fmt.Errorf("packstore: the root %s is not in the live set", r.man.root.Short())
+replace: } else if !ok && false {\n\t\treturn Outcome{}, fmt.Errorf("packstore: the root %s is not in the live set", r.man.root.Short())
 pkg: ./core/chunk/packstore
 run: ^TestARoundRefusesALiveSetWithoutTheRoot$
 
 id: packstore-put-skips-condemned-packs
 file: core/chunk/packstore/packstore.go
-find: if loc, ok := s.index.Lookup(h); ok && !s.condemned[loc.Pack.Name] {
-replace: if loc, ok := s.index.Lookup(h); ok && !(s.condemned[loc.Pack.Name] && false) {
+find: if ok && !s.condemned[loc.Pack.Name] {
+replace: if ok && !(s.condemned[loc.Pack.Name] && false) {
 pkg: ./core/chunk/packstore
 run: ^TestWritersDoNotDeduplicateAgainstCondemnedPacks$
 
@@ -2937,8 +2930,8 @@ run: ^TestGCTakesAnotherRoundWhenAWriterPublishes$
 
 id: gc-refuses-what-it-cannot-walk
 file: core/gc/gc.go
-find: live, err := mark(ctx, rd, o, r.Root())\n\t\tif err != nil {
-replace: live, err := mark(ctx, rd, o, r.Root())\n\t\tif err != nil && false {
+find: live, err := mark(ctx, rd, o, r.Root())\n\tif err != nil {
+replace: live, err := mark(ctx, rd, o, r.Root())\n\tif err != nil && false {
 pkg: ./core/gc
 run: ^TestGCRefusesWhatItCannotWalk$
 
@@ -2958,24 +2951,17 @@ run: ^TestGCKeepsWhatTheRefsReachAndDeletesTheRest$
 
 id: gc-deletes-what-expired
 file: core/gc/gc.go
-find: append(append(out.Expired, out.Orphans...), probes...)
-replace: append(out.Orphans, probes...)
+find: for _, name := range append(out.Expired, out.Orphans...) {
+replace: for _, name := range out.Orphans {
 pkg: ./core/gc
 run: ^TestOrphanAgesAreTheBackendsClock$
 
 id: gc-orphan-ages-by-the-backend
 file: core/gc/gc.go
-find: now, err := backendNow(ctx, o.Blobs)
-replace: now, err := clock(), error(nil)
+find: backend, err := backendNow(ctx, o.Blobs)
+replace: backend, err := now, error(nil)
 pkg: ./core/gc
 run: ^TestOrphanAgesAreTheBackendsClock$
-
-id: gc-prunes-only-what-it-went-into
-file: core/gc/gc.go
-find: live[h] = true\n\t\tif leaf || gone[h] {
-replace: seen := live[h]\n\t\tlive[h] = true\n\t\tif leaf || seen {
-pkg: ./core/gc
-run: ^TestGCIsNotSteeredByAFileThatIsANode$
 
 id: gc-removes-its-probe
 file: core/gc/gc.go
@@ -3021,8 +3007,8 @@ run: ^TestAnAdminCollectsTheRepositoryOnTheRawStore$
 
 id: repo-gc-needs-a-repository
 file: core/repo/repo.go
-find: c, err := readConfig(ctx, o)\n\tif err != nil {\n\t\treturn gc.Report{}, err
-replace: c, err := readConfig(ctx, o)\n\tif err != nil && false {\n\t\treturn gc.Report{}, err
+find: c, err := current(ctx, o)\n\tif err != nil {\n\t\treturn gc.Report{}, err
+replace: c, err := current(ctx, o)\n\tif err != nil && false {\n\t\treturn gc.Report{}, err
 pkg: ./core/repo
 run: ^TestAnAdminCollectsTheRepositoryOnTheRawStore$
 
@@ -3126,8 +3112,8 @@ run: ^TestGCGivesUpWhenWritersNeverStop$
 
 id: gc-nothing-live-without-a-root
 file: core/gc/gc.go
-find: if root.IsZero() {\n\t\treturn live, nil\n\t}
-replace: if root.IsZero() && false {\n\t\treturn live, nil\n\t}
+find: if !root.IsZero() {\n\t\tseen := map[hash.Hash]struct{}{}
+replace: if true {\n\t\tseen := map[hash.Hash]struct{}{}
 pkg: ./core/gc
 run: ^TestGCOnAStoreWithNoRepository$
 
@@ -3147,8 +3133,8 @@ run: ^TestEveryStoreFailureIsGCsError$
 
 id: gc-surfaces-a-failed-probe
 file: core/gc/gc.go
-find: now, err := backendNow(ctx, o.Blobs)\n\t\tif err != nil {
-replace: now, err := backendNow(ctx, o.Blobs)\n\t\tif err != nil && false {
+find: backend, err := backendNow(ctx, o.Blobs)\n\tif err != nil {
+replace: backend, err := backendNow(ctx, o.Blobs)\n\tif err != nil && false {
 pkg: ./core/gc
 run: ^TestEveryStoreFailureIsGCsError$
 
@@ -3327,10 +3313,10 @@ replace: for _, ns := range []hash.Hash{ws.Merge.PreStaged} {
 pkg: ./core/vcs
 run: ^TestAWalkNamesAllTheRepositoryHolds$
 
-id: manifest-condemned-kinds-end-at-four
+id: manifest-condemned-kinds-end-at-five
 file: core/chunk/packstore/manifest.go
-find: e.kind > deletedIndex {
-replace: e.kind > deletedIndex+1 {
+find: e.kind > repackedPack {
+replace: e.kind > repackedPack+1 {
 pkg: ./core/chunk/packstore
 run: ^TestForgedManifestsAreRefused$
 
@@ -3399,8 +3385,8 @@ run: ^TestAPublishFailsOnAnOldUploadThatIsGone$
 
 id: packstore-index-objects-are-dated
 file: core/chunk/packstore/packstore.go
-find: s.uploaded[name] = s.o.Clock()
-replace: _ = name
+find: s.uploaded[indexName(obj.sum)] = s.o.Clock()
+replace: _ = obj
 pkg: ./core/chunk/packstore
 run: ^TestAPublishFailsOnAnOldIndexObjectThatIsGone$
 
@@ -3455,15 +3441,15 @@ run: ^TestARoundRecordsTheOrphansItDeletes$
 
 id: packstore-lapsed-records-are-swapped-out
 file: core/chunk/packstore/gc.go
-find: && added == 0 && lapsed == 0 {
-replace: && added == 0 {
+find: && added == 0 && lapsed == 0 && out.Repacked == 0 {
+replace: && added == 0 && out.Repacked == 0 {
 pkg: ./core/chunk/packstore
 run: ^TestARoundRecordsTheOrphansItDeletes$
 
 id: packstore-new-records-are-swapped-in
 file: core/chunk/packstore/gc.go
-find: && added == 0 && lapsed == 0 {
-replace: && lapsed == 0 {
+find: && added == 0 && lapsed == 0 && out.Repacked == 0 {
+replace: && lapsed == 0 && out.Repacked == 0 {
 pkg: ./core/chunk/packstore
 run: ^TestAPublishFailsOnAPackRecordedAsADeletedOrphan$
 
@@ -3483,8 +3469,8 @@ run: ^TestGCKeepsWhatTheRefsReachAndDeletesTheRest$
 
 id: gc-deletes-the-orphans-the-round-recorded
 file: core/gc/gc.go
-find: append(append(out.Expired, out.Orphans...), probes...)
-replace: append(out.Expired, probes...)
+find: for _, name := range append(out.Expired, out.Orphans...) {
+replace: for _, name := range out.Expired {
 pkg: ./core/gc
 run: ^TestGCKeepsWhatTheRefsReachAndDeletesTheRest$
 
@@ -3522,3 +3508,563 @@ find: if _, own := s.unpublished[packName]; own || s.deduped[h] {
 replace: if _, own := s.unpublished[packName]; own && false || s.deduped[h] {
 pkg: ./core/chunk/packstore
 run: ^TestReadingAPromisedChunkThatIsGoneLosesTheSession$
+
+id: repo-a-foreign-root-at-init-is-exists
+file: core/repo/repo.go
+find: if errors.Is(err, packstore.ErrManifest) {\n\t\treturn nil, fmt.Errorf("%w: another Init landed first", ErrExists)
+replace: if errors.Is(err, packstore.ErrManifest) && false {\n\t\treturn nil, fmt.Errorf("%w: another Init landed first", ErrExists)
+pkg: ./core/repo
+run: ^TestInitsRacingDoNotOverwriteEachOther$
+
+id: repo-config-names-are-the-repositorys
+file: core/repo/repo.go
+find: func configName(id seal.RepoID) string { return configPrefix + hex.EncodeToString(id[:]) }
+replace: func configName(id seal.RepoID) string { return configPrefix + "one" + hex.EncodeToString(id[:0]) }
+pkg: ./core/repo
+run: ^TestInitsRacingDoNotOverwriteEachOther$
+
+id: repo-configs-surface-read-errors
+file: core/repo/repo.go
+find: default:\n\t\t\t\treturn nil, nil, err
+replace: default:
+pkg: ./core/repo
+run: ^TestEveryStoreFailureIsSurvivable$
+
+id: repo-init-that-loses-the-swap-is-exists
+file: core/repo/repo.go
+find: if errors.Is(err, vcs.ErrExists) {\n\t\t\treturn nil, ErrExists
+replace: if errors.Is(err, vcs.ErrExists) && false {\n\t\t\treturn nil, ErrExists
+pkg: ./core/repo
+run: ^TestAStoppedInitFinishedTwiceAtOnceIsFinishedOnce$
+
+id: repo-open-takes-the-config-that-authenticates-the-root
+file: core/repo/repo.go
+find: if errors.Is(err, packstore.ErrManifest) {\n\t\t\tcontinue // the root is not this config's
+replace: if errors.Is(err, packstore.ErrManifest) {\n\t\t\treturn c, nil // the root is not this config's
+pkg: ./core/repo
+run: ^TestOpenTakesTheConfigThatAuthenticatesTheRoot$
+
+id: repo-configs-read-every-page
+file: core/repo/repo.go
+find: if len(page) < blob.MaxListPage {\n\t\t\treturn ours, others, nil
+replace: if len(page) <= blob.MaxListPage {\n\t\t\treturn ours, others, nil
+pkg: ./core/repo
+run: ^TestOpenTakesTheConfigThatAuthenticatesTheRoot$
+
+id: s3-objects-only-skips-the-conditional-probe
+file: core/blob/s3/s3.go
+find: if s.objectsOnly {\n\t\terr = s.probeObjects(ctx)
+replace: if s.objectsOnly && false {\n\t\terr = s.probeObjects(ctx)
+pkg: ./core/blob/s3
+run: ^TestObjectsOnlyRunsWhereConditionalWritesAreIgnored$
+
+id: s3-objects-only-put-asks-first
+file: core/blob/s3/s3.go
+find: if _, err := s.Stat(ctx, name); err == nil {\n\t\t\treturn blob.ErrExists
+replace: if _, err := s.Stat(ctx, name); err == nil && false {\n\t\t\treturn blob.ErrExists
+pkg: ./core/blob/s3
+run: ^TestObjectsOnlyPutIsAHeadThenAPut$
+
+id: s3-objects-only-has-no-root
+file: core/blob/s3/s3.go
+find: if s.objectsOnly {\n\t\treturn blob.Root{}, fmt.Errorf("%w: this S3 store holds objects only", blob.ErrNoRoot)
+replace: if s.objectsOnly && false {\n\t\treturn blob.Root{}, fmt.Errorf("%w: this S3 store holds objects only", blob.ErrNoRoot)
+pkg: ./core/blob/s3
+run: ^TestObjectsOnlyRunsWhereConditionalWritesAreIgnored$
+
+id: s3-objects-only-swaps-no-root
+file: core/blob/s3/s3.go
+find: if s.objectsOnly {\n\t\treturn blob.NoVersion, fmt.Errorf("%w: this S3 store holds objects only", blob.ErrNoRoot)
+replace: if s.objectsOnly && false {\n\t\treturn blob.NoVersion, fmt.Errorf("%w: this S3 store holds objects only", blob.ErrNoRoot)
+pkg: ./core/blob/s3
+run: ^TestObjectsOnlyRunsWhereConditionalWritesAreIgnored$
+
+id: s3-mirror-is-replaced-in-place
+file: core/blob/s3/s3.go
+find: _, err := s.put(ctx, s.mirrorKey(), bytes.NewReader(value), int64(len(value)), "", "")
+replace: _, err := s.put(ctx, s.mirrorKey(), bytes.NewReader(value), int64(len(value)), "*", "")
+pkg: ./core/blob/s3
+run: ^TestTheMirrorIsReplacedInPlace$
+
+id: s3-mirror-reads-nothing-when-none
+file: core/blob/s3/s3.go
+find: if isNotFound(err) {\n\t\t\treturn nil, nil\n\t\t}\n\t\treturn nil, err\n\t}\n\tdefer out.Body.Close()\n\tb, err := io.ReadAll(io.LimitReader(out.Body, blob.MaxRootSize+1))
+replace: if isNotFound(err) && false {\n\t\t\treturn nil, nil\n\t\t}\n\t\treturn nil, err\n\t}\n\tdefer out.Body.Close()\n\tb, err := io.ReadAll(io.LimitReader(out.Body, blob.MaxRootSize+1))
+pkg: ./core/blob/s3
+run: ^TestTheMirrorIsReplacedInPlace$
+
+id: s3-mirror-is-no-object
+file: core/blob/s3/s3.go
+find: func (s *Store) mirrorKey() string            { return s.prefix + "mirror" }
+replace: func (s *Store) mirrorKey() string            { return s.objectKey("mirror") }
+pkg: ./core/blob/s3
+run: ^TestTheMirrorIsReplacedInPlace$
+
+id: split-root-lives-on-the-root-store
+file: core/blob/split/split.go
+find: func (s *Store) Root(ctx context.Context) (blob.Root, error) { return s.o.Roots.Root(ctx) }
+replace: func (s *Store) Root(ctx context.Context) (blob.Root, error) { return s.o.Objects.Root(ctx) }
+pkg: ./core/blob/split
+run: ^TestWaitMirrorsEachSwapBeforeReturning$
+
+id: split-wait-copies-each-swap
+file: core/blob/split/split.go
+find: case MirrorWait:\n\t\tfor attempt := 0; attempt < waitAttempts; attempt++ {
+replace: case MirrorOff:\n\t\tfor attempt := 0; attempt < waitAttempts; attempt++ {
+pkg: ./core/blob/split
+run: ^TestWaitMirrorsEachSwapBeforeReturning$
+
+id: split-wait-retries-a-failed-copy
+file: core/blob/split/split.go
+find: case MirrorWait:\n\t\tfor attempt := 0; attempt < waitAttempts; attempt++ {
+replace: case MirrorWait:\n\t\tfor attempt := 0; attempt < 1; attempt++ {
+pkg: ./core/blob/split
+run: ^TestWaitMirrorsEachSwapBeforeReturning$
+
+id: split-background-wakes-the-writer
+file: core/blob/split/split.go
+find: case s.wake <- struct{}{}:\n\t\tdefault:
+replace: case <-time.After(0):\n\t\tdefault:
+pkg: ./core/blob/split
+run: ^TestBackgroundCopiesEachSwap$
+
+id: split-a-copy-that-landed-is-recorded
+file: core/blob/split/split.go
+find: if bytes.Equal(s.pending, value) {\n\t\ts.pending, s.mirrored = nil, true
+replace: if bytes.Equal(s.pending, value) && false {\n\t\ts.pending, s.mirrored = nil, true
+pkg: ./core/blob/split
+run: ^TestWaitMirrorsEachSwapBeforeReturning$
+
+id: split-only-the-newest-copy-counts
+file: core/blob/split/split.go
+find: if bytes.Equal(s.pending, value) {\n\t\ts.pending, s.mirrored = nil, true
+replace: if bytes.Equal(s.pending, value) || true {\n\t\ts.pending, s.mirrored = nil, true
+pkg: ./core/blob/split
+run: ^TestBackgroundMirrorsTheNewestRootAndCloseFlushes$
+
+id: split-a-failed-copy-is-reported
+file: core/blob/split/split.go
+find: if err != nil {\n\t\ts.lastErr = err\n\t\treturn err
+replace: if err != nil {\n\t\treturn err
+pkg: ./core/blob/split
+run: ^TestWaitMirrorsEachSwapBeforeReturning$
+
+id: split-close-flushes-the-copy
+file: core/blob/split/split.go
+find: v := s.take()\n\t\t\tif v == nil {\n\t\t\t\treturn\n\t\t\t}
+replace: v := s.take()\n\t\t\tif v == nil || true {\n\t\t\t\treturn\n\t\t\t}
+pkg: ./core/blob/split
+run: ^TestBackgroundReportsAndRetriesAFailedCopy$
+
+id: split-new-needs-both-stores
+file: core/blob/split/split.go
+find: case o.Objects == nil || o.Roots == nil:
+replace: case o.Objects == nil && o.Roots == nil:
+pkg: ./core/blob/split
+run: ^TestNewRefusesBadOptions$
+
+id: split-new-checks-the-mode
+file: core/blob/split/split.go
+find: case o.Mirror.Mode < MirrorWait || o.Mirror.Mode > MirrorOff:
+replace: case o.Mirror.Mode < MirrorWait:
+pkg: ./core/blob/split
+run: ^TestNewRefusesBadOptions$
+
+id: split-periodic-needs-a-period
+file: core/blob/split/split.go
+find: case o.Mirror.Mode == MirrorPeriodic && o.Mirror.Every <= 0:
+replace: case o.Mirror.Mode == MirrorPeriodic && o.Mirror.Every < 0:
+pkg: ./core/blob/split
+run: ^TestNewRefusesBadOptions$
+
+id: split-a-copy-needs-a-mirrorer
+file: core/blob/split/split.go
+find: if !ok {\n\t\t\treturn nil, fmt.Errorf("%w: the objects store cannot hold a copy of the root", ErrOptions)
+replace: if !ok && false {\n\t\t\treturn nil, fmt.Errorf("%w: the objects store cannot hold a copy of the root", ErrOptions)
+pkg: ./core/blob/split
+run: ^TestNewRefusesBadOptions$
+
+id: split-recover-refuses-a-root
+file: core/blob/split/split.go
+find: if r.Version != blob.NoVersion {\n\t\treturn ErrRootPresent
+replace: if r.Version != blob.NoVersion && false {\n\t\treturn ErrRootPresent
+pkg: ./core/blob/split
+run: ^TestRecoverSeedsAnEmptyRootStoreFromTheCopy$
+
+id: split-recover-needs-a-copy
+file: core/blob/split/split.go
+find: if len(value) == 0 {\n\t\treturn ErrNoMirror
+replace: if len(value) == 0 && false {\n\t\treturn ErrNoMirror
+pkg: ./core/blob/split
+run: ^TestRecoverSeedsAnEmptyRootStoreFromTheCopy$
+
+id: mem-keeps-the-roots-copy
+file: core/blob/mem/mem.go
+find: s.mirror = bytes.Clone(value)
+replace: _ = value
+pkg: ./core/blob/split
+run: ^TestObjectsGoToOneStoreAndTheRootToTheOther$
+
+id: cache-passes-the-roots-copy-through
+file: core/blob/cache/cache.go
+find: return m.WriteMirror(ctx, value)
+replace: _ = m\n\treturn nil
+pkg: ./core/blob/cache
+run: ^TestTheRootsCopyPassesThroughTheCache$
+
+id: cache-refuses-a-copy-it-cannot-pass-through
+file: core/blob/cache/cache.go
+find: if !ok {\n\t\treturn errNoMirror\n\t}\n\treturn m.WriteMirror(ctx, value)
+replace: if !ok && false {\n\t\treturn errNoMirror\n\t}\n\treturn m.WriteMirror(ctx, value)
+pkg: ./core/blob/cache
+run: ^TestTheRootsCopyPassesThroughTheCache$
+
+id: repack-only-a-pack-with-a-dead-frame
+file: core/chunk/packstore/gc.go
+find: liveCount[i] < p.entries && share < policy.MaxLive {
+replace: share < policy.MaxLive {
+pkg: ./core/chunk/packstore
+run: ^TestRepackingSpendsItsBudgetOnTheEmptiestPacksFirst$
+
+id: repack-honors-the-threshold
+file: core/chunk/packstore/gc.go
+find: liveCount[i] < p.entries && share < policy.MaxLive {
+replace: liveCount[i] < p.entries && share <= 1 {
+pkg: ./core/chunk/packstore
+run: ^TestAPackAboveTheThresholdIsKeptWhole$
+
+id: repack-can-be-turned-off
+file: core/chunk/packstore/gc.go
+find: if !policy.Off { // a reprieved pack too
+replace: if true { // a reprieved pack too
+pkg: ./core/chunk/packstore
+run: ^TestAPackAboveTheThresholdIsKeptWhole$
+
+id: repack-stops-at-the-budget
+file: core/chunk/packstore/gc.go
+find: if out.Copied >= budget {
+replace: if false {
+pkg: ./core/chunk/packstore
+run: ^TestRepackingSpendsItsBudgetOnTheEmptiestPacksFirst$
+
+id: repack-emptiest-first
+file: core/chunk/packstore/gc.go
+find: return candidates[i].share < candidates[j].share
+replace: return candidates[i].share > candidates[j].share
+pkg: ./core/chunk/packstore
+run: ^TestRepackingSpendsItsBudgetOnTheEmptiestPacksFirst$
+
+id: repack-never-reprieves-a-repacked-pack
+file: core/chunk/packstore/gc.go
+find: if c, ok := repacked[p.name]; ok {
+replace: if c, ok := repacked[p.name]; ok && false {
+pkg: ./core/chunk/packstore
+run: ^TestARoundRepacksAPackThatIsMostlyDead$
+
+id: repack-expires-a-repacked-pack-after-grace
+file: core/chunk/packstore/gc.go
+find: if expired(c) {\n\t\t\t\tout.Expired = append(out.Expired, p.name)
+replace: if false {\n\t\t\t\tout.Expired = append(out.Expired, p.name)
+pkg: ./core/chunk/packstore
+run: ^TestARoundRepacksAPackThatIsMostlyDead$
+
+id: repack-lists-the-new-packs-and-moves-gcgen
+file: core/chunk/packstore/gc.go
+find: if gone > 0 || out.Repacked > 0 {
+replace: if gone > 0 {
+pkg: ./core/chunk/packstore
+run: ^TestARoundRepacksAPackThatIsMostlyDead$
+
+id: repack-copies-a-shared-chunk-once
+file: core/chunk/packstore/gc.go
+find: if moved[e.Hash] {\n\t\t\t\tcontinue\n\t\t\t}
+replace: if false {\n\t\t\t\tcontinue\n\t\t\t}
+pkg: ./core/chunk/packstore
+run: ^TestRepackingCopiesAChunkTwoPacksShareOnce$
+
+id: packstore-a-repacked-pack-is-condemned-to-writers
+file: core/chunk/packstore/packstore.go
+find: if c.kind == condemnedPack || c.kind == repackedPack {
+replace: if c.kind == condemnedPack {
+pkg: ./core/chunk/packstore
+run: ^TestAfterARepackWritersFindTheNewPacks$
+
+id: packstore-packs-in-service-are-indexed-first
+file: core/chunk/packstore/packstore.go
+find: if cond[info.Name] == (pass == 1) {
+replace: if cond[info.Name] == (pass == 0) {
+pkg: ./core/chunk/packstore
+run: ^TestPacksInServiceComeFirstInTheIndex$
+
+id: gc-run-passes-the-repack-policy
+file: core/gc/gc.go
+find: r.Repack(o.Repack)
+replace: r.Repack(packstore.Repack{Off: true})
+pkg: ./core/gc
+run: ^TestGCSafetyProperty$
+
+id: table-checks-the-magic
+file: core/dedup/table.go
+find: case string(hdr[:4]) != tableMagic:
+replace: case false && string(hdr[:4]) != tableMagic:
+pkg: ./core/dedup
+run: ^TestATableThatDoesNotDecodeIsRefused$
+
+id: table-checks-its-size
+file: core/dedup/table.go
+find: want != size {
+replace: false {
+pkg: ./core/dedup
+run: ^TestATableThatDoesNotDecodeIsRefused$
+
+id: table-merge-keeps-one-record-per-key
+file: core/dedup/table.go
+find: if last == nil || !bytes.Equal(r.rec[:hash.Size], last) {
+replace: if true {
+pkg: ./core/dedup
+run: ^TestTheFirstRecordOfAKeyWins$
+
+id: table-merge-takes-the-earlier-run-first
+file: core/dedup/table.go
+find: return c < 0 || (c == 0 && m.heads[i].i < m.heads[j].i)
+replace: return c < 0 || (c == 0 && m.heads[i].i > m.heads[j].i)
+pkg: ./core/dedup
+run: ^TestTheFirstRecordOfAKeyWins$
+
+id: table-spill-sorts-stably
+file: core/dedup/table.go
+find: slices.SortStableFunc(idx, func(i, j int32) int { return bytes.Compare(key(i), key(j)) })
+replace: slices.SortFunc(idx, func(i, j int32) int { return bytes.Compare(key(i), key(j)) })
+pkg: ./core/dedup
+run: ^TestTheFirstRecordOfAKeyWins$
+
+id: table-samples-each-blocks-first-key
+file: core/dedup/table.go
+find: if samples != nil && count%sampleEvery == 0 {
+replace: if samples != nil && count%sampleEvery == 1 {
+pkg: ./core/dedup
+run: ^TestATableAnswersEveryRecordItWasBuiltFrom$
+
+id: table-close-removes-the-file
+file: core/dedup/table.go
+find: if rerr := os.Remove(t.path); err == nil {
+replace: if rerr := error(nil); err == nil {
+pkg: ./core/dedup
+run: ^TestAnEmptyTableMissesEverything$
+
+id: table-cursor-ends-at-the-count
+file: core/dedup/table.go
+find: if c.left == 0 {\n\t\treturn h, nil, false, nil\n\t}
+replace: if false {\n\t\treturn h, nil, false, nil\n\t}
+pkg: ./core/dedup
+run: ^TestATableAnswersEveryRecordItWasBuiltFrom$
+
+id: table-finish-removes-the-runs
+file: core/dedup/table.go
+find: removeAll(b.runs)\n\tb.runs = nil\n\tt, err := OpenTable(path)
+replace: b.runs = nil\n\tt, err := OpenTable(path)
+pkg: ./core/dedup
+run: ^TestATableAnswersEveryRecordItWasBuiltFrom$
+
+id: table-checks-the-version
+file: core/dedup/table.go
+find: case binary.LittleEndian.Uint16(hdr[4:]) != tableVersion:
+replace: case false && binary.LittleEndian.Uint16(hdr[4:]) != tableVersion:
+pkg: ./core/dedup
+run: ^TestATableThatDoesNotDecodeIsRefused$
+
+id: table-checks-the-reserved-bytes
+file: core/dedup/table.go
+find: case !bytes.Equal(hdr[20:], make([]byte, 12)):
+replace: case false && !bytes.Equal(hdr[20:], make([]byte, 12)):
+pkg: ./core/dedup
+run: ^TestATableThatDoesNotDecodeIsRefused$
+
+id: table-add-checks-the-value-width
+file: core/dedup/table.go
+find: if len(value) != b.valueLen {
+replace: if false {
+pkg: ./core/dedup
+run: ^TestABuilderRefusesAValueOfAnotherWidth$
+
+id: table-bounds-the-value-width
+file: core/dedup/table.go
+find: if valueLen < 0 || valueLen > MaxValueLen {
+replace: if valueLen < 0 {
+pkg: ./core/dedup
+run: ^TestABuilderRefusesAValueOfAnotherWidth$
+
+id: packstore-spills-past-the-bound
+file: core/chunk/packstore/packstore.go
+find: if total > s.o.IndexInMemory {\n\t\t\tspill, loaded = true, nil
+replace: if total < 0 {\n\t\t\tspill, loaded = true, nil
+pkg: ./core/chunk/packstore
+run: ^TestAStoreSpillsItsIndexToDisk$
+
+id: packstore-close-removes-the-table
+file: core/chunk/packstore/packstore.go
+find: err = s.disk.close()\n\t\t\ts.disk = nil
+replace: s.disk = nil
+pkg: ./core/chunk/packstore
+run: ^TestAStoreSpillsItsIndexToDisk$
+
+id: packstore-open-checks-the-index-dir
+file: core/chunk/packstore/packstore.go
+find: if st, err := os.Stat(o.IndexDir); err != nil || !st.IsDir() {
+replace: if st, err := os.Stat(o.IndexDir); false && (err != nil || !st.IsDir()) {
+pkg: ./core/chunk/packstore
+run: ^TestASpilledIndexNeedsItsDirectory$
+
+id: packstore-has-consults-the-table
+file: core/chunk/packstore/packstore.go
+find: if s.disk != nil {\n\t\treturn s.disk.has(h)\n\t}
+replace: if s.disk != nil {\n\t\treturn false, nil\n\t}
+pkg: ./core/chunk/packstore
+run: ^TestAStoreSpillsItsIndexToDisk$
+
+id: packstore-spill-adds-the-packs-in-service-first
+file: core/chunk/packstore/spill.go
+find: if cond[info.Name] {\n\t\t\t\tlater = append(later, info)
+replace: if false {\n\t\t\t\tlater = append(later, info)
+pkg: ./core/chunk/packstore
+run: ^TestPacksInServiceComeFirstInTheIndex$
+
+id: gc-mark-spills-every-chunk
+file: core/gc/gc.go
+find: if err := b.Add(h, nil); err != nil {\n\t\t\t\treturn false, err\n\t\t\t}\n\t\t\tif leaf {
+replace: if leaf {\n\t\t\t\treturn false, nil\n\t\t\t}\n\t\t\tif err := b.Add(h, nil); err != nil {\n\t\t\t\treturn false, err\n\t\t\t}\n\t\t\tif leaf {
+pkg: ./core/gc
+run: ^TestGCKeepsWhatTheRefsReachAndDeletesTheRest$
+
+id: gc-mark-goes-into-a-node-first-seen-as-a-leaf
+file: core/gc/gc.go
+find: if leaf {\n\t\t\t\treturn false, nil\n\t\t\t}\n\t\t\tif _, ok := seen[h]; ok {
+replace: if leaf {\n\t\t\t\tseen[h] = struct{}{}\n\t\t\t\treturn false, nil\n\t\t\t}\n\t\t\tif _, ok := seen[h]; ok {
+pkg: ./core/gc
+run: ^TestGCIsNotSteeredByAFileThatIsANode$
+
+id: round-join-counts-a-match
+file: core/chunk/packstore/gc.go
+find: for ok && h.Compare(l) < 0 {
+replace: for ok && h.Compare(l) <= 0 {
+pkg: ./core/chunk/packstore
+run: ^TestAReachedPackIsReprieved$
+
+id: round-join-counts-the-frame-bytes
+file: core/chunk/packstore/gc.go
+find: frames[pi] += int64(binary.LittleEndian.Uint32(v[8:]))
+replace: frames[pi] += 0
+pkg: ./core/chunk/packstore
+run: ^TestAPackAboveTheThresholdIsKeptWhole$
+
+id: repack-checks-the-packs-length
+file: core/chunk/packstore/gc.go
+find: if b.at+n != b.size {
+replace: if false {
+pkg: ./core/chunk/packstore
+run: ^TestRepackingRefusesACorruptPack$
+
+id: packstore-index-objects-are-batched
+file: core/chunk/packstore/gc.go
+find: w.size+estimate(info) > maxIndexObject) {
+replace: false) {
+pkg: ./core/chunk/packstore
+run: ^TestALargeSessionPublishesSeveralIndexObjects$
+
+id: packstore-a-rebuild-under-the-bound-drops-the-table
+file: core/chunk/packstore/packstore.go
+find: if s.disk != nil { // the repository shrank under the bound\n\t\t\t_ = s.disk.close()\n\t\t\ts.disk = nil\n\t\t}
+replace: if false { // the repository shrank under the bound\n\t\t\t_ = s.disk.close()\n\t\t\ts.disk = nil\n\t\t}
+pkg: ./core/chunk/packstore
+run: ^TestASpilledIndexReturnsToMemoryWhenTheRepositoryShrinks$
+
+id: table-finish-removes-the-merged-groups
+file: core/dedup/table.go
+find: removeAll(group)\n\t\t}\n\t\tb.runs = next
+replace: _ = group\n\t\t}\n\t\tb.runs = next
+pkg: ./core/dedup
+run: ^TestATableMergesMoreRunsThanItsFanIn$
+
+id: table-spill-fails-without-its-directory
+file: core/dedup/table.go
+find: f, err := os.CreateTemp(b.dir, "snapshot-run-*")\n\tif err != nil {\n\t\treturn err\n\t}
+replace: f, err := os.CreateTemp(b.dir, "snapshot-run-*")\n\tif err != nil {\n\t\tf, err = os.CreateTemp("", "snapshot-run-*")\n\t}
+pkg: ./core/dedup
+run: ^TestABuilderNeedsItsDirectory$
+
+id: table-cursor-reports-a-short-file
+file: core/dedup/table.go
+find: if _, err := io.ReadFull(c.r, c.rec); err != nil {
+replace: if _, err := io.ReadFull(c.r, c.rec); err != nil && false {
+pkg: ./core/dedup
+run: ^TestATableCutUnderneathReportsAnError$
+
+id: packstore-index-dir-must-be-a-directory
+file: core/chunk/packstore/packstore.go
+find: if st, err := os.Stat(o.IndexDir); err != nil || !st.IsDir() {
+replace: if st, err := os.Stat(o.IndexDir); err != nil || (st.IsDir() && false) {
+pkg: ./core/chunk/packstore
+run: ^TestASpilledIndexNeedsItsDirectory$
+
+id: packstore-spill-surfaces-a-failed-read
+file: core/chunk/packstore/spill.go
+find: if infos, err = s.loadIndex(ctx, sum); err != nil {\n\t\t\t\tb.Abort()\n\t\t\t\treturn nil, err\n\t\t\t}
+replace: if infos, err = s.loadIndex(ctx, sum); err != nil && false {\n\t\t\t\tb.Abort()\n\t\t\t\treturn nil, err\n\t\t\t}
+pkg: ./core/chunk/packstore
+run: ^TestASpilledIndexNeedsItsDirectory$
+
+id: round-rewrite-surfaces-a-failed-read
+file: core/chunk/packstore/gc.go
+find: infos, err := loadIndex(ctx, r.o, sum)\n\t\tif err != nil {\n\t\t\treturn nil, err\n\t\t}\n\t\tfor _, info := range infos {\n\t\t\tif keep[info.Name]
+replace: infos, err := loadIndex(ctx, r.o, sum)\n\t\tif err != nil && false {\n\t\t\treturn nil, err\n\t\t}\n\t\tfor _, info := range infos {\n\t\t\tif keep[info.Name]
+pkg: ./core/chunk/packstore
+run: ^TestABackendFailureDuringARoundIsTheRoundsError$
+
+id: repack-starts-another-pack-when-one-fills
+file: core/chunk/packstore/gc.go
+find: if err = w.Add(e.Hash, data); errors.Is(err, pack.ErrFull) {
+replace: if err = w.Add(e.Hash, data); errors.Is(err, pack.ErrFull) && false {
+pkg: ./core/chunk/packstore
+run: ^TestRepackingFillsSeveralPacksWhenTheyAreFull$
+
+id: round-records-only-packs-and-index-objects
+file: core/chunk/packstore/gc.go
+find: return condemned{}, false\n}
+replace: return condemned{kind: deletedPack}, true\n}
+pkg: ./core/chunk/packstore
+run: ^TestARoundRecordsTheOrphansItDeletes$
+
+id: spill-refuses-a-record-of-another-width
+file: core/chunk/packstore/spill.go
+find: if len(v) != locLen {\n\t\treturn dedup.Location{}, false
+replace: if false {\n\t\treturn dedup.Location{}, false
+pkg: ./core/chunk/packstore
+run: ^TestAForgedIndexTableRecordIsRefused$
+
+id: spill-refuses-a-pack-it-does-not-list
+file: core/chunk/packstore/spill.go
+find: if pi >= uint32(len(sp.packs)) {
+replace: if false {
+pkg: ./core/chunk/packstore
+run: ^TestAForgedIndexTableRecordIsRefused$
+
+id: round-join-refuses-a-record-of-another-width
+file: core/chunk/packstore/gc.go
+find: if len(v) != locLen {\n\t\t\t\treturn fmt.Errorf("%w: round index record
+replace: if false {\n\t\t\t\treturn fmt.Errorf("%w: round index record
+pkg: ./core/chunk/packstore
+run: ^TestAForgedIndexTableRecordIsRefused$
+
+id: round-join-refuses-a-pack-it-does-not-list
+file: core/chunk/packstore/gc.go
+find: if pi >= uint32(len(r.packs)) {
+replace: if false {
+pkg: ./core/chunk/packstore
+run: ^TestAForgedIndexTableRecordIsRefused$
+
+id: packstore-stats-count-the-table
+file: core/chunk/packstore/packstore.go
+find: n += s.disk.len() // a chunk in both is counted twice: about, not exactly
+replace: n += 0
+pkg: ./core/chunk/packstore
+run: ^TestAStoreSpillsItsIndexToDisk$

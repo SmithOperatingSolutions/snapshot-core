@@ -77,13 +77,14 @@ func newNames(before, after []string) []string {
 
 // orphanRound is a GC round handed candidates, as GC hands it what it
 // listed older than the grace window (an hour here).
-func orphanRound(t *testing.T, bs blob.BlobStore, kr *seal.Keyring, live func(hash.Hash) bool, now time.Time, candidates []string) packstore.Outcome {
+func orphanRound(t *testing.T, bs blob.BlobStore, kr *seal.Keyring, live packstore.Live, now time.Time, candidates []string) packstore.Outcome {
 	t.Helper()
 	r, err := packstore.Begin(ctx, packstore.Options{Blobs: bs, Keys: kr, Repo: repo})
 	if err != nil {
 		t.Fatalf("Begin: %v", err)
 	}
 	r.Orphans(candidates)
+	r.Repack(packstore.Repack{Off: true}) // condemnation alone; repacking has tests of its own
 	out, err := r.Apply(ctx, live, now, time.Hour)
 	if err != nil {
 		t.Fatalf("Apply at %v: %v", now.Sub(t0), err)
@@ -146,6 +147,15 @@ func TestARoundRecordsTheOrphansItDeletes(t *testing.T) {
 	orphanRound(t, bs, kr, live, t0.Add(2*time.Hour), all())
 	if got := recorded(t, bs, kr); got != "" {
 		t.Fatalf("a grace window and an hour after the deletion the manifest still records %q", got)
+	}
+	// A name that is neither a pack nor an index object (a stopped run's
+	// clock probe, say) is returned for deletion and recorded as nothing.
+	stray := orphanRound(t, bs, kr, live, t0.Add(4*time.Hour), []string{"gc/clock-0000000000000000"})
+	if len(stray.Orphans) != 1 || stray.Orphans[0] != "gc/clock-0000000000000000" {
+		t.Fatalf("a stray name given as an orphan came back as %v, want it alone, for deletion", stray.Orphans)
+	}
+	if rec := recorded(t, bs, kr); rec != "" {
+		t.Fatalf("after a stray name was handed in, the records lapsed, the manifest records %q, want nothing", rec)
 	}
 }
 

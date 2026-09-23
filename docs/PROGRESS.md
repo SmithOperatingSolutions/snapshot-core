@@ -12,7 +12,7 @@ lint clean · every package at or above its coverage gate
 
 | Milestone | Status | Delivered | Exit criteria |
 | --- | --- | --- | --- |
-| **C0 Foundations** | ✅ Done | Repo, `mise.toml` (Go 1.27), CI (static, race on Linux+macOS, MinIO tier, red-check; nightly fuzz/crash/slow/mutants), `tools/ci` run-all, `tools/redcheck`, `tools/mutate`, `core/dnx` + `core/dnx/compat` | Compat suite green against the pinned disknexus tag ✅ |
+| **C0 Foundations** | ✅ Done | Repo, `mise.toml` (Go 1.27), CI (static, race on Linux+macOS, MinIO tier, red-check; weekly fuzz/crash/slow/mutants), `tools/ci` run-all, `tools/redcheck`, `tools/mutate`, `core/dnx` + `core/dnx/compat` | Compat suite green against the pinned disknexus tag ✅ |
 | **C1 Blobs and chunks** | ✅ Done | `core/hash`, `core/internal/wire`, `core/cdc`, `core/seal` (per-object HKDF keys, key files, KMS port + contract); `core/blob` port + contract, `blob/mem`, `blob/local`, `blob/multivol`, `blob/s3` (pure-Go in-process S3 server `s3fake`, startup probe, MinIO tier), `blob/cache`; `core/pack`, `core/dedup`; `core/chunk` port + contract, `chunk/memstore`, `chunk/packstore` | Blob contract green on all backends ✅ (mem, local, multivol, s3 in-process and MinIO, and through the cache); crash harness passes ✅ (local and multivol at the blob layer, packstore at the chunk layer) |
 | **C2 Keyed data** | ✅ Done | `core/boundary` (the integer split rule), `core/stream` (CDC byte streams under a content-defined index tree), `core/prolly` (Map, Editor with incremental Flush, Diff) | Determinism and bounded-diff properties hold on 1M entries ✅ (`-tags slow`, about 9 s) |
 | **C3 History and models** | ✅ Done | `core/auth` (Principal, default-deny Authorizer), `core/model` (the port, frozen, and the registry), `core/object` (46-byte object references, the path grammar, namespaces and their diff), `model/contract`, `model/blob`, `model/tree`, `core/merge` (the zipped three-way driver), `core/vcs` (refs, commits, tags, working sets, merge base, log, merge and conflicts), `core/repo` (Init and Open over the sealed config object) | A folder of files branches, diffs and merges end to end ✅ (`TestAFolderBranchesDiffsAndMerges`, on a local disk store through encrypted packs); model interface frozen ✅ (`core/model`, port version 1) |
@@ -113,7 +113,7 @@ packages have no gate: their callers exercise them.
 ### Blob backends
 - [x] A shared `blob/contract` suite runs against every backend: put, get, range get, list paging, put-existing refused, root swap, stale swap refused, plus atomic puts and whole root reads under concurrent swaps (`core/blob/contract`; passing on `mem`, `local`, `multivol`, `s3` against the in-process server and MinIO, and through `blob/cache`)
 - [x] 50 concurrent root swappers on `s3` (MinIO in CI): exactly one wins per round, none lost (`ConcurrentSwappersOneWinnerPerRound` with 50 swappers in `TestContractAgainstTheInProcessServer` and `TestContractAgainstRealS3`)
-- [x] kill -9 during `SwapRoot` on `local` and `multivol`, 1,000 times: reopened root is old or new, never torn (`TestCrashDuringSwapRootLeavesOldOrNew`; 1,000 nightly)
+- [x] kill -9 during `SwapRoot` on `local` and `multivol`, 1,000 times: reopened root is old or new, never torn (`TestCrashDuringSwapRootLeavesOldOrNew`; 1,000 weekly)
 - [x] `s3` startup probe refuses an endpoint that ignores `If-Match` (`TestProbeRefusesEndpointsThatIgnoreConditionalWrites`)
 
 ### Chunkers
@@ -167,12 +167,12 @@ packages have no gate: their callers exercise them.
 - [x] Flipping one byte on disk makes `Get` return `ErrCorrupt` (`FlippedByteIsCorrupt`, through the raw backend)
 - [x] `CompareAndSetRoot` with a stale `expected` returns `ErrRootConflict` and leaves the root unchanged (`StaleCASChangesNothing`)
 - [x] 100 goroutines racing `CompareAndSetRoot`: exactly one wins per round (`RacingCASOneWinnerPerRound`; 50 on s3)
-- [x] Crash harness: kill mid-write 1,000 times; reopened store is at the old or new root (`TestCrashDuringCommitLeavesOldOrNew`, 1,000 nightly)
+- [x] Crash harness: kill mid-write 1,000 times; reopened store is at the old or new root (`TestCrashDuringCommitLeavesOldOrNew`, 1,000 weekly)
 - [x] `Put` of 1 MiB + 1 byte returns `ErrTooLarge` (`TooLarge`)
 - [x] (port rule) A closed store refuses every call with `ErrClosed` (`ClosedRefusesEveryCall`)
 
 ### L0 backends
-- [ ] Every backend runs the full contract suite in CI (S3 against MinIO per push; nightly real S3): mem, local, multivol, s3 against MinIO ✅; real S3 nightly: the test is written, the job and its credentials are not (#4)
+- [ ] Every backend runs the full contract suite in CI (S3 against MinIO per push; real S3 weekly): mem, local, multivol, s3 against MinIO ✅; real S3 nightly: the test is written, the job and its credentials are not (#4)
 - [x] filestore: starting on an SMB, NFS, or unrecognized filesystem fails (`TestOnlyAllowlistedFilesystems`)
 - [x] multistore: 4 volumes × 10,000 files, each 25% ± 3% (`TestPlacementIsEvenAcrossFourVolumes`)
 - [x] multistore: adding a 5th volume moves no existing files, ~20% of new files go to it (`TestAddingAVolumeMovesNothingAndTakesAFifth`)
@@ -253,11 +253,19 @@ Beyond the list: merging what a branch already holds changes nothing (`TestMergi
 - **A walk says which chunks are leaves**, and the marker prunes only nodes it has gone into, so bytes that are a file in one place and a node in another cannot steer it.
 - **GC condemns, waits, re-marks, deletes**; writers never deduplicate against a condemned pack; a store rebuilds its index when gcGen moves.
 - **GC records the orphans it deletes**, in the swap before the deletion, for a grace window and an hour (condemned kinds 3 and 4); a writer's publish is refused when the manifest records one of its unpublished uploads, or when one over an hour old is gone.
+- **The root apart from the objects** (#8): objects on any S3-compatible provider (`s3.Options.ObjectsOnly`: HEAD then an unconditional PUT, no root), the root on a compare-and-swap store, a copy of the root on the objects store in one of four modes (wait, the default; background; periodic; off), recovered from when the root's disk is lost. The spike, on MinIO with 50 ms per S3 request: reads 56 ms → 2.7 ms, small commits 810 → 540 ms, opens 812 → 697 ms, never more S3 requests than all-S3. `Init` claims a store with the root's first swap, each `Init`'s config under its own repository id.
 - **A lost session, not a conflict**: a store that finds writes it promised gone (a chunk a put counted on in a pack GC expired, an upload GC deleted as an orphan, found at publish or on a read) fails with `chunk.ErrSessionLost` and refuses every later write; the host reopens the repository. Retrying on the same store could keep failing, and fencing only counted-on chunks would miss chunks written into a deleted pack.
 - **Expiry by GC's clock, orphan ages by the backend's**, read from a probe object.
 - **The repository runs on `blob.NoDelete`**; `repo.GC`, with admin and the raw store, is the one path that deletes.
 - **Writes are authorized per path, reads per branch.**
 - **Equivalent mutants, not catalogued:** the cache's `Dir` check (`MkdirAll("")` fails anyway) and its `MkdirAll` error path (the `Chmod` after it fails); the pack index's per-entry read check (the reader's error is sticky and `Done` reports it); `OpenFrame`'s length check (authentication fails anyway); the manifest's count limits (the read fails at the first missing entry); the repository config's 4 KiB bound (the read is cut there anyway and a cut config fails to authenticate); `gc.Run`'s options check (a missing store, key or registry fails deeper down all the same); the version graph's walk of a conflict's sides (`vcs-walk-follows-conflicts`, retired: since a merge records where it started, the base, theirs and starting namespaces hold every side too, so the visit is defense in depth). Their statements are covered; no test can tell the mutant from the original.
+
+- **The slow tiers run weekly, not nightly** (2026-09-23). The specs say
+  "fuzzed nightly"; the fuzz job is 21 targets, hours at any useful budget
+  (30 minutes each exceeded its own 6-hour timeout), and the code lands in
+  batches, so `weekly.yml` runs fuzz (10 minutes a target), the crash
+  harness, the mutant catalog, the slow tier and the real-provider S3
+  suites every Sunday and on demand.
 
 ## What testing has found so far
 
@@ -305,16 +313,31 @@ Beyond the list: merging what a branch already holds changes nothing (`TestMergi
 | the design of #3 | Answering a lost write with a conflict to retry on the same store could fail forever (a lost chunk the retry no longer writes), and a fence on counted-on chunks misses chunks written into a deleted pack | A lost session: `ErrSessionLost`, writes refused, the host reopens (the fence on expired packs too) |
 | the GC property, run 150 times | A host reading back what it had just written found a chunk its put had deduplicated against a pack GC expired meanwhile: a plain `ErrNotFound`, before any publish could be fenced (one run in about 120) | A read of a promised chunk that is gone ends the session (`TestReadingAPromisedChunkThatIsGoneLosesTheSession`) |
 | the GC property's reach | The spanning edit lost a session in only about 94% of runs, so a check that one did was flaky | A slow-writer step, whose pack GC deletes as an orphan before it publishes |
+| the design of #8 | `Init` claimed a store by writing one config put-if-absent; on a best-effort store two `Init`s overwrote each other's config and the first key lost its repository (`TestInitsRacingDoNotOverwriteEachOther` made the race certain) | Each `Init` writes `config/<repo id>` and claims the store with the root's first swap |
+| the split store's tests | Two fixtures held only when the scheduler cooperated (a writer catching the first of three swaps; a copy landing before Close), and a string order check read "three" before "two" | The writer is held inside its first copy before the next swaps; numbered roots |
+| the GC property's convergence bound (#1) | Repacking left the store over twice its live bytes for one grace window more than it should: a condemned pack found live again and mostly dead was reprieved in one round and repacked only in the next; and a pack whose every chunk is live looked mostly dead by its overhead, so tiny root packs were rewritten for nothing | A reprieved pack is repacked in the same round; a pack with no dead frame is never a candidate |
+| the ordering mutants (#1, #6) | Two mutants on "packs in service first" were killed by a test whose pack order was a coin flip: index objects sort packs by hash, so the repacked pack came first one run in two | `TestPacksInServiceComeFirstInTheIndex` draws the fixture until the repacked pack sorts first, and both mutants anchor on it |
+| the memory measurement (#6) | A session's packs went into one index object whatever their number, so a session of about 1.5 million chunks could not publish (`dedup.MaxObjectSize`), and every store decoded that object whole | Index objects are written in batches of at most 8 MiB estimated (`TestALargeSessionPublishesSeveralIndexObjects`) |
+| the memory measurement (#6) | With the index and the mark on disk a collection still peaked at 185 bytes a chunk: GC's reader kept a 64 MiB chunk cache the walk never read twice from, and a candidate pack was read whole to repack it | The reader runs without a cache; a candidate's frames stream from one GET |
+| the measurement at two million (#6) | The peak grew 48 bytes a chunk from one million to two: a refresh decoded every index object into memory before deciding to spill, and, larger, the in-memory blob backend held what the collection stored (it repacked one small mixed pack and rewrote every index object), which a heap measure cannot tell from the collector's own memory | A refresh keeps at most the bound's worth of decoded objects; the measurement's repository is on disk |
 | (redcheck on this branch) | Build-tagged tests unjudged; `TestMain` judged; pairs not matched by scope; contract changes invisible; environment-bound callers refused; no `main` in a new clone; a tagged backfill's mutants built without its tag; fuzz targets not counted as tests | Tool fixed each time, with a red test |
+
+### Batch 2 (in progress)
+
+- [x] #8 The root apart from the objects: `TestObjectsOnlyRunsWhereConditionalWritesAreIgnored`, `TestObjectsOnlyPutIsAHeadThenAPut`, `TestTheMirrorIsReplacedInPlace`; the split store's contract and modes (`TestContractOverASplitStore`, `TestWaitMirrorsEachSwapBeforeReturning`, `TestBackgroundMirrorsTheNewestRootAndCloseFlushes`, `TestBackgroundCopiesEachSwap`, `TestBackgroundReportsAndRetriesAFailedCopy`, `TestPeriodicMirrorsOnItsClock`, `TestOffKeepsNoCopy`, `TestRecoverSeedsAnEmptyRootStoreFromTheCopy`); `TestTheRootsCopyPassesThroughTheCache`; two `Init`s racing (`TestAnotherInitCannotTakeOverARepository`, `TestInitsRacingDoNotOverwriteEachOther`, `TestAStoppedInitFinishedTwiceAtOnceIsFinishedOnce`, `TestOpenTakesTheConfigThatAuthenticatesTheRoot`); end to end on an endpoint ignoring conditional writes, recovered from the copy, `TestARepositoryRunsOnAnEndpointWithoutConditionalWrites`.
+- [x] #1 Reclaiming space in mixed packs: a round repacks kept packs that are mostly dead, emptiest first within a byte budget, records them under a kind of their own and expires them a grace window on (`TestARoundRepacksAPackThatIsMostlyDead`, `TestAPackAboveTheThresholdIsKeptWhole`, `TestRepackingSpendsItsBudgetOnTheEmptiestPacksFirst`, `TestAfterARepackWritersFindTheNewPacks`, `TestRepackingCopiesAChunkTwoPacksShareOnce`, `TestRepackingRefusesACorruptPack`); the GC property converges to at most twice the live bytes (`TestGCSafetyProperty`).
+- [x] #6 The index in memory: a `dedup` table on disk (`TestATableAnswersEveryRecordItWasBuiltFrom`, `TestTheFirstRecordOfAKeyWins`, `TestATableHoldsAlmostNothingInMemory`, `TestATableThatDoesNotDecodeIsRefused`, `FuzzOpenTable`); a store spills its index past a bound (`TestAStoreSpillsItsIndexToDisk`, `TestASpilledIndexIsRebuiltWhenGCMovesIt`, `TestASpilledIndexNeedsItsDirectory`, `TestContractOverASpilledIndex`, `TestPacksInServiceComeFirstInTheIndex`); GC marks and indexes on disk (`TestGCNeedsItsWorkDirectory`); with 64 Ki in memory, a million chunks open in 16 KiB and collect in a 31 MiB peak, two million in 20 KiB and 34 MiB (`TestSlowMemoryPerChunkOn1MChunks`).
+- [ ] #4 The real provider, weekly: the job and its two tests are in, the secrets are set, and the item closes on the first green run. The first run found the endpoint given as a bare host: accepted as HTTPS. The MinIO tier runs the e2e package on every push meanwhile.
 
 ## Next
 
 The storage core's milestones, C0 to C4, are done. What remains is outside
 them, each tracked as an issue:
 
-1. **Reclaiming space in mixed packs** (#1): GC frees whole packs;
-   rewriting mostly-dead ones (their live chunks copied out, the pack
-   condemned) is the step after v1.
+1. ✅ **Reclaiming space in mixed packs** (#1): a GC round repacks packs
+   that are mostly dead, within a per-run byte budget
+   (`TestARoundRepacksAPackThatIsMostlyDead`,
+   `TestRepackingSpendsItsBudgetOnTheEmptiestPacksFirst`).
 2. ✅ **Reading and deleting tags** (#2): `Tags`, `Tag` and `DeleteTag`
    (`TestTagsAreListedAndReadBack`, `TestAMissingOrDeletedTagIsNotFound`,
    `TestForgedTagRefsAreCorrupt`; what only a deleted tag reached is
@@ -327,9 +350,11 @@ them, each tracked as an issue:
    `TestReadingAPromisedChunkThatIsGoneLosesTheSession`; end to end,
    `TestAWriterCannotPublishAPackGCDeletedAsAnOrphan`; slow writers in
    `TestGCSafetyProperty`).
-4. **Real S3 in the nightly run** (#4): the test is written
-   (`TestContractAgainstRealS3`); a nightly job to run it, and the
-   credentials it needs as CI secrets, are not there yet.
+4. **Real S3 in the weekly run** (#4): the job is written
+   (`real-provider`: `TestContractAgainstRealS3` objects only and
+   `TestARepositoryRunsOnTheRealProvider`, on Backblaze B2 or iDrive e2 with
+   the root on the runner's disk); it fails until an admin adds the
+   `SNAPSHOT_S3_*` secrets, then the item closes on its first green night.
 5. ✅ **Abandoning a merge** (#5): `AbortMerge` puts back the working and
    staged namespaces the merge started from
    (`TestAnAbandonedMergeLeavesTheBranchAsItWas`,
@@ -337,5 +362,14 @@ them, each tracked as an issue:
    `TestWritesAreAuthorizedPerPath`; GC keeps the starting namespaces,
    `TestAWalkNamesAllTheRepositoryHolds`, and collects an abandoned merge,
    `TestAnAbandonedMergeIsCollected`).
-6. **The index in memory** (#6): about 70 to 80 bytes per chunk to open a
-   repository, and a map of every live chunk to collect one.
+6. ✅ **The index in memory** (#6): the index past a bound, the mark and
+   the round's own index are tables on disk; a million chunks with 64 Ki
+   in memory open in 16 KiB and collect in a 31 MiB peak, against 117 MiB
+   and 371 MiB before, and two million in 20 KiB and 34 MiB
+   (`TestSlowMemoryPerChunkOn1MChunks`).
+7. **The write path is single-threaded** (#10): measured on a laptop
+   over `blob/local`, 113 MB/s writing random data, 187 compressible,
+   188 re-snapshotting a deduplicated file, 0.5–1.2 GB/s reading, 80 ms
+   a commit. First a slow-tier test that reports the figures weekly,
+   then hashing, compressing and sealing chunks on N workers with the
+   memory in flight bounded.
