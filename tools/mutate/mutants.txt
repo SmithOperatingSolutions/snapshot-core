@@ -2372,3 +2372,38 @@ find: if err := g.validate(); err != nil {\n\t\treturn Config{}, fmt.Errorf("%w:
 replace: if err := g.validate(); err != nil && false {\n\t\treturn Config{}, fmt.Errorf("%w: %w", ErrConfig, err)
 pkg: ./core/repo
 run: ^TestTheConfigIsCheckedBeforeItIsUsed$
+
+id: repo-init-authorized-before-writing
+file: core/repo/repo.go
+find: if err := auth.Check(ctx, o.Authorizer, p, auth.Admin, "repo"); err != nil {
+replace: if err := auth.Check(ctx, o.Authorizer, p, auth.Admin, "repo"); err != nil && false {
+pkg: ./core/repo
+run: ^TestARefusedInitWritesNothing$
+
+id: repo-init-surfaces-put-errors
+file: core/repo/repo.go
+find: if !errors.Is(err, blob.ErrExists) {\n\t\t\treturn nil, err
+replace: if !errors.Is(err, blob.ErrExists) && false {\n\t\t\treturn nil, err
+pkg: ./core/repo
+run: ^TestEveryStoreFailureIsSurvivable$
+
+id: repo-config-read-errors-surface
+file: core/repo/repo.go
+find: _ = rc.Close()\n\tif err != nil {
+replace: _ = rc.Close()\n\tif err != nil && false {
+pkg: ./core/repo
+run: ^TestEveryStoreFailureIsSurvivable$
+
+id: repo-open-no-repo-only-for-no-refs
+file: core/repo/repo.go
+find: if errors.Is(err, vcs.ErrNoRepo) {
+replace: if err != nil {
+pkg: ./core/repo
+run: ^TestEveryStoreFailureIsSurvivable$
+
+id: repo-init-exists-only-for-a-root
+file: core/repo/repo.go
+find: if errors.Is(err, vcs.ErrExists) {\n\t\t\treturn nil, ErrExists
+replace: if err != nil {\n\t\t\treturn nil, ErrExists
+pkg: ./core/repo
+run: ^TestEveryStoreFailureIsSurvivable$

@@ -7,7 +7,9 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"sync/atomic"
 	"testing"
+	"testing/iotest"
 	"time"
 
 	"github.com/SmithOperatingSolutions/snapshot-core/core/auth"
@@ -468,4 +470,191 @@ func TestTheConfigIsCheckedBeforeItIsUsed(t *testing.T) {
 		t.Fatalf("positive control: a config sealed by hand opens: %v", err)
 	}
 	r.Close()
+}
+
+// Init asks for admin before it writes anything, and a destroyed key seals
+// nothing: a denied Init (a nil authorizer denies too), or one with a
+// destroyed key, leaves the store as empty as it found it; a destroyed
+// key opens nothing either.
+func TestARefusedInitWritesNothing(t *testing.T) {
+	for _, c := range []struct {
+		name string
+		set  func(o *repo.Options)
+		want error
+	}{
+		{"denied", func(o *repo.Options) { o.Authorizer = auth.DenyAll{} }, auth.ErrDenied},
+		{"with a nil authorizer", func(o *repo.Options) { o.Authorizer = nil }, auth.ErrDenied},
+		{"with a destroyed key", func(o *repo.Options) { o.Keys.Destroy() }, seal.ErrDestroyed},
+	} {
+		blobs := mem.New()
+		o := options(t, blobs, keyring(t))
+		c.set(&o)
+		if _, err := repo.Init(ctx, alice, o); !errors.Is(err, c.want) {
+			t.Errorf("Init %s = %v, want %v", c.name, err, c.want)
+		}
+		if infos, err := blobs.List(ctx, "", "", blob.MaxListPage); err != nil || len(infos) != 0 {
+			t.Errorf("Init %s left %d objects (%v)", c.name, len(infos), err)
+		}
+		if root, err := blobs.Root(ctx); err != nil || len(root.Value) != 0 {
+			t.Errorf("Init %s left a root (%v)", c.name, err)
+		}
+	}
+	o := options(t, mem.New(), keyring(t))
+	initRepo(t, o).Close()
+	o.Keys.Destroy()
+	if _, err := repo.Open(ctx, o); !errors.Is(err, seal.ErrDestroyed) {
+		t.Fatalf("Open with a destroyed key = %v, want ErrDestroyed", err)
+	}
+}
+
+// The blob store calls faultyBlobs can fail; a read is of what a Get
+// returned.
+const (
+	blobPut = iota
+	blobGet
+	blobRead
+	blobStat
+	blobList
+	blobRoot
+	blobSwap
+	blobKinds
+)
+
+var blobCallNames = [blobKinds]string{"put", "get", "read", "stat", "list", "root read", "root swap"}
+
+// faultyBlobs fails exactly one blob store call, the at-th of one kind
+// (at 0: none), and passes everything else through.
+type faultyBlobs struct {
+	blob.BlobStore
+	kind  int
+	at    int64
+	calls [blobKinds]atomic.Int64
+}
+
+func (s *faultyBlobs) fails(kind int) bool { return s.calls[kind].Add(1) == s.at && s.kind == kind }
+
+func (s *faultyBlobs) arm(kind int, at int64) {
+	s.kind, s.at = kind, at
+	for i := range s.calls {
+		s.calls[i].Store(0)
+	}
+}
+
+func (s *faultyBlobs) counts() (c [blobKinds]int64) {
+	for i := range c {
+		c[i] = s.calls[i].Load()
+	}
+	return c
+}
+
+func (s *faultyBlobs) Put(ctx context.Context, name string, r io.Reader, size int64) error {
+	if s.fails(blobPut) {
+		return errBackend
+	}
+	return s.BlobStore.Put(ctx, name, r, size)
+}
+
+func (s *faultyBlobs) Get(ctx context.Context, name string, off, n int64) (io.ReadCloser, error) {
+	if s.fails(blobGet) {
+		return nil, errBackend
+	}
+	rc, err := s.BlobStore.Get(ctx, name, off, n)
+	if err != nil || !s.fails(blobRead) {
+		return rc, err
+	}
+	_ = rc.Close()
+	return io.NopCloser(iotest.ErrReader(errBackend)), nil
+}
+
+func (s *faultyBlobs) Stat(ctx context.Context, name string) (blob.Info, error) {
+	if s.fails(blobStat) {
+		return blob.Info{}, errBackend
+	}
+	return s.BlobStore.Stat(ctx, name)
+}
+
+func (s *faultyBlobs) List(ctx context.Context, prefix, after string, limit int) ([]blob.Info, error) {
+	if s.fails(blobList) {
+		return nil, errBackend
+	}
+	return s.BlobStore.List(ctx, prefix, after, limit)
+}
+
+func (s *faultyBlobs) Root(ctx context.Context) (blob.Root, error) {
+	if s.fails(blobRoot) {
+		return blob.Root{}, errBackend
+	}
+	return s.BlobStore.Root(ctx)
+}
+
+func (s *faultyBlobs) SwapRoot(ctx context.Context, expected blob.Version, next []byte) (blob.Version, error) {
+	if s.fails(blobSwap) {
+		return blob.NoVersion, errBackend
+	}
+	return s.BlobStore.SwapRoot(ctx, expected, next)
+}
+
+// Every blob store call Init and Open make, failed in turn, is their
+// error, never a missing repository or a damaged config; and after any
+// one of them Init again makes a working repository, finishing whatever
+// the failed Init began, and a failed Open leaves one that opens.
+func TestEveryStoreFailureIsSurvivable(t *testing.T) {
+	keys := keyring(t)
+	b := &faultyBlobs{BlobStore: mem.New()}
+	o := options(t, b, keys)
+	initRepo(t, o).Close()
+	failures := 0
+	for k, n := range b.counts() {
+		for at := int64(1); at <= n; at++ {
+			b := &faultyBlobs{BlobStore: mem.New()}
+			o := options(t, b, keys)
+			b.arm(k, at)
+			if _, err := repo.Init(ctx, alice, o); !errors.Is(err, errBackend) {
+				t.Fatalf("Init with %s %d of %d failing = %v, want the backend's error", blobCallNames[k], at, n, err)
+			}
+			b.arm(0, 0)
+			r, err := repo.Init(ctx, alice, o)
+			if err != nil {
+				t.Fatalf("Init again after %s %d of %d failed = %v, want a repository", blobCallNames[k], at, n, err)
+			}
+			head, err := r.Head(ctx, alice, vcs.MainBranch)
+			r.Close()
+			if err != nil {
+				t.Fatalf("after %s %d of %d failed, the repository Init made again has no main: %v", blobCallNames[k], at, n, err)
+			}
+			re, err := repo.Open(ctx, o)
+			if err != nil {
+				t.Fatalf("after %s %d of %d failed, the repository does not open: %v", blobCallNames[k], at, n, err)
+			}
+			if again, err := re.Head(ctx, alice, vcs.MainBranch); err != nil || again.Hash != head.Hash {
+				t.Fatalf("after %s %d of %d failed, reopened main is %v (%v), want %v", blobCallNames[k], at, n, again.Hash, err, head.Hash)
+			}
+			re.Close()
+			failures++
+		}
+	}
+	b.arm(0, 0)
+	re, err := repo.Open(ctx, o)
+	if err != nil {
+		t.Fatal(err)
+	}
+	re.Close()
+	for k, n := range b.counts() {
+		for at := int64(1); at <= n; at++ {
+			b.arm(k, at)
+			if _, err := repo.Open(ctx, o); !errors.Is(err, errBackend) {
+				t.Fatalf("Open with %s %d of %d failing = %v, want the backend's error", blobCallNames[k], at, n, err)
+			}
+			b.arm(0, 0)
+			re, err := repo.Open(ctx, o)
+			if err != nil {
+				t.Fatalf("Open after %s %d of %d failed = %v", blobCallNames[k], at, n, err)
+			}
+			re.Close()
+			failures++
+		}
+	}
+	if failures == 0 {
+		t.Fatal("fixture: Init and Open made no blob store calls")
+	}
 }
