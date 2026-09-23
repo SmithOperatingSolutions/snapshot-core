@@ -2218,3 +2218,52 @@ find: err = e.Delete(path)
 replace: err = nil
 pkg: ./core/vcs
 run: ^TestMergesOutOfTurnAreRefused$
+
+id: vcs-init-race-is-exists
+file: core/vcs/vcs.go
+find: if errors.Is(err, chunk.ErrRootConflict) {\n\t\t\treturn nil, ErrExists
+replace: if errors.Is(err, chunk.ErrRootConflict) && false {\n\t\t\treturn nil, ErrExists
+pkg: ./core/vcs
+run: ^TestAnInitThatLosesTheRaceIsErrExists$
+
+id: vcs-update-retries
+file: core/vcs/vcs.go
+find: for attempt := 0; attempt < maxAttempts; attempt++ {\n\t\tm, err := r.refs(ctx)
+replace: for attempt := 0; attempt < 1; attempt++ {\n\t\tm, err := r.refs(ctx)
+pkg: ./core/vcs
+run: ^TestAWriterThatKeepsLosingGivesUp$
+
+id: vcs-update-gives-up
+file: core/vcs/vcs.go
+find: return fmt.Errorf("vcs: the refs changed under %d attempts in a row", maxAttempts)
+replace: return nil
+pkg: ./core/vcs
+run: ^TestAWriterThatKeepsLosingGivesUp$
+
+id: vcs-repo-needs-a-registry
+file: core/vcs/vcs.go
+find: if o.Registry == nil {\n\t\treturn nil, errors.New("vcs: a repository needs a model registry")
+replace: if o.Registry == nil && false {\n\t\treturn nil, errors.New("vcs: a repository needs a model registry")
+pkg: ./core/vcs
+run: ^TestARepositoryNeedsARegistryAndReadsTheWallClock$
+
+id: vcs-clock-defaults-to-now
+file: core/vcs/vcs.go
+find: o.Clock = time.Now
+replace: o.Clock = func() time.Time { return time.Unix(0, 0) }
+pkg: ./core/vcs
+run: ^TestARepositoryNeedsARegistryAndReadsTheWallClock$
+
+id: vcs-ref-length-checked
+file: core/vcs/vcs.go
+find: if len(v) != hash.Size {
+replace: if len(v) != hash.Size && false {
+pkg: ./core/vcs
+run: ^TestForgedRefsAreCorrupt$
+
+id: vcs-branch-needs-a-working-set
+file: core/vcs/vcs.go
+find: if err == nil && !ok {\n\t\terr = corrupt("branch %s has no working set", branch)
+replace: if err == nil && !ok && false {\n\t\terr = corrupt("branch %s has no working set", branch)
+pkg: ./core/vcs
+run: ^TestForgedRefsAreCorrupt$

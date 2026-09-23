@@ -6,8 +6,10 @@ import (
 	"fmt"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/SmithOperatingSolutions/snapshot-core/core/auth"
+	"github.com/SmithOperatingSolutions/snapshot-core/core/chunk"
 	"github.com/SmithOperatingSolutions/snapshot-core/core/chunk/memstore"
 	"github.com/SmithOperatingSolutions/snapshot-core/core/hash"
 	"github.com/SmithOperatingSolutions/snapshot-core/core/object"
@@ -253,4 +255,154 @@ func TestStoreErrorsSurfaceAndLeaveTheRefs(t *testing.T) {
 		t.Fatalf("fixture: the conflicts map fits in one node (%v)", err)
 	}
 	everyFailurePoint(t, s, "Conflicts spanning nodes", func() error { _, err := f.r.Conflicts(ctx, alice, main); return err })
+}
+
+// racing runs first once, just before the first root swap, as another
+// writer getting in between a read of the root and the swap would; with
+// lose set, every swap loses, as if another writer always got in first.
+type racing struct {
+	*memstore.Store
+	first func()
+	lose  bool
+	swaps atomic.Int64
+}
+
+func (s *racing) CompareAndSetRoot(ctx context.Context, expected, next hash.Hash) error {
+	s.swaps.Add(1)
+	if f := s.first; f != nil {
+		s.first = nil
+		f()
+	}
+	if s.lose {
+		return chunk.ErrRootConflict
+	}
+	return s.Store.CompareAndSetRoot(ctx, expected, next)
+}
+
+// Two Inits race for one store: the one whose swap loses is ErrExists, not
+// a root conflict, and the repository is the winner's.
+func TestAnInitThatLosesTheRaceIsErrExists(t *testing.T) {
+	s := &racing{Store: memstore.New()}
+	o := options(t, auth.AllowAll{}, &clock{})
+	s.first = func() {
+		if _, err := vcs.Init(ctx, s.Store, bob, o); err != nil {
+			t.Errorf("the Init that won: %v", err)
+		}
+	}
+	if _, err := vcs.Init(ctx, s, alice, o); !errors.Is(err, vcs.ErrExists) {
+		t.Fatalf("the Init that lost the race = %v, want ErrExists", err)
+	}
+	r, err := vcs.Open(ctx, s.Store, o)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c, err := r.Head(ctx, alice, vcs.MainBranch); err != nil || c.Author != bob.ID {
+		t.Fatalf("main's first commit is by %q (%v), want the winner, %s", c.Author, err, bob.ID)
+	}
+}
+
+// A writer whose every root swap loses re-reads and re-applies, but not
+// forever: it gives up with an error of its own, and nothing it did
+// reaches the root.
+func TestAWriterThatKeepsLosingGivesUp(t *testing.T) {
+	s := &racing{Store: memstore.New()}
+	f := newFixtureOn(t, s)
+	f.put(vcs.MainBranch, "a", f.obj(7, "a"))
+	before := f.head(vcs.MainBranch)
+	s.lose = true
+	s.swaps.Store(0)
+	_, err := f.r.CommitWorkingSet(ctx, alice, vcs.MainBranch, "never lands")
+	if err == nil || errors.Is(err, chunk.ErrRootConflict) {
+		t.Fatalf("a commit that lost every swap = %v, want the version graph to give up", err)
+	}
+	if n := s.swaps.Load(); n < 2 || n > 1000 {
+		t.Fatalf("the commit tried %d swaps, want it to retry, a bounded number of times", n)
+	}
+	if got := f.head(vcs.MainBranch); got.Hash != before.Hash {
+		t.Fatal("a commit that gave up moved the head")
+	}
+}
+
+// A repository needs a model registry to read what it stores: without one
+// Init and Open are refused, and Init writes no root. A nil clock is the
+// wall clock.
+func TestARepositoryNeedsARegistryAndReadsTheWallClock(t *testing.T) {
+	f := newFixture(t)
+	o := f.o
+	o.Registry = nil
+	if _, err := vcs.Open(ctx, f.s, o); err == nil {
+		t.Error("Open without a model registry succeeded")
+	}
+	empty := memstore.New()
+	if _, err := vcs.Init(ctx, empty, alice, o); err == nil {
+		t.Error("Init without a model registry succeeded")
+	}
+	if root, _ := empty.Root(ctx); !root.IsZero() {
+		t.Fatal("a refused Init wrote a root")
+	}
+	o = f.o
+	o.Clock = nil
+	start := time.Now()
+	r, err := vcs.Init(ctx, memstore.New(), alice, o)
+	if err != nil {
+		t.Fatal(err)
+	}
+	c, err := r.Head(ctx, alice, vcs.MainBranch)
+	if err != nil || c.Time.Before(start.Add(-time.Minute)) || c.Time.After(time.Now().Add(time.Minute)) {
+		t.Fatalf("with a nil clock the first commit is at %v (%v), want about %v", c.Time, err, start)
+	}
+}
+
+// The refs map is data like any other: a ref that is not a hash, a branch
+// with no working set, and a ref naming the wrong kind of chunk are
+// ErrCorrupt, not a missing branch, a zero hash or a truncated one.
+func TestForgedRefsAreCorrupt(t *testing.T) {
+	main := vcs.MainBranch
+	head, work := []byte("heads/"+main), []byte("work/"+main)
+	for _, c := range []struct {
+		name string
+		edit func(e *prolly.Editor, head, ws hash.Hash) error
+		read func(f *fixture) error
+	}{
+		{"a head of 33 bytes", func(e *prolly.Editor, h, _ hash.Hash) error { return e.Put(head, append(h[:], 0)) }, readHead},
+		{"a head of 5 bytes", func(e *prolly.Editor, _, _ hash.Hash) error { return e.Put(head, []byte("short")) }, readHead},
+		{"a head naming a working set", func(e *prolly.Editor, _, ws hash.Hash) error { return e.Put(head, ws[:]) }, readHead},
+		{"a branch with no working set", func(e *prolly.Editor, _, _ hash.Hash) error { return e.Delete(work) }, readWorkingSet},
+		{"a working set naming a commit", func(e *prolly.Editor, h, _ hash.Hash) error { return e.Put(work, h[:]) }, readWorkingSet},
+	} {
+		f := newFixture(t)
+		ws, err := f.r.WorkingSet(ctx, alice, main)
+		if err != nil {
+			t.Fatal(err)
+		}
+		root, err := f.s.Root(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		m, err := prolly.Open(ctx, f.s, f.o.Config, root)
+		if err != nil {
+			t.Fatal(err)
+		}
+		e := m.Editor()
+		if err := c.edit(e, f.head(main).Hash, ws.Hash); err != nil {
+			t.Fatal(err)
+		}
+		forged, err := e.Flush(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := f.s.CompareAndSetRoot(ctx, root, forged.Root()); err != nil {
+			t.Fatal(err)
+		}
+		if err := c.read(f); !errors.Is(err, chunk.ErrCorrupt) {
+			t.Errorf("%s: reading it = %v, want ErrCorrupt", c.name, err)
+		}
+	}
+}
+
+func readHead(f *fixture) error { _, err := f.r.Head(ctx, alice, vcs.MainBranch); return err }
+
+func readWorkingSet(f *fixture) error {
+	_, err := f.r.WorkingSet(ctx, alice, vcs.MainBranch)
+	return err
 }
