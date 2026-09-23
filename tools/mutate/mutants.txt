@@ -207,3 +207,31 @@ find: if w.priv == nil {
 replace: if w.priv == nil && false {
 pkg: ./core/seal
 run: ^TestX25519WrapOnlyWithoutPrivateKey$
+
+id: seal-hkdf-binds-domain
+file: core/seal/seal.go
+find: info := "snapshot-core/object-key/v1\x00" + tag + "\x00" + string(repo[:])
+replace: info := "snapshot-core/object-key/v1\x00" + "\x00" + string(repo[:])
+pkg: ./core/seal
+run: ^TestObjectKeyDerivationAndAssociatedDataArePinned$
+
+id: seal-aad-has-tag
+file: core/seal/seal.go
+find: a = append(a, k.tag...)
+replace: a = append(a, ""...)
+pkg: ./core/seal
+run: ^TestObjectKeyDerivationAndAssociatedDataArePinned$
+
+id: seal-key-id-derivation
+file: core/seal/seal.go
+find: "snapshot-core/key-id/v1"
+replace: "snapshot-core/key-id/v2"
+pkg: ./core/seal
+run: ^TestObjectKeyDerivationAndAssociatedDataArePinned$
+
+id: seal-keyfile-aad-binds-header
+file: core/seal/keyfile.go
+find: return append(append([]byte(keyFileTag), 0), header...)
+replace: return append([]byte(keyFileTag), 0)
+pkg: ./core/seal
+run: ^TestKeyFileFormatIsPinned$
