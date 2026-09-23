@@ -168,7 +168,9 @@ func TestASpilledIndexNeedsItsDirectory(t *testing.T) {
 	w := openSpilled(t, bs, kr, t.TempDir())
 	packed(t, w, hash.Hash{}, []byte("the root"), payload("more", 100))
 	missing := filepath.Join(t.TempDir(), "not", "here")
-	o := packstore.Options{Blobs: bs, Keys: kr, Repo: repo, IndexDir: missing, IndexInMemory: 1}
+	// A bound the repository is under: the directory is not needed yet,
+	// and Open still refuses rather than fail at some later refresh.
+	o := packstore.Options{Blobs: bs, Keys: kr, Repo: repo, IndexDir: missing, IndexInMemory: 1000}
 	if s, err := packstore.Open(ctx, o); err == nil {
 		_ = s.Close()
 		t.Fatalf("a store opened with its index directory %s missing", missing)

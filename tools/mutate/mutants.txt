@@ -3907,3 +3907,38 @@ find: if valueLen < 0 || valueLen > MaxValueLen {
 replace: if valueLen < 0 {
 pkg: ./core/dedup
 run: ^TestABuilderRefusesAValueOfAnotherWidth$
+
+id: packstore-spills-past-the-bound
+file: core/chunk/packstore/packstore.go
+find: (!rebuild && published+total > s.o.IndexInMemory) {
+replace: (!rebuild && published+total < 0) {
+pkg: ./core/chunk/packstore
+run: ^TestAStoreSpillsItsIndexToDisk$
+
+id: packstore-a-rebuild-spills-again
+file: core/chunk/packstore/packstore.go
+find: if (rebuild && onDisk) || (rebuild && total > s.o.IndexInMemory) ||
+replace: if (rebuild && onDisk && false) || (rebuild && total < 0) ||
+pkg: ./core/chunk/packstore
+run: ^TestASpilledIndexIsRebuiltWhenGCMovesIt$
+
+id: packstore-close-removes-the-table
+file: core/chunk/packstore/packstore.go
+find: err = s.disk.close()\n\t\t\ts.disk = nil
+replace: s.disk = nil
+pkg: ./core/chunk/packstore
+run: ^TestAStoreSpillsItsIndexToDisk$
+
+id: packstore-open-checks-the-index-dir
+file: core/chunk/packstore/packstore.go
+find: if st, err := os.Stat(o.IndexDir); err != nil || !st.IsDir() {
+replace: if st, err := os.Stat(o.IndexDir); false && (err != nil || !st.IsDir()) {
+pkg: ./core/chunk/packstore
+run: ^TestASpilledIndexNeedsItsDirectory$
+
+id: packstore-has-consults-the-table
+file: core/chunk/packstore/packstore.go
+find: if s.disk != nil {\n\t\treturn s.disk.has(h)\n\t}
+replace: if s.disk != nil {\n\t\treturn false, nil\n\t}
+pkg: ./core/chunk/packstore
+run: ^TestAStoreSpillsItsIndexToDisk$
