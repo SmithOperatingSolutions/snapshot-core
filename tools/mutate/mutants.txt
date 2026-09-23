@@ -544,3 +544,38 @@ find: if err := r.Done(); err != nil || string(magic) != rootMagic || len(v) == 
 replace: if err := r.Done(); err != nil || (string(magic) != rootMagic && false) || len(v) == 0 {
 pkg: ./core/blob/local
 run: ^TestRootFileForgeriesAreCorrupt$
+
+id: multivol-map-checksum-verified
+file: core/blob/multivol/multivol.go
+find: if want := sha256.Sum256(body); !bytes.Equal(sum, want[:]) {
+replace: if want := sha256.Sum256(body); !bytes.Equal(sum, want[:]) && false {
+pkg: ./core/blob/multivol
+run: ^TestCorruptOrForgedVolumeMapIsRefused$
+
+id: multivol-map-count-bounded
+file: core/blob/multivol/multivol.go
+find: if string(magic) != mapMagic || version != mapV1 || n == 0 || n > MaxVolumes {
+replace: if string(magic) != mapMagic || version != mapV1 {
+pkg: ./core/blob/multivol
+run: ^TestCorruptOrForgedVolumeMapIsRefused$
+
+id: multivol-add-volume-rolls-back
+file: core/blob/multivol/multivol.go
+find: s.vols = append(s.vols, v)\n\tif err := s.writeMap(); err != nil {\n\t\ts.vols = s.vols[:len(s.vols)-1]
+replace: s.vols = append(s.vols, v)\n\tif err := s.writeMap(); err != nil {\n\t\t_ = 0
+pkg: ./core/blob/multivol
+run: ^TestAddVolumeWhenReadOnlyOrFailingChangesNothing$
+
+id: multivol-custom-floor
+file: core/blob/multivol/multivol.go
+find: if s.opts.Floor > 0 {\n\t\treturn s.opts.Floor
+replace: if s.opts.Floor > 0 && false {\n\t\treturn s.opts.Floor
+pkg: ./core/blob/multivol
+run: ^TestCustomFloorIsHonored$
+
+id: multivol-create-refuses-existing
+file: core/blob/multivol/multivol.go
+find: if _, err := os.Stat(filepath.Join(paths[0], mapName)); err == nil {
+replace: if _, err := os.Stat(filepath.Join(paths[0], mapName)); err == nil && false {
+pkg: ./core/blob/multivol
+run: ^TestCreateNeverOverwritesAVolumeMap$
