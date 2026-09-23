@@ -19,6 +19,7 @@ import (
 	"github.com/SmithOperatingSolutions/snapshot-core/core/blob"
 	"github.com/SmithOperatingSolutions/snapshot-core/core/chunk"
 	"github.com/SmithOperatingSolutions/snapshot-core/core/chunk/packstore"
+	"github.com/SmithOperatingSolutions/snapshot-core/core/dedup"
 	"github.com/SmithOperatingSolutions/snapshot-core/core/hash"
 	"github.com/SmithOperatingSolutions/snapshot-core/core/model"
 	"github.com/SmithOperatingSolutions/snapshot-core/core/prolly"
@@ -38,7 +39,21 @@ type Options struct {
 	Registry *model.Registry  // every model its objects use; each must walk
 	Grace    time.Duration    // 0: DefaultGrace
 	Clock    func() time.Time // nil: time.Now
+	Repack   packstore.Repack // how packs that are mostly dead are rewritten; the zero value is the default policy
+	// A collection's memory does not grow with the repository (#6): its
+	// reader indexes at most IndexInMemory published chunks in memory
+	// (0: packstore.DefaultIndexInMemory), the rest in a table under
+	// WorkDir ("": the system's temporary directory), where the mark and the
+	// round's own index go too; MarkNodes (0: DefaultMarkNodes) bounds the
+	// nodes the walk remembers to skip, past which a shared subtree is walked
+	// again, costing time and never chunks.
+	WorkDir       string
+	IndexInMemory int
+	MarkNodes     int
 }
+
+// DefaultMarkNodes is the nodes a walk remembers: about 60 MiB.
+const DefaultMarkNodes = 1 << 20
 
 // Report is what one Run did.
 type Report struct {
@@ -46,6 +61,8 @@ type Report struct {
 	Live                 int      // chunks marked
 	Condemned, Reprieved int      // packs
 	Deleted              []string // expired packs and index objects, then orphans
+	Repacked             int      // packs whose live chunks were copied into new packs
+	Copied               int64    // bytes of frames copied by repacking
 }
 
 // maxRounds bounds the rounds one Run takes while writers keep publishing.
@@ -71,7 +88,9 @@ func Run(ctx context.Context, o Options) (Report, error) {
 	if clock == nil {
 		clock = time.Now
 	}
-	po := packstore.Options{Blobs: o.Blobs, Keys: o.Keys, Repo: o.Repo}
+	// The reader checks the work directory at Open, before anything needs
+	// it. The walk reads each chunk once: a cache would only hold memory.
+	po := packstore.Options{Blobs: o.Blobs, Keys: o.Keys, Repo: o.Repo, IndexDir: o.WorkDir, IndexInMemory: o.IndexInMemory, CacheBytes: -1}
 	rd, err := packstore.Open(ctx, po)
 	if err != nil {
 		return Report{}, err
@@ -80,32 +99,16 @@ func Run(ctx context.Context, o Options) (Report, error) {
 	var rep Report
 	for rep.Rounds < maxRounds {
 		rep.Rounds++
-		r, err := packstore.Begin(ctx, po)
-		if err != nil {
-			return rep, err
-		}
-		live, err := mark(ctx, rd, o, r.Root())
-		if err != nil {
-			return rep, err
-		}
-		now, err := backendNow(ctx, o.Blobs)
-		if err != nil {
-			return rep, err
-		}
-		old, probes, err := orphans(ctx, o.Blobs, now, grace)
-		if err != nil {
-			return rep, err
-		}
-		r.Orphans(old) // recorded in the swap, deleted only once it lands
-		out, err := r.Apply(ctx, func(h hash.Hash) bool { return live[h] }, clock(), grace)
+		out, live, err := round(ctx, rd, po, o, clock(), grace)
 		if errors.Is(err, packstore.ErrMoved) {
 			continue
 		}
 		if err != nil {
 			return rep, err
 		}
-		rep.Live, rep.Condemned, rep.Reprieved = len(live), out.Condemned, out.Reprieved
-		for _, name := range append(append(out.Expired, out.Orphans...), probes...) {
+		rep.Live, rep.Condemned, rep.Reprieved = live, out.Condemned, out.Reprieved
+		rep.Repacked, rep.Copied = out.Repacked, out.Copied
+		for _, name := range append(out.Expired, out.Orphans...) {
 			if err := o.Blobs.Delete(ctx, name); err != nil {
 				return rep, err
 			}
@@ -116,23 +119,99 @@ func Run(ctx context.Context, o Options) (Report, error) {
 	return rep, fmt.Errorf("gc: the repository changed during %d rounds in a row", maxRounds)
 }
 
-// mark returns every chunk the repository at root reaches. A chunk seen so
-// far only as a leaf is still gone into when it turns up as a node.
-func mark(ctx context.Context, rd chunk.Reader, o Options, root hash.Hash) (map[hash.Hash]bool, error) {
-	live := map[hash.Hash]bool{}
-	if root.IsZero() {
-		return live, nil
+// round takes one round: it begins against the manifest, marks from its
+// root, lists the orphans and applies. It returns what the round did and
+// how many chunks were live; the round and the mark are closed either way.
+func round(ctx context.Context, rd chunk.Reader, po packstore.Options, o Options, now time.Time, grace time.Duration) (packstore.Outcome, int, error) {
+	r, err := packstore.Begin(ctx, po)
+	if err != nil {
+		return packstore.Outcome{}, 0, err
 	}
-	gone := map[hash.Hash]bool{}
-	err := vcs.Walk(ctx, rd, vcs.Options{Config: o.Config, Registry: o.Registry}, root, func(h hash.Hash, leaf bool) (bool, error) {
-		live[h] = true
-		if leaf || gone[h] {
-			return false, nil
+	defer r.Close()
+	live, err := mark(ctx, rd, o, r.Root())
+	if err != nil {
+		return packstore.Outcome{}, 0, err
+	}
+	defer live.Close()
+	backend, err := backendNow(ctx, o.Blobs)
+	if err != nil {
+		return packstore.Outcome{}, 0, err
+	}
+	old, probes, err := orphans(ctx, o.Blobs, backend, grace)
+	if err != nil {
+		return packstore.Outcome{}, 0, err
+	}
+	r.Orphans(old) // recorded in the swap, deleted only once it lands
+	r.Repack(o.Repack)
+	out, err := r.Apply(ctx, live, now, grace)
+	if err != nil {
+		return packstore.Outcome{}, 0, err
+	}
+	out.Orphans = append(out.Orphans, probes...)
+	return out, int(live.Len()), nil
+}
+
+// liveTable is the mark: every chunk the repository reaches, sorted in a
+// table on disk (#6).
+type liveTable struct{ t *dedup.Table }
+
+func (l *liveTable) Has(h hash.Hash) (bool, error) { return l.t.Has(h) }
+func (l *liveTable) Len() int64                    { return l.t.Len() }
+func (l *liveTable) Close() error                  { return l.t.Close() }
+func (l *liveTable) Each(f func(hash.Hash) error) error {
+	c := l.t.Cursor()
+	for {
+		h, _, ok, err := c.Next()
+		if err != nil || !ok {
+			return err
 		}
-		gone[h] = true
-		return true, nil
-	})
-	return live, err
+		if err := f(h); err != nil {
+			return err
+		}
+	}
+}
+
+// mark returns every chunk the repository at root reaches, as a table on
+// disk. The walk remembers up to o.MarkNodes nodes it has gone into and
+// skips them when reached again; past that a shared subtree is walked
+// again, at a cost in time and never in chunks. A chunk seen so far only
+// as a leaf is still gone into when it turns up as a node.
+func mark(ctx context.Context, rd chunk.Reader, o Options, root hash.Hash) (*liveTable, error) {
+	b, err := dedup.NewBuilder(o.WorkDir, 0)
+	if err != nil {
+		return nil, err
+	}
+	limit := o.MarkNodes
+	if limit == 0 {
+		limit = DefaultMarkNodes
+	}
+	if !root.IsZero() {
+		seen := map[hash.Hash]struct{}{}
+		err := vcs.Walk(ctx, rd, vcs.Options{Config: o.Config, Registry: o.Registry}, root, func(h hash.Hash, leaf bool) (bool, error) {
+			if err := b.Add(h, nil); err != nil {
+				return false, err
+			}
+			if leaf {
+				return false, nil
+			}
+			if _, ok := seen[h]; ok {
+				return false, nil
+			}
+			if len(seen) < limit {
+				seen[h] = struct{}{}
+			}
+			return true, nil
+		})
+		if err != nil {
+			b.Abort()
+			return nil, err
+		}
+	}
+	t, err := b.Finish()
+	if err != nil {
+		return nil, fmt.Errorf("gc: marking into %s: %w", o.WorkDir, err)
+	}
+	return &liveTable{t}, nil
 }
 
 // backendNow reads the backend's clock, the one its objects are stamped by:

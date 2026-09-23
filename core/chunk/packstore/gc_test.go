@@ -3,6 +3,7 @@ package packstore_test
 import (
 	"bytes"
 	"errors"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -43,20 +44,43 @@ func published(t *testing.T, s *packstore.Store, chunks ...string) []hash.Hash {
 	return hs
 }
 
-func liveSet(hs ...hash.Hash) func(hash.Hash) bool {
+// liveSet is a live set in memory, for rounds decided against a few chunks.
+func liveSet(hs ...hash.Hash) liveSetOf {
 	set := map[hash.Hash]bool{}
 	for _, h := range hs {
 		set[h] = true
 	}
-	return func(h hash.Hash) bool { return set[h] }
+	var out liveSetOf
+	for h := range set {
+		out = append(out, h)
+	}
+	slices.SortFunc(out, hash.Hash.Compare)
+	return out
 }
 
-func round(t *testing.T, bs blob.BlobStore, kr *seal.Keyring, live func(hash.Hash) bool, now time.Time) packstore.Outcome {
+type liveSetOf []hash.Hash
+
+func (l liveSetOf) Has(h hash.Hash) (bool, error) {
+	_, ok := slices.BinarySearchFunc(l, h, hash.Hash.Compare)
+	return ok, nil
+}
+func (l liveSetOf) Len() int64 { return int64(len(l)) }
+func (l liveSetOf) Each(f func(hash.Hash) error) error {
+	for _, h := range l {
+		if err := f(h); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func round(t *testing.T, bs blob.BlobStore, kr *seal.Keyring, live packstore.Live, now time.Time) packstore.Outcome {
 	t.Helper()
 	r, err := packstore.Begin(ctx, packstore.Options{Blobs: bs, Keys: kr, Repo: repo})
 	if err != nil {
 		t.Fatalf("Begin: %v", err)
 	}
+	r.Repack(packstore.Repack{Off: true}) // condemnation alone; repacking has tests of its own
 	out, err := r.Apply(ctx, live, now, time.Hour)
 	if err != nil {
 		t.Fatalf("Apply at %v: %v", now.Sub(t0), err)

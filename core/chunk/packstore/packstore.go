@@ -24,6 +24,7 @@ import (
 	"fmt"
 	"io"
 	"math/rand/v2"
+	"os"
 	"sync"
 	"time"
 
@@ -56,8 +57,18 @@ type Options struct {
 	PackSize   int              // 0: DefaultPackSize
 	CacheBytes int              // 0: DefaultCacheBytes; negative: no cache
 	Clock      func() time.Time // dates this store's uploads; nil: time.Now
-	backoff    time.Duration
+	// The index of published chunks lives in memory up to IndexInMemory
+	// chunks (0: DefaultIndexInMemory) and on disk past that, as a table in
+	// IndexDir ("": the system's temporary directory), so a store's memory
+	// does not grow with the repository (#6, DESIGN §6).
+	IndexDir      string
+	IndexInMemory int
+	backoff       time.Duration
 }
+
+// DefaultIndexInMemory is the published chunks a store indexes in memory
+// before spilling the index to disk: about 60 MiB of index.
+const DefaultIndexInMemory = 1 << 19
 
 // Store is a chunk.Store over a BlobStore.
 type Store struct {
@@ -69,7 +80,9 @@ type Store struct {
 
 	mu         sync.Mutex // guards everything below
 	closed     bool
-	index      *dedup.Index      // chunks of published packs and of this session's packs
+	mem        *dedup.Index      // chunks of this session's packs, and of published packs up to o.IndexInMemory
+	disk       *spilled          // chunks of published packs past that, on disk; nil until needed
+	published  int               // chunks of published packs in mem
 	inflight   map[string][]byte // finished packs whose upload is not yet confirmed
 	unuploaded []pack.Built      // finished packs whose upload failed; retried at CAS
 	pending    *pack.Writer
@@ -114,11 +127,23 @@ func Open(ctx context.Context, o Options) (*Store, error) {
 	if o.Clock == nil {
 		o.Clock = time.Now
 	}
+	if o.IndexInMemory == 0 {
+		o.IndexInMemory = DefaultIndexInMemory
+	}
+	if o.IndexInMemory < 0 {
+		return nil, fmt.Errorf("packstore: index in memory %d is negative", o.IndexInMemory)
+	}
+	if o.IndexDir == "" {
+		o.IndexDir = os.TempDir()
+	}
+	if st, err := os.Stat(o.IndexDir); err != nil || !st.IsDir() {
+		return nil, fmt.Errorf("packstore: index directory %s: %w", o.IndexDir, errNotADir(err))
+	}
 	codec, err := pack.NewCodec()
 	if err != nil {
 		return nil, err
 	}
-	s := &Store{o: o, codec: codec, index: dedup.New(), inflight: map[string][]byte{},
+	s := &Store{o: o, codec: codec, mem: dedup.New(), inflight: map[string][]byte{},
 		loaded: map[[32]byte]bool{}, keys: map[seal.Salt]*pack.Keys{}, condemned: map[string]bool{},
 		unpublished: map[string]pack.Info{}, inIndex: map[[32]byte][]string{}, deduped: map[hash.Hash]bool{},
 		uploaded: map[string]time.Time{}}
@@ -140,7 +165,9 @@ func Open(ctx context.Context, o Options) (*Store, error) {
 // that this store has not loaded. When GC has expired packs since the
 // manifest this store knew (gcGen moved), the index is rebuilt from the
 // manifest's index objects and the packs built here and not yet published,
-// so it names nothing in a deleted pack.
+// so it names nothing in a deleted pack. Published chunks past
+// o.IndexInMemory are indexed on disk (#6): the table is built when they
+// first pass the bound, and again at every rebuild.
 func (s *Store) refresh(ctx context.Context) error {
 	r, err := s.o.Blobs.Root(ctx)
 	if err != nil {
@@ -160,54 +187,148 @@ func (s *Store) refresh(ctx context.Context) error {
 			toLoad = append(toLoad, sum)
 		}
 	}
+	published := s.published
 	s.mu.Unlock()
-	loaded := make(map[[32]byte][]pack.Info, len(toLoad))
+	// This refresh spills once the chunks about to sit in memory pass the
+	// bound: the objects loaded so far are dropped then, and the build
+	// streams every object through, so no more than the bound's worth of
+	// decoded index is ever in memory. A rebuild counts from nothing: a
+	// repository GC shrank under the bound returns to memory.
+	spill := false
+	loaded := map[[32]byte][]pack.Info{}
+	total := published
+	if rebuild {
+		total = 0
+	}
 	for _, sum := range toLoad {
 		infos, err := s.loadIndex(ctx, sum)
 		if err != nil {
 			return err
 		}
+		total += entries(infos)
+		if total > s.o.IndexInMemory {
+			spill, loaded = true, nil
+			break
+		}
 		loaded[sum] = infos
+	}
+	cond := condemnedPacks(m)
+	var sp *spilled
+	if spill {
+		if sp, err = s.buildSpilled(ctx, m, loaded, cond); err != nil {
+			return err
+		}
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	// Manifests only move forward (every swap increments seq); a slower
 	// refresh must not roll back what a faster one saw.
 	newer := s.ver == blob.NoVersion || m.seq > s.man.seq
-	if rebuild && newer {
-		x := dedup.New()
+	switch {
+	case sp != nil && !newer:
+		_ = sp.close()
+	case sp != nil:
+		if s.disk != nil {
+			_ = s.disk.close()
+		}
+		s.disk, s.published = sp, 0
+		s.mem = dedup.New()
 		s.loaded = map[[32]byte]bool{}
 		for _, sum := range m.indexes {
-			for _, info := range loaded[sum] {
-				x.Add(info)
-			}
 			s.loaded[sum] = true
 		}
 		for _, info := range s.unpublished {
+			s.mem.Add(info)
+		}
+	case rebuild && newer:
+		if s.disk != nil { // the repository shrank under the bound
+			_ = s.disk.close()
+			s.disk = nil
+		}
+		x := dedup.New()
+		s.loaded = map[[32]byte]bool{}
+		var infos []pack.Info
+		for _, sum := range m.indexes {
+			infos = append(infos, loaded[sum]...)
+			s.loaded[sum] = true
+		}
+		addPacks(x, infos, cond)
+		for _, info := range s.unpublished {
 			x.Add(info)
 		}
-		s.index = x
-	} else if !rebuild {
-		for sum, infos := range loaded {
+		s.mem, s.published = x, entries(infos)
+	case !rebuild:
+		var infos []pack.Info
+		for sum, packs := range loaded {
 			if s.loaded[sum] {
 				continue
 			}
-			for _, info := range infos {
-				s.index.Add(info)
-			}
+			infos = append(infos, packs...)
 			s.loaded[sum] = true
 		}
+		addPacks(s.mem, infos, cond)
+		s.published += entries(infos)
 	}
 	if newer {
 		s.man, s.ver = m, r.Version
-		s.condemned = map[string]bool{}
-		for _, c := range m.condemned {
-			if c.kind == condemnedPack {
-				s.condemned[dedup.PackName(c.sum)] = true
+		s.condemned = cond
+	}
+	return nil
+}
+
+// addPacks adds packs to an index, those still in service first, so a chunk
+// a repacked pack also holds resolves to its new pack (DESIGN §9).
+func addPacks(x *dedup.Index, infos []pack.Info, cond map[string]bool) {
+	for pass := range 2 {
+		for _, info := range infos {
+			if cond[info.Name] == (pass == 1) {
+				x.Add(info)
 			}
 		}
 	}
-	return nil
+}
+
+// condemnedPacks is the packs m condemns or has repacked: none is
+// deduplicated against, since each is on its way out.
+func condemnedPacks(m manifest) map[string]bool {
+	out := map[string]bool{}
+	for _, c := range m.condemned {
+		if c.kind == condemnedPack || c.kind == repackedPack {
+			out[dedup.PackName(c.sum)] = true
+		}
+	}
+	return out
+}
+
+// errNotADir is the error for an index directory that is not one.
+func errNotADir(err error) error {
+	if err != nil {
+		return err
+	}
+	return errors.New("not a directory")
+}
+
+// lookupLocked locates a chunk: in the index on disk, then in memory.
+// Callers hold s.mu.
+func (s *Store) lookupLocked(h hash.Hash) (dedup.Location, bool, error) {
+	if s.disk != nil {
+		if loc, ok, err := s.disk.lookup(h); ok || err != nil {
+			return loc, ok, err
+		}
+	}
+	loc, ok := s.mem.Lookup(h)
+	return loc, ok, nil
+}
+
+// hasLocked reports whether a chunk is indexed. Callers hold s.mu.
+func (s *Store) hasLocked(h hash.Hash) (bool, error) {
+	if s.mem.Has(h) {
+		return true, nil
+	}
+	if s.disk != nil {
+		return s.disk.has(h)
+	}
+	return false, nil
 }
 
 func (s *Store) loadIndex(ctx context.Context, sum [32]byte) ([]pack.Info, error) {
@@ -237,8 +358,8 @@ func loadIndex(ctx context.Context, o Options, sum [32]byte) ([]pack.Info, error
 func (s *Store) Location(h hash.Hash) (packName string, off, n int64, ok bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	loc, ok := s.index.Lookup(h)
-	if !ok {
+	loc, ok, err := s.lookupLocked(h)
+	if err != nil || !ok {
 		return "", 0, 0, false
 	}
 	return loc.Pack.Name, int64(loc.Entry.Offset), int64(loc.Entry.StoredLen), true
@@ -259,7 +380,7 @@ func (s *Store) finishPendingLocked() (*pack.Built, error) {
 	if err != nil {
 		return nil, err
 	}
-	s.index.Add(b.Info)
+	s.mem.Add(b.Info)
 	s.inflight[b.Name] = b.Bytes
 	s.unpublished[b.Name] = b.Info
 	return &b, nil
@@ -311,7 +432,12 @@ func (s *Store) Put(ctx context.Context, data []byte) (hash.Hash, error) {
 		s.mu.Unlock()
 		return h, nil
 	}
-	if loc, ok := s.index.Lookup(h); ok && !s.condemned[loc.Pack.Name] {
+	loc, ok, err := s.lookupLocked(h)
+	if err != nil {
+		s.mu.Unlock()
+		return hash.Hash{}, err
+	}
+	if ok && !s.condemned[loc.Pack.Name] {
 		// Counted on: the publish checks it survived any collection.
 		s.deduped[h] = true
 		s.mu.Unlock()
@@ -325,7 +451,7 @@ func (s *Store) Put(ctx context.Context, data []byte) (hash.Hash, error) {
 		}
 		s.pending = w
 	}
-	err := s.pending.Add(h, data)
+	err = s.pending.Add(h, data)
 	var full *pack.Built
 	if errors.Is(err, pack.ErrFull) {
 		if full, err = s.finishPendingLocked(); err == nil {
@@ -453,7 +579,11 @@ func (s *Store) frame(ctx context.Context, h hash.Hash) (dedup.Location, []byte,
 func (s *Store) locate(ctx context.Context, h hash.Hash) (dedup.Location, []byte, *pack.Keys, error) {
 	for attempt := 0; attempt < 2; attempt++ {
 		s.mu.Lock()
-		loc, ok := s.index.Lookup(h)
+		loc, ok, err := s.lookupLocked(h)
+		if err != nil {
+			s.mu.Unlock()
+			return dedup.Location{}, nil, nil, err
+		}
 		if ok {
 			keys, err := s.keysLocked(loc.Pack.Salt)
 			local := s.inflight[loc.Pack.Name]
@@ -476,21 +606,32 @@ func (s *Store) Has(ctx context.Context, hs []hash.Hash) (map[hash.Hash]bool, er
 		return nil, chunk.ErrClosed
 	}
 	out := make(map[hash.Hash]bool, len(hs))
-	check := func() (missing bool) {
+	check := func() (missing bool, err error) {
 		s.mu.Lock()
 		defer s.mu.Unlock()
 		for _, h := range hs {
-			ok := s.index.Has(h) || (s.pending != nil && s.pending.Has(h))
+			ok := s.pending != nil && s.pending.Has(h)
+			if !ok {
+				if ok, err = s.hasLocked(h); err != nil {
+					return false, err
+				}
+			}
 			out[h] = ok
 			missing = missing || !ok
 		}
-		return missing
+		return missing, nil
 	}
-	if check() {
+	missing, err := check()
+	if err != nil {
+		return nil, err
+	}
+	if missing {
 		if err := s.refresh(ctx); err != nil {
 			return nil, err
 		}
-		check()
+		if _, err := check(); err != nil {
+			return nil, err
+		}
 	}
 	return out, nil
 }
@@ -522,7 +663,15 @@ func (s *Store) CompareAndSetRoot(ctx context.Context, expected, next hash.Hash)
 		s.mu.Unlock()
 		return s.lost
 	}
-	if next.IsZero() || (!s.index.Has(next) && (s.pending == nil || !s.pending.Has(next))) {
+	stored := !next.IsZero() && s.pending != nil && s.pending.Has(next)
+	if !next.IsZero() && !stored {
+		var err error
+		if stored, err = s.hasLocked(next); err != nil {
+			s.mu.Unlock()
+			return err
+		}
+	}
+	if !stored {
 		s.mu.Unlock()
 		return fmt.Errorf("%w: %s", chunk.ErrRootMissing, next.Short())
 	}
@@ -623,7 +772,10 @@ func (s *Store) Stats(ctx context.Context) (chunk.Stats, error) {
 	if s.closed {
 		return chunk.Stats{}, chunk.ErrClosed
 	}
-	n := int64(s.index.Len())
+	n := int64(s.mem.Len())
+	if s.disk != nil {
+		n += s.disk.len() // a chunk in both is counted twice: about, not exactly
+	}
 	if s.pending != nil {
 		n += int64(s.pending.Count())
 	}
@@ -640,11 +792,16 @@ func (s *Store) isClosed() bool {
 func (s *Store) Close() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	var err error
 	if !s.closed {
 		s.closed = true
 		s.codec.Close()
+		if s.disk != nil {
+			err = s.disk.close()
+			s.disk = nil
+		}
 	}
-	return nil
+	return err
 }
 
 func (s *Store) writeSessionIndex(ctx context.Context) error {
@@ -654,27 +811,25 @@ func (s *Store) writeSessionIndex(ctx context.Context) error {
 	if len(session) == 0 {
 		return nil
 	}
-	name, blobBytes, err := dedup.EncodeObject(s.o.Keys, s.o.Repo, session)
-	if err != nil {
+	// In objects of at most maxIndexObject each: an object is decoded
+	// whole by every store that opens it.
+	w := &indexWriter{ctx: ctx, o: s.o}
+	for _, p := range session {
+		if err := w.add(p); err != nil {
+			return err
+		}
+	}
+	if _, err := w.finish(); err != nil {
 		return err
-	}
-	if err := s.o.Blobs.Put(ctx, name, bytes.NewReader(blobBytes), int64(len(blobBytes))); err != nil && !errors.Is(err, blob.ErrExists) {
-		return fmt.Errorf("packstore: writing index object: %w", err)
-	}
-	sum, err := indexSum(name)
-	if err != nil {
-		return err
-	}
-	names := make([]string, len(session))
-	for i, p := range session {
-		names[i] = p.Name
 	}
 	s.mu.Lock()
 	s.session = s.session[len(session):]
-	s.sessionIdx = append(s.sessionIdx, sum)
-	s.loaded[sum] = true
-	s.inIndex[sum] = names
-	s.uploaded[name] = s.o.Clock()
+	for _, obj := range w.written {
+		s.sessionIdx = append(s.sessionIdx, obj.sum)
+		s.loaded[obj.sum] = true
+		s.inIndex[obj.sum] = obj.packs
+		s.uploaded[indexName(obj.sum)] = s.o.Clock()
+	}
 	s.mu.Unlock()
 	return nil
 }
@@ -765,7 +920,14 @@ func (s *Store) survived(m manifest) error {
 		return nil
 	}
 	for h := range s.deduped {
-		if !s.index.Has(h) && (s.pending == nil || !s.pending.Has(h)) {
+		if s.pending != nil && s.pending.Has(h) {
+			continue
+		}
+		ok, err := s.hasLocked(h)
+		if err != nil {
+			return err
+		}
+		if !ok {
 			return s.lostLocked("counted on " + h.Short() + ", which expired")
 		}
 	}

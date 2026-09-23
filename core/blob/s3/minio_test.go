@@ -3,6 +3,7 @@ package s3_test
 import (
 	"errors"
 	"os"
+	"strings"
 	"testing"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
@@ -27,6 +28,9 @@ func realS3(t *testing.T) (*awss3.Client, string) {
 		}
 		t.Skip("set SNAPSHOT_S3_ENDPOINT (and SNAPSHOT_S3_REQUIRED=1 in CI) to run against a real S3-compatible server")
 	}
+	if !strings.Contains(ep, "://") {
+		ep = "https://" + ep // a bare host, as providers print it, is HTTPS
+	}
 	region := os.Getenv("SNAPSHOT_S3_REGION")
 	if region == "" {
 		region = "us-east-1"
@@ -36,6 +40,9 @@ func realS3(t *testing.T) (*awss3.Client, string) {
 		b = bucket
 	}
 	c := s3.NewClient(ep, region, os.Getenv("SNAPSHOT_S3_ACCESS_KEY"), os.Getenv("SNAPSHOT_S3_SECRET_KEY"))
+	if !strings.HasPrefix(ep, "http://") && !strings.HasPrefix(ep, "https://") {
+		t.Fatalf("SNAPSHOT_S3_ENDPOINT %q is not a URL", ep)
+	}
 	_, err := c.CreateBucket(ctx, &awss3.CreateBucketInput{Bucket: aws.String(b)})
 	var owned *types.BucketAlreadyOwnedByYou
 	var exists *types.BucketAlreadyExists
@@ -47,14 +54,17 @@ func realS3(t *testing.T) (*awss3.Client, string) {
 
 // The Storage Core Spec's "MinIO in CI" tier: the full contract, 50 racing
 // swappers included, against a real S3-compatible server. Passing the probe
-// at Open is part of it.
+// at Open is part of it. With SNAPSHOT_S3_OBJECTS_ONLY=1 (the weekly run on
+// a provider that ignores conditional writes, #4) the store opens objects
+// only and the contract runs for objects.
 func TestContractAgainstRealS3(t *testing.T) {
 	c, b := realS3(t)
+	objectsOnly := os.Getenv("SNAPSHOT_S3_OBJECTS_ONLY") == "1"
 	contract.Run(t, func(t *testing.T) blob.BlobStore {
-		st, err := s3.Open(ctx, s3.Options{Client: c, Bucket: b, Prefix: randomPrefix(t), AllowHTTP: true})
+		st, err := s3.Open(ctx, s3.Options{Client: c, Bucket: b, Prefix: randomPrefix(t), AllowHTTP: true, ObjectsOnly: objectsOnly})
 		if err != nil {
 			t.Fatalf("Open against the real server: %v", err)
 		}
 		return st
-	}, contract.Options{Swappers: 50})
+	}, contract.Options{Swappers: 50, ObjectsOnly: objectsOnly})
 }

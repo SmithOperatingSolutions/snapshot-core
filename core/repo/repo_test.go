@@ -135,9 +135,22 @@ func TestOpenTellsAWrongKeyFromADamagedConfig(t *testing.T) {
 	}
 }
 
+// configName is the name of the store's one config object.
+func configName(t *testing.T, blobs blob.BlobStore) string {
+	t.Helper()
+	infos, err := blobs.List(ctx, "config/", "", blob.MaxListPage)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(infos) != 1 {
+		t.Fatalf("the store holds %d configs, want one", len(infos))
+	}
+	return infos[0].Name
+}
+
 func readConfig(t *testing.T, blobs blob.BlobStore) []byte {
 	t.Helper()
-	rc, err := blobs.Get(ctx, "config", 0, -1)
+	rc, err := blobs.Get(ctx, configName(t, blobs), 0, -1)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -151,11 +164,135 @@ func readConfig(t *testing.T, blobs blob.BlobStore) []byte {
 
 func writeConfig(t *testing.T, blobs blob.BlobStore, b []byte) {
 	t.Helper()
-	if err := blobs.Delete(ctx, "config"); err != nil {
+	name := configName(t, blobs)
+	if err := blobs.Delete(ctx, name); err != nil {
 		t.Fatal(err)
 	}
-	if err := blobs.Put(ctx, "config", bytes.NewReader(b), int64(len(b))); err != nil {
+	if err := blobs.Put(ctx, name, bytes.NewReader(b), int64(len(b))); err != nil {
 		t.Fatal(err)
+	}
+}
+
+// overwriting is a store whose Put replaces an existing object instead of
+// refusing it: what two Inits racing on an objects-only S3 store (#8) can
+// do to each other's config, made certain.
+type overwriting struct{ blob.BlobStore }
+
+func (s overwriting) Put(ctx context.Context, name string, r io.Reader, size int64) error {
+	if err := s.Delete(ctx, name); err != nil {
+		return err
+	}
+	return s.BlobStore.Put(ctx, name, r, size)
+}
+
+// beforeFirstPut runs do once, before the store's first Put lands: another
+// writer's whole Init, while this one is between reading the store and
+// writing to it.
+type beforeFirstPut struct {
+	blob.BlobStore
+	do func()
+}
+
+func (s *beforeFirstPut) Put(ctx context.Context, name string, r io.Reader, size int64) error {
+	if do := s.do; do != nil {
+		s.do = nil
+		do()
+	}
+	return s.BlobStore.Put(ctx, name, r, size)
+}
+
+var stores = map[string]func() blob.BlobStore{
+	"a store that refuses existing names": func() blob.BlobStore { return mem.New() },
+	"a store whose puts overwrite":        func() blob.BlobStore { return overwriting{mem.New()} },
+}
+
+// countConfigs is how many configs the store holds.
+func countConfigs(t *testing.T, bs blob.BlobStore) int {
+	t.Helper()
+	infos, err := bs.List(ctx, "config/", "", blob.MaxListPage)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return len(infos)
+}
+
+// A second Init on a store, with another key, leaves the first key's
+// repository as it was and writes nothing: it is ErrExists, its key is
+// ErrWrongKey to Open, the store still holds the one config, and the first
+// key opens and reads main. So on a store that refuses existing names, and
+// so on one whose put-if-absent is best effort (#8): Init claims the store
+// with the root's first swap.
+func TestAnotherInitCannotTakeOverARepository(t *testing.T) {
+	for name, mk := range stores {
+		t.Run(name, func(t *testing.T) {
+			bs := mk()
+			o := options(t, bs, keyring(t))
+			r := initRepo(t, o)
+			first, err := r.Head(ctx, alice, vcs.MainBranch)
+			if err != nil {
+				t.Fatal(err)
+			}
+			r.Close()
+			other := options(t, bs, keyring(t))
+			if _, err := repo.Init(ctx, alice, other); !errors.Is(err, repo.ErrExists) {
+				t.Fatalf("a second Init with another key = %v, want ErrExists", err)
+			}
+			if n := countConfigs(t, bs); n != 1 {
+				t.Fatalf("after a refused Init the store holds %d configs, want the one", n)
+			}
+			if _, err := repo.Open(ctx, other); !errors.Is(err, repo.ErrWrongKey) {
+				t.Fatalf("Open with the second key = %v, want ErrWrongKey", err)
+			}
+			re, err := repo.Open(ctx, o)
+			if err != nil {
+				t.Fatalf("after another key's Init, the first key no longer opens its repository: %v", err)
+			}
+			defer re.Close()
+			if got, err := re.Head(ctx, alice, vcs.MainBranch); err != nil || got.Hash != first.Hash {
+				t.Fatalf("after another key's Init, main is %v (%v), want %s", got.Hash, err, first.Hash.Short())
+			}
+		})
+	}
+}
+
+// Two Inits with different keys under way at once: the second lands whole
+// while the first is between reading the store and writing its config. The
+// first is ErrExists and its key ErrWrongKey to Open; the second's
+// repository is intact, its key opens it and reads main. So on a store
+// whose put-if-absent is best effort too: each Init's config has a name of
+// its own, so the overtaken one overwrote nothing (#8).
+func TestInitsRacingDoNotOverwriteEachOther(t *testing.T) {
+	for name, mk := range stores {
+		t.Run(name, func(t *testing.T) {
+			bs := mk()
+			hooked := &beforeFirstPut{BlobStore: bs}
+			o := options(t, hooked, keyring(t))
+			other := options(t, bs, keyring(t))
+			var landed *repo.Repo
+			hooked.do = func() { landed = initRepo(t, other) }
+			if _, err := repo.Init(ctx, alice, o); !errors.Is(err, repo.ErrExists) {
+				t.Fatalf("an Init another Init overtook = %v, want ErrExists", err)
+			}
+			if landed == nil {
+				t.Fatal("fixture: the overtaken Init never wrote, so the other never ran")
+			}
+			head, err := landed.Head(ctx, alice, vcs.MainBranch)
+			if err != nil {
+				t.Fatal(err)
+			}
+			landed.Close()
+			if _, err := repo.Open(ctx, o); !errors.Is(err, repo.ErrWrongKey) {
+				t.Fatalf("Open with the overtaken Init's key = %v, want ErrWrongKey", err)
+			}
+			re, err := repo.Open(ctx, other)
+			if err != nil {
+				t.Fatalf("the Init that landed no longer opens its repository: the overtaken one overwrote its config: %v", err)
+			}
+			defer re.Close()
+			if got, err := re.Head(ctx, alice, vcs.MainBranch); err != nil || got.Hash != head.Hash {
+				t.Fatalf("the repository that landed has main %v (%v), want %s", got.Hash, err, head.Hash.Short())
+			}
+		})
 	}
 }
 
@@ -788,5 +925,103 @@ func TestAnAdminCollectsTheRepositoryOnTheRawStore(t *testing.T) {
 	defer re.Close()
 	if got, err := re.Head(ctx, alice, vcs.MainBranch); err != nil || got.Hash != head.Hash {
 		t.Fatalf("after GC main is %v (%v), want %v", got.Hash, err, head.Hash)
+	}
+}
+
+// beforeFirstSwap runs do once, before the store's first root swap: another
+// Init's whole run, while this one is about to claim.
+type beforeFirstSwap struct {
+	blob.BlobStore
+	do func()
+}
+
+func (s *beforeFirstSwap) SwapRoot(ctx context.Context, expected blob.Version, next []byte) (blob.Version, error) {
+	if do := s.do; do != nil {
+		s.do = nil
+		do()
+	}
+	return s.BlobStore.SwapRoot(ctx, expected, next)
+}
+
+// Two Inits with the same key finishing one stopped Init at once: both take
+// its config, the one whose swap lands owns the store, the other is
+// ErrExists, and the store still holds that one config; the key opens the
+// repository and reads main.
+func TestAStoppedInitFinishedTwiceAtOnceIsFinishedOnce(t *testing.T) {
+	bs := mem.New()
+	stopped := &failingSwap{BlobStore: bs, fail: true}
+	keys := keyring(t)
+	if _, err := repo.Init(ctx, alice, options(t, stopped, keys)); !errors.Is(err, errBackend) {
+		t.Fatalf("fixture: an Init whose root swap fails = %v, want the backend's error", err)
+	}
+	hooked := &beforeFirstSwap{BlobStore: bs}
+	other := options(t, bs, keys)
+	var landed *repo.Repo
+	hooked.do = func() { landed = initRepo(t, other) }
+	if _, err := repo.Init(ctx, alice, options(t, hooked, keys)); !errors.Is(err, repo.ErrExists) {
+		t.Fatalf("the finishing Init that lost the swap = %v, want ErrExists", err)
+	}
+	if landed == nil {
+		t.Fatal("fixture: the losing Init never swapped, so the other never ran")
+	}
+	head, err := landed.Head(ctx, alice, vcs.MainBranch)
+	if err != nil {
+		t.Fatal(err)
+	}
+	landed.Close()
+	if n := countConfigs(t, bs); n != 1 {
+		t.Fatalf("the store holds %d configs, want the stopped Init's one", n)
+	}
+	re, err := repo.Open(ctx, other)
+	if err != nil {
+		t.Fatalf("the finished repository does not open: %v", err)
+	}
+	defer re.Close()
+	if got, err := re.Head(ctx, alice, vcs.MainBranch); err != nil || got.Hash != head.Hash {
+		t.Fatalf("main is %v (%v), want %s", got.Hash, err, head.Hash.Short())
+	}
+}
+
+// Among configs that open under the key, Open takes the one whose repo id
+// authenticates the root: here a config of the same key that sorts first
+// (a race lost long ago) and a page of another key's, with the real one
+// last on the second page. GC finds the repository the same way.
+func TestOpenTakesTheConfigThatAuthenticatesTheRoot(t *testing.T) {
+	bs := mem.New()
+	keys := keyring(t)
+	o := options(t, bs, keys)
+	r := initRepo(t, o)
+	real := r.Config
+	head, err := r.Head(ctx, alice, vcs.MainBranch)
+	if err != nil {
+		t.Fatal(err)
+	}
+	r.Close()
+	stray := forgeConfig(t, keys, seal.RepoID{}, "SCRC", 1, plaintext("SCRP", 1, repo.DefaultGeometry()))
+	if err := bs.Put(ctx, "config/"+fmt.Sprintf("%032x", 0), bytes.NewReader(stray), int64(len(stray))); err != nil { // sorts first
+		t.Fatal(err)
+	}
+	foreign := keyring(t)
+	for i := 0; i < blob.MaxListPage; i++ {
+		var id seal.RepoID
+		binary.BigEndian.PutUint32(id[:4], uint32(i+1))
+		b := forgeConfig(t, foreign, id, "SCRC", 1, plaintext("SCRP", 1, repo.DefaultGeometry()))
+		if err := bs.Put(ctx, "config/"+fmt.Sprintf("%x", id[:]), bytes.NewReader(b), int64(len(b))); err != nil {
+			t.Fatal(err)
+		}
+	}
+	re, err := repo.Open(ctx, o)
+	if err != nil {
+		t.Fatalf("Open among %d other configs: %v", blob.MaxListPage+1, err)
+	}
+	defer re.Close()
+	if re.Config != real {
+		t.Fatalf("Open took config %x, want the root's %x", re.Config.RepoID, real.RepoID)
+	}
+	if got, err := re.Head(ctx, alice, vcs.MainBranch); err != nil || got.Hash != head.Hash {
+		t.Fatalf("main is %v (%v), want %s", got.Hash, err, head.Hash.Short())
+	}
+	if _, err := repo.GC(ctx, alice, o, time.Hour); err != nil {
+		t.Fatalf("GC among the other configs: %v", err)
 	}
 }

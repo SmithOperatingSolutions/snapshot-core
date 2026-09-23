@@ -45,7 +45,7 @@ description = "Re-run the checked-in mutants (tools/mutate/mutants.txt) in a thr
 run = "go run ./tools/mutate"
 
 [tasks.crash]
-description = "kill -9 crash harness, full 1,000 iterations per backend (nightly in CI)"
+description = "kill -9 crash harness, full 1,000 iterations per backend (weekly in CI)"
 run = "go test -count=1 -run Crash -timeout 30m -tags crash ./core/..."
 
 [tasks.slow]
@@ -53,7 +53,7 @@ description = "Scale guards behind -tags slow (1 GiB streams, 1M-entry maps)"
 run = "go run ./tools/ci -only slow"
 
 [tasks.fuzz]
-description = "Every fuzz target for FUZZTIME each (default 30s; nightly CI uses 30m)"
+description = "Every fuzz target for FUZZTIME each (default 30s; the weekly CI run uses 10m)"
 run = "go run ./tools/ci -only fuzz"
 
 [tasks.minio]

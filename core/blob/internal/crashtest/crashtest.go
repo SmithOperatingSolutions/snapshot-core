@@ -6,7 +6,7 @@
 // checks that what it finds is exactly the old state or the new one.
 //
 // Iterations come from SNAPSHOT_CRASH_ITERATIONS (default 20; `mise run crash`
-// and the nightly job use 1,000).
+// and the weekly job use 1,000).
 package crashtest
 
 import (

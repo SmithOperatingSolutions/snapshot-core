@@ -81,6 +81,14 @@ default), so run it on a schedule.
 - **Register every model its objects use.** An object of an unknown model is
   refused, and GC will not collect a repository holding an object whose model
   cannot walk (`model.Walker`). New models must pass [`model/contract`](model/contract).
+- **On a provider that ignores conditional writes** (Backblaze B2 is reported
+  to; `s3.Open` refuses such an endpoint), keep the objects there and the root
+  on a local disk: `s3.Open` with `ObjectsOnly: true`, `local.Create` for the
+  root, and `split.New(split.Options{Objects: objects, Roots: roots})`, which
+  keeps a copy of the root on the objects store (`split.Mirror` picks the mode;
+  the default waits for each copy). Close the split store after the
+  repository; if the disk holding the root is lost, `split.Recover` seeds a
+  fresh root store from the copy.
 - **Authorize.** Every call takes a `Principal` and asks the `Authorizer`
   about `repo`, `branch:<name>`, `tag:<name>` and, for writes, every
   `path:<branch>:<path>` it changes. A nil authorizer denies everything.
@@ -89,7 +97,7 @@ default), so run it on a schedule.
 
 | Layer | Packages |
 | --- | --- |
-| Backends | `core/blob` (the port) · `core/blob/mem`, `core/blob/local`, `core/blob/multivol`, `core/blob/s3`, `core/blob/cache` |
+| Backends | `core/blob` (the port) · `core/blob/mem`, `core/blob/local`, `core/blob/multivol`, `core/blob/s3`, `core/blob/cache` · `core/blob/split` (objects on one store, the root on another) |
 | Crypto, chunking | `core/seal` (keys, key files, KMS wrapping) · `core/cdc` · `core/boundary` |
 | Chunk layer | `core/pack`, `core/dedup` · `core/chunk` (the port) · `core/chunk/packstore`, `core/chunk/memstore` |
 | Keyed data | `core/stream` (byte streams) · `core/prolly` (the ordered map) |

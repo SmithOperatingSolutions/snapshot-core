@@ -69,7 +69,7 @@ func run() int {
 	c := &config{required: map[string]bool{}}
 	flag.StringVar(&c.base, "base", "", "red-check branch point (default: main, else origin/main, else the root commit)")
 	flag.StringVar(&c.fuzzTime, "fuzztime", envOr("FUZZTIME", "30s"), "time per fuzz target")
-	flag.IntVar(&c.crashIterations, "crash-iterations", 100, "kill -9 iterations per crash harness (nightly: 1000)")
+	flag.IntVar(&c.crashIterations, "crash-iterations", 100, "kill -9 iterations per crash harness (weekly: 1000)")
 	flag.Parse()
 
 	var selected []step
@@ -259,7 +259,7 @@ func stepCrash(ctx context.Context, c *config) error {
 }
 
 // stepSlow runs the scale guards behind -tags slow (the spec's 1 GiB file,
-// 1M-entry maps): too slow for every push, run nightly and by `mise run ci`.
+// 1M-entry maps): too slow for every push, run weekly and by `mise run ci`.
 func stepSlow(ctx context.Context, _ *config) error {
 	pkgs, err := productPackages(ctx)
 	if err != nil {
@@ -346,7 +346,7 @@ func stepMinio(ctx context.Context, _ *config) error {
 	if err != nil {
 		return err
 	}
-	var s3pkgs []string
+	s3pkgs := []string{"./e2e"} // the repository on an S3 endpoint, objects only, with the root on disk
 	for _, p := range pkgs {
 		if strings.HasPrefix(p, "./core/blob/s3") || strings.HasPrefix(p, "./core/chunk") {
 			s3pkgs = append(s3pkgs, p)

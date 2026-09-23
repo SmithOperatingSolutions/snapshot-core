@@ -29,7 +29,7 @@ type manifest struct {
 }
 
 type condemned struct {
-	kind uint8 // condemnedPack, condemnedIndex, deletedPack or deletedIndex
+	kind uint8 // condemnedPack .. repackedPack
 	sum  [32]byte
 	at   int64 // unix nanoseconds
 }
@@ -40,6 +40,7 @@ const (
 	condemnedIndex = 2
 	deletedPack    = 3 // an orphan pack GC deleted
 	deletedIndex   = 4 // an orphan index object GC deleted
+	repackedPack   = 5 // a pack whose live chunks were copied into new packs
 )
 
 const (
@@ -113,7 +114,7 @@ func decodePlain(b []byte) (manifest, error) {
 		e.kind = r.U8()
 		copy(e.sum[:], r.Fixed(32))
 		e.at = int64(r.U64())
-		if r.Err() != nil || e.kind < condemnedPack || e.kind > deletedIndex {
+		if r.Err() != nil || e.kind < condemnedPack || e.kind > repackedPack {
 			return manifest{}, fmt.Errorf("%w: condemned entry", ErrManifest)
 		}
 		m.condemned = append(m.condemned, e)
