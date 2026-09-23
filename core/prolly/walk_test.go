@@ -62,10 +62,17 @@ func (r *recording) forget() {
 // walkAll walks the map going into every chunk once; with values not nil it
 // collects the values handed over, refusing one handed twice.
 func walkAll(rd chunk.Reader, c prolly.Config, root hash.Hash, values map[string][]byte) ([]hash.Hash, error) {
+	order, _, err := walkLeaves(rd, c, root, values)
+	return order, err
+}
+
+// walkLeaves is walkAll, with what Walk said of each chunk: a leaf or not.
+func walkLeaves(rd chunk.Reader, c prolly.Config, root hash.Hash, values map[string][]byte) ([]hash.Hash, map[hash.Hash]bool, error) {
 	var order []hash.Hash
-	seen := map[hash.Hash]bool{}
-	visit := func(h hash.Hash, _ bool) (bool, error) {
+	seen, leaves := map[hash.Hash]bool{}, map[hash.Hash]bool{}
+	visit := func(h hash.Hash, leaf bool) (bool, error) {
 		order = append(order, h)
+		leaves[h] = leaf
 		first := !seen[h]
 		seen[h] = true
 		return first, nil
@@ -81,7 +88,7 @@ func walkAll(rd chunk.Reader, c prolly.Config, root hash.Hash, values map[string
 		}
 	}
 	err := prolly.Walk(ctx, rd, c, root, visit, value)
-	return order, err
+	return order, leaves, err
 }
 
 // high is content whose every byte has its top bit set, so no chunk of it
@@ -133,7 +140,7 @@ func walkFixture(t *testing.T) (*recording, prolly.Config, *prolly.Map, map[stri
 // Walk names every chunk a map is made of, root first (the empty map's node,
 // stored by Empty, is not part of a map with entries), and hands over every
 // value once, long ones whole; without a value callback it reads no long
-// value's data.
+// value's data. Only the long values' data chunks are named as leaves.
 func TestWalkNamesEveryChunkOfAMap(t *testing.T) {
 	s, c, m, want := walkFixture(t)
 	emptyNode := hash.Sum([]byte{0x01, 0x00, 0x00})
@@ -166,7 +173,8 @@ func TestWalkNamesEveryChunkOfAMap(t *testing.T) {
 		}
 	}
 	s.forget()
-	if _, err := walkAll(s, c, m.Root(), nil); err != nil {
+	_, leaves, err := walkLeaves(s, c, m.Root(), nil)
+	if err != nil {
 		t.Fatal(err)
 	}
 	structure := 0
@@ -181,6 +189,9 @@ func TestWalkNamesEveryChunkOfAMap(t *testing.T) {
 		}
 		if s.read[h] != isNode {
 			t.Fatalf("with no value callback Walk read %s: %v; want exactly the nodes and stream index nodes read", h.Short(), s.read[h])
+		}
+		if leaves[h] == isNode {
+			t.Fatalf("Walk said leaf %v of %s, a node or stream index node: %v; want a leaf exactly when it is data", leaves[h], h.Short(), isNode)
 		}
 	}
 	if structure < 10 {

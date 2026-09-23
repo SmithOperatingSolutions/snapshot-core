@@ -20,6 +20,7 @@ type recording struct {
 	*memstore.Store
 	mu      sync.Mutex
 	stored  map[hash.Hash]bool
+	read    map[hash.Hash]bool
 	gets    atomic.Int64
 	failGet int64
 }
@@ -27,7 +28,7 @@ type recording struct {
 var errInjected = errors.New("injected store failure")
 
 func newRecording() *recording {
-	return &recording{Store: memstore.New(), stored: map[hash.Hash]bool{}}
+	return &recording{Store: memstore.New(), stored: map[hash.Hash]bool{}, read: map[hash.Hash]bool{}}
 }
 
 func (r *recording) Put(ctx context.Context, b []byte) (hash.Hash, error) {
@@ -44,25 +45,36 @@ func (r *recording) Get(ctx context.Context, h hash.Hash) ([]byte, error) {
 	if r.gets.Add(1) == r.failGet {
 		return nil, errInjected
 	}
+	r.mu.Lock()
+	r.read[h] = true
+	r.mu.Unlock()
 	return r.Store.Get(ctx, h)
 }
 
 // walkAll walks ref going into every chunk once, and returns what it was
 // shown, in order.
 func walkAll(s chunk.Reader, ref stream.Ref) ([]hash.Hash, error) {
+	order, _, err := walkLeaves(s, ref)
+	return order, err
+}
+
+// walkLeaves is walkAll, with what Walk said of each chunk: a leaf or not.
+func walkLeaves(s chunk.Reader, ref stream.Ref) ([]hash.Hash, map[hash.Hash]bool, error) {
 	var order []hash.Hash
-	seen := map[hash.Hash]bool{}
-	err := stream.Walk(ctx, s, ref, func(h hash.Hash, _ bool) (bool, error) {
+	seen, leaves := map[hash.Hash]bool{}, map[hash.Hash]bool{}
+	err := stream.Walk(ctx, s, ref, func(h hash.Hash, leaf bool) (bool, error) {
 		order = append(order, h)
+		leaves[h] = leaf
 		first := !seen[h]
 		seen[h] = true
 		return first, nil
 	})
-	return order, err
+	return order, leaves, err
 }
 
 // Walk names every chunk a stream is made of, root first, reading its index
 // nodes and never its data: GC marks a large blob without reading its bytes.
+// Data chunks are named as leaves, index nodes not.
 func TestWalkNamesEveryChunkAndReadsOnlyTheIndex(t *testing.T) {
 	deepest := 0
 	for _, n := range []int{0, 1, 5000, 1 << 20, 3 << 20} {
@@ -78,9 +90,15 @@ func TestWalkNamesEveryChunkAndReadsOnlyTheIndex(t *testing.T) {
 		}
 		deepest = max(deepest, int(ref.Depth))
 		s.gets.Store(0)
-		order, err := walkAll(s, ref)
+		s.read = map[hash.Hash]bool{}
+		order, leaves, err := walkLeaves(s, ref)
 		if err != nil {
 			t.Fatalf("%d bytes: Walk: %v", n, err)
+		}
+		for h, leaf := range leaves {
+			if leaf == s.read[h] {
+				t.Fatalf("%d bytes: Walk said leaf %v of chunk %s, which it read: %v; want a leaf exactly when it is data, never read", n, leaf, h.Short(), s.read[h])
+			}
 		}
 		named := map[hash.Hash]bool{}
 		for _, h := range order {
