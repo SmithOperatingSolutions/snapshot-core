@@ -11,3 +11,38 @@ find: if prev, ok := beforeFns[name]; !ok || prev != body {
 replace: if prev, ok := beforeFns[name]; !ok || (prev != body && false) {
 pkg: ./tools/redcheck
 run: ^TestChangedTestIsJudged$
+
+id: dnx-seal-requires-tag
+file: core/dnx/dnx.go
+find: if len(aad) == 0 {\n\t\treturn nil, ErrUntagged\n\t}\n\treturn a.mk.EncryptWithAAD(plaintext, aad)
+replace: return a.mk.EncryptWithAAD(plaintext, aad)
+pkg: ./core/dnx/compat
+run: ^TestAEADBindsTheDomainTag$
+
+id: dnx-geometry-mask-passed
+file: core/dnx/dnx.go
+find: chunker.WithMask(g.Mask)
+replace: chunker.WithMask(g.Mask>>1)
+pkg: ./core/dnx/compat
+run: ^TestCDCGolden
+
+id: dnx-geometry-min-passed
+file: core/dnx/dnx.go
+find: chunker.WithMinSize(g.Min)
+replace: chunker.WithMinSize(g.Min/2)
+pkg: ./core/dnx/compat
+run: ^TestCDCGolden
+
+id: dnx-argon2-validated
+file: core/dnx/dnx.go
+find: if err := cp.Validate(); err != nil {
+replace: if err := cp.Validate(); err != nil && false {
+pkg: ./core/dnx/compat
+run: ^TestArgon2RefusesUnusableParams$
+
+id: dnx-identity-is-strong-hash
+file: core/dnx/dnx.go
+find: return ChunkID{Strong: id.StrongHash, FilterHint: id.WeakHash}
+replace: return ChunkID{Strong: [32]byte(append([]byte{1}, id.StrongHash[1:]...)), FilterHint: id.WeakHash}
+pkg: ./core/dnx/compat
+run: ^TestChunkIdentityIsSHA256OfExactBytes$
