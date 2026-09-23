@@ -19,7 +19,7 @@ import (
 //	blob       magic "SCMF" | version u16 | salt [32] | seal(Refs key, context = header, plaintext)
 //	plaintext  magic "SCMP" | version u16 | seq u64 | gcGen u64 | root [32] |
 //	           indexes uvarint | indexes x hash [32] (strictly increasing) |
-//	           condemned uvarint | condemned x (kind u8 | hash [32] | at i64)
+//	           condemned uvarint | condemned x (kind u8 (1-4) | hash [32] | at i64)
 type manifest struct {
 	seq       uint64
 	gcGen     uint64
@@ -29,7 +29,7 @@ type manifest struct {
 }
 
 type condemned struct {
-	kind uint8 // condemnedPack or condemnedIndex
+	kind uint8 // condemnedPack, condemnedIndex, deletedPack or deletedIndex
 	sum  [32]byte
 	at   int64 // unix nanoseconds
 }
@@ -113,7 +113,7 @@ func decodePlain(b []byte) (manifest, error) {
 		e.kind = r.U8()
 		copy(e.sum[:], r.Fixed(32))
 		e.at = int64(r.U64())
-		if r.Err() != nil || (e.kind != condemnedPack && e.kind != condemnedIndex) {
+		if r.Err() != nil || e.kind < condemnedPack || e.kind > deletedIndex {
 			return manifest{}, fmt.Errorf("%w: condemned entry", ErrManifest)
 		}
 		m.condemned = append(m.condemned, e)

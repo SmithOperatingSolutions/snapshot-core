@@ -50,7 +50,9 @@ var (
 	ErrUnresolvedConflicts = errors.New("vcs: unresolved merge conflicts")
 	ErrMergeState          = errors.New("vcs: only merging, resolving, committing and abandoning change a merge in progress")
 	ErrNoMerge             = errors.New("vcs: no merge in progress")
-	ErrSessionLost         = errors.New("vcs: GC deleted writes this repository had not published")
+	// ErrSessionLost is the chunk store's: GC deleted writes the repository
+	// had not published, and the host must reopen it and write again.
+	ErrSessionLost = chunk.ErrSessionLost
 )
 
 // Options configures a repository.
@@ -224,9 +226,6 @@ func (r *Repo) update(ctx context.Context, fn func(m *prolly.Map, e *prolly.Edit
 			return err
 		}
 		err = r.s.CompareAndSetRoot(ctx, m.Root(), next.Root())
-		if errors.Is(err, chunk.ErrStale) { // GC fenced the write: the host re-reads
-			return fmt.Errorf("%w: %w", ErrConflict, err)
-		}
 		if !errors.Is(err, chunk.ErrRootConflict) {
 			return err
 		}

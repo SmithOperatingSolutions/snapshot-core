@@ -1197,8 +1197,8 @@ run: ^TestForgedManifestsAreRefused$
 
 id: manifest-condemned-kind
 file: core/chunk/packstore/manifest.go
-find: (e.kind != condemnedPack && e.kind != condemnedIndex)
-replace: (e.kind != condemnedPack && e.kind != condemnedIndex && false)
+find: if r.Err() != nil || e.kind < condemnedPack || e.kind > deletedIndex {
+replace: if r.Err() != nil {
 pkg: ./core/chunk/packstore
 run: ^TestForgedManifestsAreRefused$
 
@@ -1239,8 +1239,8 @@ run: ^TestAMissingOrAlteredIndexObjectFailsOpen$
 
 id: packstore-missing-pack-is-corrupt
 file: core/chunk/packstore/packstore.go
-find: if errors.Is(err, blob.ErrNotFound) {\n\t\t\treturn nil, fmt.Errorf("%w: %s is in pack %s, which is missing"
-replace: if errors.Is(err, blob.ErrNotFound) && false {\n\t\t\treturn nil, fmt.Errorf("%w: %s is in pack %s, which is missing"
+find: if errors.Is(err, blob.ErrNotFound) {\n\t\t\tif lost := s.promised(h, loc.Pack.Name); lost != nil {
+replace: if errors.Is(err, blob.ErrNotFound) && false {\n\t\t\tif lost := s.promised(h, loc.Pack.Name); lost != nil {
 pkg: ./core/chunk/packstore
 run: ^TestAChunkWhosePackIsGoneIsCorrupt$
 
@@ -2944,22 +2944,22 @@ run: ^TestGCRefusesWhatItCannotWalk$
 
 id: gc-orphans-wait-the-grace-window
 file: core/gc/gc.go
-find: if !named[info.Name] && now.Sub(info.ModTime) >= grace {
-replace: if !named[info.Name] {
+find: case now.Sub(info.ModTime) < grace:
+replace: case false:
 pkg: ./core/gc
 run: ^TestGCKeepsWhatTheRefsReachAndDeletesTheRest$
 
 id: gc-orphans-are-unnamed
-file: core/gc/gc.go
-find: if !named[info.Name] && now.Sub(info.ModTime) >= grace {
-replace: if now.Sub(info.ModTime) >= grace {
+file: core/chunk/packstore/gc.go
+find: if out.Named[name] || expiring[name] {
+replace: if expiring[name] {
 pkg: ./core/gc
 run: ^TestGCKeepsWhatTheRefsReachAndDeletesTheRest$
 
 id: gc-deletes-what-expired
 file: core/gc/gc.go
-find: for _, name := range append(out.Expired, stale...) {
-replace: for _, name := range stale {
+find: append(append(out.Expired, out.Orphans...), probes...)
+replace: append(out.Orphans, probes...)
 pkg: ./core/gc
 run: ^TestOrphanAgesAreTheBackendsClock$
 
@@ -2990,13 +2990,6 @@ find: for _, prefix := range []string{"packs/", "index/", probePrefix} {
 replace: for _, prefix := range []string{"packs/", "index/"} {
 pkg: ./core/gc
 run: ^TestGCLeavesNoProbeBehind$
-
-id: vcs-fenced-write-is-a-conflict
-file: core/vcs/vcs.go
-find: if errors.Is(err, chunk.ErrStale) { // GC fenced the write: the host re-reads
-replace: if errors.Is(err, chunk.ErrStale) && false { // GC fenced the write: the host re-reads
-pkg: ./core/vcs
-run: ^TestAWriteFencedByGCIsAConflict$
 
 id: gcprop-walk-follows-parents
 file: core/vcs/walk.go
@@ -3333,3 +3326,199 @@ find: for _, ns := range []hash.Hash{ws.Merge.PreWorking, ws.Merge.PreStaged} {
 replace: for _, ns := range []hash.Hash{ws.Merge.PreStaged} {
 pkg: ./core/vcs
 run: ^TestAWalkNamesAllTheRepositoryHolds$
+
+id: manifest-condemned-kinds-end-at-four
+file: core/chunk/packstore/manifest.go
+find: e.kind > deletedIndex {
+replace: e.kind > deletedIndex+1 {
+pkg: ./core/chunk/packstore
+run: ^TestForgedManifestsAreRefused$
+
+id: packstore-a-lost-session-refuses-puts
+file: core/chunk/packstore/packstore.go
+find: if s.lost != nil {\n\t\ts.mu.Unlock()\n\t\treturn hash.Hash{}, s.lost
+replace: if s.lost != nil && false {\n\t\ts.mu.Unlock()\n\t\treturn hash.Hash{}, s.lost
+pkg: ./core/chunk/packstore
+run: ^TestAPublishFailsOnAPackRecordedAsADeletedOrphan$
+
+id: packstore-a-lost-session-refuses-publishes
+file: core/chunk/packstore/packstore.go
+find: if s.lost != nil {\n\t\ts.mu.Unlock()\n\t\treturn s.lost
+replace: if s.lost != nil && false {\n\t\ts.mu.Unlock()\n\t\treturn s.lost
+pkg: ./core/chunk/packstore
+run: ^TestAPublishFailsOnAPackRecordedAsADeletedOrphan$
+
+id: packstore-publish-reads-the-record
+file: core/chunk/packstore/packstore.go
+find: if err := s.unrecorded(m, pending); err != nil {
+replace: if err := s.unrecorded(m, pending); err != nil && false {
+pkg: ./core/chunk/packstore
+run: ^TestAPublishFailsOnAPackRecordedAsADeletedOrphan$
+
+id: packstore-the-record-names-packs
+file: core/chunk/packstore/packstore.go
+find: case deletedPack:\n\t\t\tdeleted[dedup.PackName(c.sum)] = true
+replace: case deletedPack:
+pkg: ./core/chunk/packstore
+run: ^TestAPublishFailsOnAPackRecordedAsADeletedOrphan$
+
+id: packstore-the-record-names-index-objects
+file: core/chunk/packstore/packstore.go
+find: case deletedIndex:\n\t\t\tdeleted[indexName(c.sum)] = true
+replace: case deletedIndex:
+pkg: ./core/chunk/packstore
+run: ^TestAPublishFailsOnAnIndexObjectRecordedAsADeletedOrphan$
+
+id: packstore-publish-looks-up-old-uploads
+file: core/chunk/packstore/packstore.go
+find: if err := s.stillStored(ctx); err != nil {
+replace: if err := s.stillStored(ctx); err != nil && false {
+pkg: ./core/chunk/packstore
+run: ^TestAPublishFailsOnAnOldUploadThatIsGone$
+
+id: packstore-publish-looks-up-only-old-uploads
+file: core/chunk/packstore/packstore.go
+find: ok && now.Sub(at) > recheckAfter {
+replace: ok && (now.Sub(at) > recheckAfter || true) {
+pkg: ./core/chunk/packstore
+run: ^TestAPublishFailsOnAnOldUploadThatIsGone$
+
+id: packstore-an-upload-an-hour-old-is-looked-up
+file: core/chunk/packstore/packstore.go
+find: ok && now.Sub(at) > recheckAfter {
+replace: ok && now.Sub(at) > 2*recheckAfter {
+pkg: ./core/chunk/packstore
+run: ^TestAPublishFailsOnAnOldUploadThatIsGone$
+
+id: packstore-uploads-are-dated
+file: core/chunk/packstore/packstore.go
+find: s.uploaded[b.Name] = s.o.Clock()
+replace: _ = b
+pkg: ./core/chunk/packstore
+run: ^TestAPublishFailsOnAnOldUploadThatIsGone$
+
+id: packstore-index-objects-are-dated
+file: core/chunk/packstore/packstore.go
+find: s.uploaded[name] = s.o.Clock()
+replace: _ = name
+pkg: ./core/chunk/packstore
+run: ^TestAPublishFailsOnAnOldIndexObjectThatIsGone$
+
+id: packstore-a-missing-upload-loses-the-session
+file: core/chunk/packstore/packstore.go
+find: if errors.Is(err, blob.ErrNotFound) {\n\t\t\ts.mu.Lock()
+replace: if errors.Is(err, blob.ErrNotFound) && false {\n\t\t\ts.mu.Lock()
+pkg: ./core/chunk/packstore
+run: ^TestAPublishFailsOnAnOldUploadThatIsGone$
+
+id: packstore-the-fence-loses-the-session
+file: core/chunk/packstore/packstore.go
+find: return s.lostLocked("counted on " + h.Short() + ", which expired")
+replace: return fmt.Errorf("%w: %s", chunk.ErrSessionLost, h.Short())
+pkg: ./core/chunk/packstore
+run: ^TestAWriterFencedWhenAPackItCountedOnExpires$
+
+id: packstore-round-records-orphans
+file: core/chunk/packstore/gc.go
+find: next = append(next, c)\n\t\t\trecorded[name] = true
+replace: _ = c\n\t\t\trecorded[name] = true
+pkg: ./core/chunk/packstore
+run: ^TestARoundRecordsTheOrphansItDeletes$
+
+id: packstore-round-spares-what-it-names
+file: core/chunk/packstore/gc.go
+find: if out.Named[name] || expiring[name] {
+replace: if expiring[name] {
+pkg: ./core/chunk/packstore
+run: ^TestARoundRecordsTheOrphansItDeletes$
+
+id: packstore-round-spares-what-expires
+file: core/chunk/packstore/gc.go
+find: if out.Named[name] || expiring[name] {
+replace: if out.Named[name] {
+pkg: ./core/chunk/packstore
+run: ^TestARoundRecordsTheOrphansItDeletes$
+
+id: packstore-records-last-past-the-window
+file: core/chunk/packstore/gc.go
+find: if at-c.at >= int64(grace+recheckAfter) {
+replace: if at-c.at >= int64(grace) {
+pkg: ./core/chunk/packstore
+run: ^TestARoundRecordsTheOrphansItDeletes$
+
+id: packstore-records-lapse
+file: core/chunk/packstore/gc.go
+find: if at-c.at >= int64(grace+recheckAfter) {
+replace: if at-c.at >= int64(grace+recheckAfter) && false {
+pkg: ./core/chunk/packstore
+run: ^TestARoundRecordsTheOrphansItDeletes$
+
+id: packstore-lapsed-records-are-swapped-out
+file: core/chunk/packstore/gc.go
+find: && added == 0 && lapsed == 0 {
+replace: && added == 0 {
+pkg: ./core/chunk/packstore
+run: ^TestARoundRecordsTheOrphansItDeletes$
+
+id: packstore-new-records-are-swapped-in
+file: core/chunk/packstore/gc.go
+find: && added == 0 && lapsed == 0 {
+replace: && lapsed == 0 {
+pkg: ./core/chunk/packstore
+run: ^TestAPublishFailsOnAPackRecordedAsADeletedOrphan$
+
+id: packstore-with-no-manifest-every-object-is-an-orphan
+file: core/chunk/packstore/gc.go
+find: out.Orphans = append(out.Orphans, r.orphans...)
+replace: _ = r.orphans
+pkg: ./core/gc
+run: ^TestGCOnAStoreWithNoRepository$
+
+id: gc-hands-the-round-its-orphans
+file: core/gc/gc.go
+find: r.Orphans(old) // recorded in the swap, deleted only once it lands
+replace: _ = old
+pkg: ./core/gc
+run: ^TestGCKeepsWhatTheRefsReachAndDeletesTheRest$
+
+id: gc-deletes-the-orphans-the-round-recorded
+file: core/gc/gc.go
+find: append(append(out.Expired, out.Orphans...), probes...)
+replace: append(out.Expired, probes...)
+pkg: ./core/gc
+run: ^TestGCKeepsWhatTheRefsReachAndDeletesTheRest$
+
+id: vcs-a-lost-session-is-the-stores
+file: core/vcs/vcs.go
+find: ErrSessionLost = chunk.ErrSessionLost
+replace: ErrSessionLost = errors.New("vcs: a session lost")
+pkg: ./core/vcs
+run: ^TestALostSessionIsNoConflict$
+
+id: packstore-a-read-of-a-counted-on-chunk-loses-the-session
+file: core/chunk/packstore/packstore.go
+find: if lost := s.promised(h, ""); lost != nil {
+replace: if lost := s.promised(h, ""); lost != nil && false {
+pkg: ./core/chunk/packstore
+run: ^TestReadingAPromisedChunkThatIsGoneLosesTheSession$
+
+id: packstore-a-read-in-an-unpublished-pack-loses-the-session
+file: core/chunk/packstore/packstore.go
+find: if lost := s.promised(h, loc.Pack.Name); lost != nil {
+replace: if lost := s.promised(h, loc.Pack.Name); lost != nil && false {
+pkg: ./core/chunk/packstore
+run: ^TestReadingAPromisedChunkThatIsGoneLosesTheSession$
+
+id: packstore-promised-covers-counted-on-chunks
+file: core/chunk/packstore/packstore.go
+find: if _, own := s.unpublished[packName]; own || s.deduped[h] {
+replace: if _, own := s.unpublished[packName]; own {
+pkg: ./core/chunk/packstore
+run: ^TestReadingAPromisedChunkThatIsGoneLosesTheSession$
+
+id: packstore-promised-covers-unpublished-packs
+file: core/chunk/packstore/packstore.go
+find: if _, own := s.unpublished[packName]; own || s.deduped[h] {
+replace: if _, own := s.unpublished[packName]; own && false || s.deduped[h] {
+pkg: ./core/chunk/packstore
+run: ^TestReadingAPromisedChunkThatIsGoneLosesTheSession$

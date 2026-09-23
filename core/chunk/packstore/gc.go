@@ -30,8 +30,10 @@ type Round struct {
 }
 
 // Orphans hands the round the packs and index objects GC found older than
-// the grace window by the backend's clock.
-func (r *Round) Orphans(names []string) {}
+// the grace window by the backend's clock. Apply records each its manifest
+// does not name as deleted and returns them in Outcome.Orphans, for the GC
+// role to delete once the swap has landed (DESIGN §9).
+func (r *Round) Orphans(names []string) { r.orphans = names }
 
 // Begin reads the manifest and every index object it lists.
 func Begin(ctx context.Context, o Options) (*Round, error) {
@@ -86,6 +88,8 @@ type Outcome struct {
 func (r *Round) Apply(ctx context.Context, live func(hash.Hash) bool, now time.Time, grace time.Duration) (Outcome, error) {
 	out := Outcome{Named: map[string]bool{}}
 	if r.ver == blob.NoVersion {
+		// No manifest: nothing to record in, and every object is an orphan.
+		out.Orphans = append(out.Orphans, r.orphans...)
 		return out, nil
 	}
 	if !live(r.man.root) {
@@ -95,10 +99,19 @@ func (r *Round) Apply(ctx context.Context, live func(hash.Hash) bool, now time.T
 	expired := func(c condemned) bool { return at-c.at >= int64(grace) }
 	packs := map[string]condemned{}
 	var next []condemned
+	recorded := map[string]bool{} // orphans already recorded as deleted
+	lapsed := 0
 	for _, c := range r.man.condemned {
 		switch {
 		case c.kind == condemnedPack:
 			packs[dedup.PackName(c.sum)] = c
+		case c.kind == deletedPack || c.kind == deletedIndex:
+			if at-c.at >= int64(grace+recheckAfter) { // every writer has looked its uploads up by now
+				lapsed++
+				continue
+			}
+			next = append(next, c)
+			recorded[orphanName(c)] = true
 		case expired(c):
 			out.Expired = append(out.Expired, indexName(c.sum))
 		default:
@@ -148,7 +161,6 @@ func (r *Round) Apply(ctx context.Context, live func(hash.Hash) bool, now time.T
 		upd.indexes = sums
 		upd.gcGen++
 	}
-	upd.condemned = next
 	for _, p := range keep {
 		out.Named[p.Name] = true
 	}
@@ -160,7 +172,29 @@ func (r *Round) Apply(ctx context.Context, live func(hash.Hash) bool, now time.T
 			out.Named[indexName(c.sum)] = true
 		}
 	}
-	if out.Condemned == 0 && out.Reprieved == 0 && len(out.Expired) == 0 {
+	expiring := map[string]bool{}
+	for _, name := range out.Expired {
+		expiring[name] = true
+	}
+	added := 0
+	for _, name := range r.orphans {
+		if out.Named[name] || expiring[name] {
+			continue
+		}
+		// A name no pack or index object has cannot be a writer's upload:
+		// it goes unrecorded.
+		if c, ok := deletion(name, at); ok && !recorded[name] {
+			if len(next) >= maxCondemned { // the rest wait for a later round
+				break
+			}
+			next = append(next, c)
+			recorded[name] = true
+			added++
+		}
+		out.Orphans = append(out.Orphans, name)
+	}
+	upd.condemned = next
+	if out.Condemned == 0 && out.Reprieved == 0 && len(out.Expired) == 0 && added == 0 && lapsed == 0 {
 		return out, nil
 	}
 	sealed, err := upd.seal(r.o.Keys, r.o.Repo)
@@ -174,6 +208,26 @@ func (r *Round) Apply(ctx context.Context, live func(hash.Hash) bool, now time.T
 		return Outcome{}, err
 	}
 	return out, nil
+}
+
+// deletion is the record of deleting name, a pack or an index object, as an
+// orphan at at; ok is false for any other name.
+func deletion(name string, at int64) (condemned, bool) {
+	if sum, err := dedup.PackSum(name); err == nil {
+		return condemned{kind: deletedPack, sum: sum, at: at}, true
+	}
+	if sum, err := indexSum(name); err == nil {
+		return condemned{kind: deletedIndex, sum: sum, at: at}, true
+	}
+	return condemned{}, false
+}
+
+// orphanName is the object a deletion record names.
+func orphanName(c condemned) string {
+	if c.kind == deletedPack {
+		return dedup.PackName(c.sum)
+	}
+	return indexName(c.sum)
 }
 
 func isLive(p pack.Info, live func(hash.Hash) bool) bool {
