@@ -838,3 +838,66 @@ find: if _, dup := x.chunks[e.Hash]; dup {
 replace: if _, dup := x.chunks[e.Hash]; dup && false {
 pkg: ./core/dedup
 run: ^TestDuplicateChunksKeepTheirFirstLocation$
+
+id: dedup-format-object-magic
+file: core/dedup/dedup.go
+find: objectMagic = "SCIX"
+replace: objectMagic = "SCIY"
+pkg: ./core/dedup
+run: ^TestAV1IndexObjectStillReads$
+
+id: dedup-format-plain-magic
+file: core/dedup/dedup.go
+find: plainMagic  = "SCIP"
+replace: plainMagic  = "SCIQ"
+pkg: ./core/dedup
+run: ^TestAV1IndexObjectStillReads$
+
+id: dedup-format-version
+file: core/dedup/dedup.go
+find: version     = 1
+replace: version     = 2
+pkg: ./core/dedup
+run: ^TestAV1IndexObjectStillReads$
+
+id: dedup-packs-strictly-sorted
+file: core/dedup/dedup.go
+find: (i > 0 && bytes.Compare(prev[:], sum[:]) >= 0)
+replace: (i > 0 && bytes.Compare(prev[:], sum[:]) > 0)
+pkg: ./core/dedup
+run: ^TestForgedObjectsAreRefused$
+
+id: dedup-pack-size-bounded
+file: core/dedup/dedup.go
+find: size < pack.HeaderSize+pack.TrailerSize || size > pack.MaxPackSize ||
+replace: size < pack.HeaderSize+pack.TrailerSize ||
+pkg: ./core/dedup
+run: ^TestForgedObjectsAreRefused$
+
+id: dedup-entries-strictly-sorted
+file: core/dedup/dedup.go
+find: (j > 0 && p.Entries[j-1].Hash.Compare(e.Hash) >= 0)
+replace: (j > 0 && p.Entries[j-1].Hash.Compare(e.Hash) > 0)
+pkg: ./core/dedup
+run: ^TestForgedObjectsAreRefused$
+
+id: dedup-frames-inside-the-pack
+file: core/dedup/dedup.go
+find: off < pack.HeaderSize || off+stored > framesEnd ||
+replace: off < pack.HeaderSize || off+stored > framesEnd+1<<40 ||
+pkg: ./core/dedup
+run: ^TestForgedObjectsAreRefused$
+
+id: dedup-frames-clear-the-header
+file: core/dedup/dedup.go
+find: r.Err() != nil || off < pack.HeaderSize ||
+replace: r.Err() != nil ||
+pkg: ./core/dedup
+run: ^TestForgedObjectsAreRefused$
+
+id: dedup-codec-known
+file: core/dedup/dedup.go
+find: (e.Codec != pack.CodecRaw && e.Codec != pack.CodecZstd) ||
+replace: false ||
+pkg: ./core/dedup
+run: ^TestForgedObjectsAreRefused$
