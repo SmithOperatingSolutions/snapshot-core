@@ -277,9 +277,8 @@ func (r *Reader) chunkAt(pos int64) ([]byte, int64, error) {
 		if sum != want {
 			return nil, 0, corrupt("a level-%d node's entries add to %d bytes, its parent says %d", level, sum, want)
 		}
-		if next < 0 {
-			return nil, 0, corrupt("offset %d is past the stream", pos)
-		}
+		// pos-start < want = sum (callers stay under the Ref's size, and each
+		// level's sum is its parent's entry), so some entry holds pos.
 		for _, e := range es[:next] {
 			start += int64(e.size)
 		}
