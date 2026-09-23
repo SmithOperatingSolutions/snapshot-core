@@ -1153,3 +1153,38 @@ find: tmp, err := os.CreateTemp(s.dir, ".tmp-*")\n\tif err != nil {
 replace: tmp, err := os.CreateTemp(s.dir, ".tmp-*")\n\tif err != nil && false {
 pkg: ./core/blob/cache
 run: ^TestACacheThatCannotWriteStillServesReads$
+
+id: manifest-plain-magic
+file: core/chunk/packstore/manifest.go
+find: string(magic) != plainMagic || v != manifestV1 || n > maxIndexes {
+replace: (string(magic) != plainMagic && false) || v != manifestV1 || n > maxIndexes {
+pkg: ./core/chunk/packstore
+run: ^TestForgedManifestsAreRefused$
+
+id: manifest-plain-version
+file: core/chunk/packstore/manifest.go
+find: string(magic) != plainMagic || v != manifestV1 || n > maxIndexes {
+replace: string(magic) != plainMagic || (v != manifestV1 && false) || n > maxIndexes {
+pkg: ./core/chunk/packstore
+run: ^TestForgedManifestsAreRefused$
+
+id: manifest-indexes-strictly-increasing
+file: core/chunk/packstore/manifest.go
+find: bytes.Compare(m.indexes[i-1][:], s[:]) >= 0
+replace: bytes.Compare(m.indexes[i-1][:], s[:]) > 0
+pkg: ./core/chunk/packstore
+run: ^TestForgedManifestsAreRefused$
+
+id: manifest-condemned-kind
+file: core/chunk/packstore/manifest.go
+find: (e.kind != 1 && e.kind != 2)
+replace: (e.kind != 1 && e.kind != 2 && false)
+pkg: ./core/chunk/packstore
+run: ^TestForgedManifestsAreRefused$
+
+id: manifest-must-end
+file: core/chunk/packstore/manifest.go
+find: if err := r.Done(); err != nil {\n\t\treturn manifest{}, fmt.Errorf("%w: %w", ErrManifest, err)
+replace: if err := r.Err(); err != nil {\n\t\treturn manifest{}, fmt.Errorf("%w: %w", ErrManifest, err)
+pkg: ./core/chunk/packstore
+run: ^TestForgedManifestsAreRefused$
