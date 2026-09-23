@@ -264,10 +264,34 @@ var ErrNotWalkable = errors.New("object: the object's model cannot walk")
 // whose model cannot walk ErrNotWalkable: Walk refuses rather than name too
 // little.
 func Walk(ctx context.Context, rd chunk.Reader, c prolly.Config, reg *model.Registry, root hash.Hash, visit func(h hash.Hash, leaf bool) (bool, error)) error {
-	return errors.New("object: Walk is not written yet")
+	if reg == nil {
+		return errors.New("object: a namespace needs a model registry")
+	}
+	return prolly.Walk(ctx, rd, c, root, visit, func(key, val []byte) error {
+		path := string(key)
+		if err := ValidPath(path); err != nil {
+			return fmt.Errorf("%w: a stored path: %w", chunk.ErrCorrupt, err)
+		}
+		ref, err := DecodeRef(val)
+		if err != nil {
+			return err
+		}
+		if err := WalkRef(ctx, rd, reg, ref, visit); err != nil {
+			return fmt.Errorf("object %s: %w", path, err)
+		}
+		return nil
+	})
 }
 
 // WalkRef calls visit for every chunk one object reaches, through its model.
 func WalkRef(ctx context.Context, rd chunk.Reader, reg *model.Registry, ref Ref, visit func(h hash.Hash, leaf bool) (bool, error)) error {
-	return errors.New("object: WalkRef is not written yet")
+	m, err := reg.Resolve(ref.Model, ref.Root.Format)
+	if err != nil {
+		return err
+	}
+	w, ok := m.(model.Walker)
+	if !ok {
+		return fmt.Errorf("%w: model %d", ErrNotWalkable, ref.Model)
+	}
+	return w.Walk(ctx, ref.Root, rd, visit)
 }

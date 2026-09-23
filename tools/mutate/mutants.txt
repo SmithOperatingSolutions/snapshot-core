@@ -2715,3 +2715,31 @@ find: deeper, err := w.visit(e.child, false)
 replace: deeper, err := w.visit(e.child, true)
 pkg: ./core/prolly
 run: ^TestWalkNamesEveryChunkOfAMap$
+
+id: object-walk-reaches-objects
+file: core/object/object.go
+find: if err := WalkRef(ctx, rd, reg, ref, visit); err != nil {
+replace: if err := WalkRef(ctx, rd, reg, ref, func(hash.Hash, bool) (bool, error) { return false, nil }); err != nil {
+pkg: ./core/object
+run: ^TestAWalkReachesEveryObject$
+
+id: object-walk-checks-stored-paths
+file: core/object/object.go
+find: if err := ValidPath(path); err != nil {\n\t\t\treturn fmt.Errorf("%w: a stored path: %w", chunk.ErrCorrupt, err)
+replace: if err := ValidPath(path); err != nil && false {\n\t\t\treturn fmt.Errorf("%w: a stored path: %w", chunk.ErrCorrupt, err)
+pkg: ./core/object
+run: ^TestWalkRefusesWhatItCannotWalk$
+
+id: object-walk-ref-needs-a-walker
+file: core/object/object.go
+find: w, ok := m.(model.Walker)\n\tif !ok {
+replace: w, ok := m.(model.Walker)\n\tif !ok && false {
+pkg: ./core/object
+run: ^TestWalkRefusesWhatItCannotWalk$
+
+id: object-walk-ref-resolves-the-model
+file: core/object/object.go
+find: m, err := reg.Resolve(ref.Model, ref.Root.Format)\n\tif err != nil {\n\t\treturn err\n\t}\n\tw, ok := m.(model.Walker)
+replace: m, err := reg.Resolve(ref.Model, ref.Root.Format)\n\tif err != nil && false {\n\t\treturn err\n\t}\n\tw, ok := m.(model.Walker)
+pkg: ./core/object
+run: ^TestWalkRefusesWhatItCannotWalk$
