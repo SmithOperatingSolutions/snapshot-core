@@ -1742,3 +1742,38 @@ find: if root.Format != Format {
 replace: if root.Format != Format && false {
 pkg: ./model/blob
 run: ^TestOpenRefusesAnotherFormat$
+
+id: tree-delete-against-edit-conflicts
+file: model/tree/tree.go
+find: case ours.Kind == prolly.Removed || theirs.Kind == prolly.Removed:\n\t\treturn "deleted on one side and changed on the other"
+replace: case ours.Kind == prolly.Removed || theirs.Kind == prolly.Removed:\n\t\treturn ""
+pkg: ./model/tree
+run: ^TestDeletingADirectoryAgainstAnEditIsAConflict$
+
+id: tree-applies-theirs
+file: model/tree/tree.go
+find: if err = apply(ed, ct); err == nil {
+replace: if err = error(nil); err == nil {
+pkg: ./model/tree
+run: ^TestChangesToDifferentEntriesCombine$
+
+id: tree-different-edits-conflict
+file: model/tree/tree.go
+find: case bytes.Equal(ours.To, theirs.To):
+replace: case true:
+pkg: ./model/tree
+run: ^TestConflictsPerEntry$
+
+id: tree-root-count-checked
+file: model/tree/tree.go
+find: if m.Count() != root.Size {
+replace: if m.Count() != root.Size && false {
+pkg: ./model/tree
+run: ^TestValidateChecksTheCount$
+
+id: tree-entry-format-nonzero
+file: model/tree/tree.go
+find: if e.Content.Format == 0 {
+replace: if e.Content.Format == 0 && false {
+pkg: ./model/tree
+run: ^TestAnEntryIsTheDocumented55Bytes$
