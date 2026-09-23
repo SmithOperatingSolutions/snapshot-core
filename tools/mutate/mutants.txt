@@ -2134,3 +2134,10 @@ find: stored, err := r.readWorkingSet(ctx, work)
 replace: stored, err := prev, error(nil)
 pkg: ./core/vcs
 run: ^TestUpdateWorkingSetKeepsTheMergeState$
+
+id: vcs-already-merged-changes-nothing
+file: core/vcs/vcs.go
+find: if baseHash == theirs { // the branch holds theirs already: nothing to merge
+replace: if baseHash == theirs && false { // the branch holds theirs already: nothing to merge
+pkg: ./core/vcs
+run: ^TestMergingWhatIsAlreadyMergedChangesNothing$

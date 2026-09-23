@@ -676,7 +676,8 @@ func (r *Repo) mergeBase(ctx context.Context, a, b hash.Hash) (hash.Hash, error)
 }
 
 // Merge merges a commit into a branch's working set, recording conflicts
-// there; a failed merge leaves the working set as it was.
+// there; a failed merge leaves the working set as it was, and so does
+// merging a commit the branch already holds (its head or an ancestor).
 func (r *Repo) Merge(ctx context.Context, p auth.Principal, branch string, theirs hash.Hash) (merge.Result, error) {
 	if err := r.branchCheck(ctx, p, auth.Write, branch); err != nil {
 		return merge.Result{}, err
@@ -699,6 +700,10 @@ func (r *Repo) Merge(ctx context.Context, p auth.Principal, branch string, their
 	baseHash, err := r.mergeBase(ctx, headHash, theirs)
 	if err != nil {
 		return merge.Result{}, err
+	}
+	if baseHash == theirs { // the branch holds theirs already: nothing to merge
+		ours, err := r.Namespace(ctx, ws.Working)
+		return merge.Result{Merged: ours}, err
 	}
 	var ns [3]*object.Namespace
 	for i, h := range []hash.Hash{baseHash, theirs} {
