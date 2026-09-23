@@ -1,0 +1,171 @@
+package packstore_test
+
+import (
+	"context"
+	"io"
+	"strings"
+	"sync"
+	"testing"
+	"time"
+
+	"github.com/SmithOperatingSolutions/snapshot-core/core/blob"
+	"github.com/SmithOperatingSolutions/snapshot-core/core/blob/mem"
+	"github.com/SmithOperatingSolutions/snapshot-core/core/chunk/packstore"
+	"github.com/SmithOperatingSolutions/snapshot-core/core/hash"
+)
+
+// gatedPacks is a blob store whose pack puts wait at a gate until released,
+// recording how many wait at once and the order of what lands.
+type gatedPacks struct {
+	blob.BlobStore
+	mu      sync.Mutex
+	gate    chan struct{} // closed to release every waiting put
+	waiting int
+	peak    int
+	landed  []string // pack and root events in the order they completed
+}
+
+func newGated(bs blob.BlobStore) *gatedPacks {
+	return &gatedPacks{BlobStore: bs, gate: make(chan struct{})}
+}
+
+func (g *gatedPacks) Put(ctx context.Context, name string, r io.Reader, size int64) error {
+	if strings.HasPrefix(name, "packs/") {
+		g.mu.Lock()
+		g.waiting++
+		g.peak = max(g.peak, g.waiting)
+		g.mu.Unlock()
+		<-g.gate
+		g.mu.Lock()
+		g.waiting--
+		g.mu.Unlock()
+	}
+	err := g.BlobStore.Put(ctx, name, r, size)
+	g.mu.Lock()
+	g.landed = append(g.landed, name)
+	g.mu.Unlock()
+	return err
+}
+
+func (g *gatedPacks) SwapRoot(ctx context.Context, expected blob.Version, next []byte) (blob.Version, error) {
+	v, err := g.BlobStore.SwapRoot(ctx, expected, next)
+	g.mu.Lock()
+	g.landed = append(g.landed, "root")
+	g.mu.Unlock()
+	return v, err
+}
+
+// waitingPuts blocks until n pack puts wait at the gate.
+func (g *gatedPacks) waitingPuts(t *testing.T, n int) {
+	t.Helper()
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		g.mu.Lock()
+		w := g.waiting
+		g.mu.Unlock()
+		if w >= n {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("after ten seconds %d pack uploads wait at the gate, want %d", w, n)
+		}
+		time.Sleep(time.Millisecond)
+	}
+}
+
+// smallPacks opens a store whose packs hold a few 4 KiB chunks.
+func smallPacks(t *testing.T, bs blob.BlobStore) *packstore.Store {
+	t.Helper()
+	s, err := packstore.Open(ctx, packstore.WithBackoff(packstore.Options{Blobs: bs, Keys: keyring(t), Repo: repo, PackSize: 32 << 10}, time.Millisecond))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = s.Close() })
+	return s
+}
+
+// chunksOf is n distinct 4 KiB chunks and their hashes.
+func chunksOf(seed string, n int) ([][]byte, []hash.Hash) {
+	var data [][]byte
+	var hs []hash.Hash
+	for i := 0; i < n; i++ {
+		c := payload(seed+"/"+string(rune('a'+i%26))+string(rune('a'+i/26)), 4<<10)
+		data = append(data, c)
+		hs = append(hs, hash.Sum(c))
+	}
+	return data, hs
+}
+
+// putAll stores chunks on a goroutine and returns a channel closed when
+// every put has returned, or carrying the first error.
+func putAll(s *packstore.Store, chunks [][]byte) <-chan error {
+	done := make(chan error, 1)
+	go func() {
+		for _, c := range chunks {
+			if _, err := s.Put(ctx, c); err != nil {
+				done <- err
+				return
+			}
+		}
+		close(done)
+	}()
+	return done
+}
+
+// #10 (A): a full pack is finished and uploaded beside the writer, not in
+// its way. With the first pack's upload held at the backend, the writer
+// goes on storing chunks for the pack after it, and a chunk of the held
+// pack still reads, from memory. Released, everything lands and publishes.
+func TestAnUploadDoesNotHoldUpTheWriter(t *testing.T) {
+	g := newGated(mem.New())
+	s := smallPacks(t, g)
+	chunks, hs := chunksOf("held", 16) // two 32 KiB packs' worth: the first is held
+	done := putAll(s, chunks)
+	g.waitingPuts(t, 1)
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("with the first pack's upload held, storing the chunks after it did not return in five seconds: the writer waits on its uploads")
+	}
+	if got, err := s.Get(ctx, hs[0]); err != nil || len(got) != 4<<10 {
+		t.Fatalf("a chunk of the pack being uploaded reads as %d bytes, %v; want it from memory", len(got), err)
+	}
+	close(g.gate)
+	if err := s.CompareAndSetRoot(ctx, hash.Hash{}, hs[0]); err != nil {
+		t.Fatalf("publishing once the uploads are released: %v", err)
+	}
+	fresh := open(t, g, keyring(t))
+	for _, h := range hs {
+		if _, err := fresh.Get(ctx, h); err != nil {
+			t.Fatalf("after the publish a fresh store cannot read %s: %v", h.Short(), err)
+		}
+	}
+}
+
+// Memory stays bounded: with every upload held, at most two packs are in
+// flight; a writer with a third full pack waits for one to land.
+func TestAtMostTwoPacksAreInFlight(t *testing.T) {
+	g := newGated(mem.New())
+	s := smallPacks(t, g)
+	chunks, _ := chunksOf("many", 48) // six packs' worth
+	done := putAll(s, chunks)
+	g.waitingPuts(t, 2)
+	select {
+	case <-done:
+		t.Fatal("with every upload held the writer stored six packs' worth without waiting: nothing bounds the packs in flight")
+	case <-time.After(200 * time.Millisecond):
+	}
+	close(g.gate)
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+	g.mu.Lock()
+	peak := g.peak
+	g.mu.Unlock()
+	if peak != 2 {
+		t.Fatalf("%d pack uploads were in flight at once, want two: the bound", peak)
+	}
+}
