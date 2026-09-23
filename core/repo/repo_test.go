@@ -16,6 +16,7 @@ import (
 	"github.com/SmithOperatingSolutions/snapshot-core/core/cdc"
 	"github.com/SmithOperatingSolutions/snapshot-core/core/chunk"
 	"github.com/SmithOperatingSolutions/snapshot-core/core/chunk/packstore"
+	"github.com/SmithOperatingSolutions/snapshot-core/core/hash"
 	"github.com/SmithOperatingSolutions/snapshot-core/core/model"
 	"github.com/SmithOperatingSolutions/snapshot-core/core/repo"
 	"github.com/SmithOperatingSolutions/snapshot-core/core/seal"
@@ -235,5 +236,54 @@ func TestInitValidatesTheGeometry(t *testing.T) {
 		if infos, err := blobs.List(ctx, "", "", blob.MaxListPage); err != nil || len(infos) != 0 {
 			t.Errorf("%s: a refused Init left %d objects", name, len(infos))
 		}
+	}
+}
+
+// A host writes objects into the repository's own chunk store, with the
+// repository's geometry, and reads them back after the version graph next
+// changes a ref and the repository reopens; the store it is handed cannot
+// swap the root behind the version graph.
+func TestHostsWriteObjectsThroughTheRepository(t *testing.T) {
+	o := options(t, mem.New(), keyring(t))
+	o.Geometry = repo.Geometry{CDC: cdc.Geometry{Min: 4 << 10, Max: 256 << 10, Mask: 0x3FFF},
+		Nodes: boundary.Geometry{Min: 256, Target: 2048, Max: 8192}, InlineLimit: 1000, PackSize: 1 << 20}
+	r := initRepo(t, o)
+	c := r.Chunks()
+	if c == nil {
+		t.Fatal("the repository hands out no chunk store")
+	}
+	if _, swaps := c.(interface {
+		CompareAndSetRoot(context.Context, hash.Hash, hash.Hash) error
+	}); swaps {
+		t.Fatal("the chunk store a host is handed can swap the root")
+	}
+	h, err := c.Put(ctx, []byte("an object's chunk"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	head, err := r.Head(ctx, alice, vcs.MainBranch)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := r.CreateBranch(ctx, alice, "published", head.Hash); err != nil {
+		t.Fatal(err) // any ref change publishes what was written
+	}
+	if err := r.Close(); err != nil {
+		t.Fatal(err)
+	}
+	re, err := repo.Open(ctx, o)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer re.Close()
+	if b, err := re.Chunks().Get(ctx, h); err != nil || string(b) != "an object's chunk" {
+		t.Fatalf("after reopening the chunk reads %q, %v", b, err)
+	}
+	g := re.Config.Geometry
+	if p := g.Prolly(); p.Nodes != o.Geometry.Nodes || p.InlineLimit != 1000 || p.Stream != g.Stream() {
+		t.Fatalf("Prolly() = %+v", p)
+	}
+	if s := g.Stream(); s.CDC != o.Geometry.CDC || s.Nodes != o.Geometry.Nodes {
+		t.Fatalf("Stream() = %+v", s)
 	}
 }

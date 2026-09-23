@@ -17,6 +17,7 @@ import (
 	"github.com/SmithOperatingSolutions/snapshot-core/core/blob"
 	"github.com/SmithOperatingSolutions/snapshot-core/core/boundary"
 	"github.com/SmithOperatingSolutions/snapshot-core/core/cdc"
+	"github.com/SmithOperatingSolutions/snapshot-core/core/chunk"
 	"github.com/SmithOperatingSolutions/snapshot-core/core/chunk/packstore"
 	"github.com/SmithOperatingSolutions/snapshot-core/core/internal/wire"
 	"github.com/SmithOperatingSolutions/snapshot-core/core/model"
@@ -274,3 +275,14 @@ func Open(ctx context.Context, o Options) (*Repo, error) {
 
 // Close releases the repository.
 func (r *Repo) Close() error { return r.chunks.Close() }
+
+// Chunks is the repository's chunk store, for writing and reading objects:
+// reads and writes, but no root swap, so every ref change goes through the
+// version graph.
+func (r *Repo) Chunks() chunk.ReadWriter { return nil }
+
+// Prolly is the map geometry objects are written with.
+func (g Geometry) Prolly() prolly.Config { return prolly.Config{} }
+
+// Stream is the stream geometry objects are written with.
+func (g Geometry) Stream() stream.Config { return stream.Config{} }
