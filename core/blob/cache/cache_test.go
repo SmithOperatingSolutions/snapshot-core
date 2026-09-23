@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/sha256"
+	"errors"
 	"fmt"
 	"io"
 	"io/fs"
@@ -149,7 +150,6 @@ func TestSizeCapEvictsLeastRecentlyUsed(t *testing.T) {
 	}
 }
 
-// A damaged cache file is refetched, never served.
 // A hit makes an entry recent: with room for two, caching A and B, reading
 // A, then caching C must evict B, not A. (Nothing here re-reads a victim, so
 // a refetch cannot mask a wrong eviction.)
@@ -177,6 +177,7 @@ func TestHitsRefreshRecency(t *testing.T) {
 	}
 }
 
+// A damaged cache file is refetched, never served.
 func TestDamagedEntryIsRefetched(t *testing.T) {
 	inner := &counting{BlobStore: mem.New()}
 	c, dir := newCache(t, inner, 64<<20)
@@ -254,5 +255,64 @@ func TestCacheFilesAreOwnerOnly(t *testing.T) {
 	})
 	if checked < 2 {
 		t.Fatal("the cache wrote nothing to check")
+	}
+}
+
+// A restart keeps only whole entries: a crash's temp file (even one holding
+// a complete entry, written but never renamed), a garbled or truncated file,
+// and anything that is not a regular file are removed and never counted.
+func TestRestartKeepsOnlyWholeEntries(t *testing.T) {
+	inner := &counting{BlobStore: mem.New()}
+	c, dir := newCache(t, inner, 64<<20)
+	names := []string{"packs/aa/one", "packs/aa/two"}
+	for _, n := range names {
+		d := payload(n, 3000)
+		if err := c.Put(ctx, n, bytes.NewReader(d), int64(len(d))); err != nil {
+			t.Fatal(err)
+		}
+		read(t, c, n, 0, -1)
+	}
+	kept := c.Used()
+	files, err := os.ReadDir(dir)
+	if err != nil || len(files) != 2 {
+		t.Fatalf("fixture: %d cache files (%v), want 2", len(files), err)
+	}
+	whole, err := os.ReadFile(filepath.Join(dir, files[0].Name()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for name, b := range map[string][]byte{
+		".tmp-crashed": whole, // written, never renamed
+		"garbled":      []byte("not a cache entry"),
+		"truncated":    whole[:5],
+	} {
+		if err := os.WriteFile(filepath.Join(dir, name), b, 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.Symlink(filepath.Join(dir, files[0].Name()), filepath.Join(dir, "link")); err != nil {
+		t.Fatal(err)
+	}
+
+	re, err := cache.New(inner, cache.Options{Dir: dir, MaxBytes: 64 << 20})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{".tmp-crashed", "garbled", "truncated", "link"} {
+		if _, err := os.Lstat(filepath.Join(dir, name)); !errors.Is(err, fs.ErrNotExist) {
+			t.Errorf("%s survived a restart (Lstat: %v)", name, err)
+		}
+	}
+	if re.Used() != kept {
+		t.Errorf("after a restart the cache counts %d bytes, want %d: something not a whole entry was indexed", re.Used(), kept)
+	}
+	before := inner.gets.Load()
+	for _, n := range names {
+		if got := read(t, re, n, 0, -1); !bytes.Equal(got, payload(n, 3000)) {
+			t.Fatalf("%s read back wrong after a restart", n)
+		}
+	}
+	if inner.gets.Load() != before {
+		t.Error("the whole entries were not reused after the restart")
 	}
 }

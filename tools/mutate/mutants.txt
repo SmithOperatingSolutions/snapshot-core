@@ -1090,3 +1090,24 @@ find: if err := r.Done(); err != nil {\n\t\treturn nil, fmt.Errorf("%w: index: %
 replace: if err := r.Err(); err != nil {\n\t\treturn nil, fmt.Errorf("%w: index: %w", ErrCorrupt, err)
 pkg: ./core/pack
 run: ^TestIndexPlaintextMustBeWhole$
+
+id: cache-reload-drops-junk
+file: core/blob/cache/cache.go
+find: if err != nil || ierr != nil {
+replace: if (err != nil && false) || ierr != nil {
+pkg: ./core/blob/cache
+run: ^TestRestartKeepsOnlyWholeEntries$
+
+id: cache-reload-drops-temps
+file: core/blob/cache/cache.go
+find: if !de.Type().IsRegular() || strings.HasPrefix(de.Name(), ".") {
+replace: if !de.Type().IsRegular() {
+pkg: ./core/blob/cache
+run: ^TestRestartKeepsOnlyWholeEntries$
+
+id: cache-reload-regular-only
+file: core/blob/cache/cache.go
+find: if !de.Type().IsRegular() || strings.HasPrefix(de.Name(), ".") {
+replace: if strings.HasPrefix(de.Name(), ".") {
+pkg: ./core/blob/cache
+run: ^TestRestartKeepsOnlyWholeEntries$
