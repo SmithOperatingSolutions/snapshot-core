@@ -63,7 +63,7 @@ func (o Options) checkFS(path string) error {
 	}
 	name, err := detect(path)
 	if err != nil {
-		return fmt.Errorf("%w: %v", ErrUnsupportedFilesystem, err)
+		return fmt.Errorf("%w: %w", ErrUnsupportedFilesystem, err)
 	}
 	if !slices.Contains(AllowedFilesystems, name) {
 		return fmt.Errorf("%w: %s is %q", ErrUnsupportedFilesystem, path, name)
@@ -146,7 +146,7 @@ func Open(dir string, opts Options) (*Store, error) {
 	if !info.IsDir() {
 		return nil, fmt.Errorf("%w: %s is not a directory", ErrNotAStore, dir)
 	}
-	b, err := os.ReadFile(filepath.Join(dir, markerName))
+	b, err := os.ReadFile(filepath.Join(dir, markerName)) //nolint:gosec // G304: the store's own marker file
 	if errors.Is(err, fs.ErrNotExist) {
 		return nil, fmt.Errorf("%w: %s", ErrNotAStore, dir)
 	}
@@ -213,15 +213,15 @@ func (s *Store) Put(ctx context.Context, name string, r io.Reader, size int64) e
 	tmpName := tmp.Name()
 	defer os.Remove(tmpName) // after a successful link it is just a second name
 	if err := tmp.Chmod(filePerm); err != nil {
-		tmp.Close()
+		_ = tmp.Close()
 		return err
 	}
 	if err := blob.CopyExact(tmp, r, size); err != nil {
-		tmp.Close()
+		_ = tmp.Close()
 		return err
 	}
 	if err := tmp.Sync(); err != nil {
-		tmp.Close()
+		_ = tmp.Close()
 		return err
 	}
 	if err := tmp.Close(); err != nil {
@@ -288,12 +288,12 @@ func (s *Store) Get(ctx context.Context, name string, off, n int64) (io.ReadClos
 	}
 	info, err := f.Stat()
 	if err != nil {
-		f.Close()
+		_ = f.Close()
 		return nil, err
 	}
 	start, length, err := blob.Range(off, n, info.Size())
 	if err != nil {
-		f.Close()
+		_ = f.Close()
 		return nil, err
 	}
 	return fileReader{Reader: io.NewSectionReader(f, start, length), f: f}, nil
@@ -506,7 +506,7 @@ func (s *Store) SwapRoot(ctx context.Context, expected blob.Version, next []byte
 }
 
 func writeFileSync(path string, b []byte) error {
-	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, filePerm)
+	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, filePerm) //nolint:gosec // G304: the store's own marker, created once
 	if err != nil {
 		return err
 	}

@@ -12,12 +12,12 @@ import (
 
 // SyncDir makes a directory's entries (a new file's name, a rename) durable.
 func SyncDir(dir string) error {
-	d, err := os.Open(dir)
+	d, err := os.Open(dir) //nolint:gosec // G304: a directory inside the store, never user input
 	if err != nil {
 		return err
 	}
 	if err := d.Sync(); err != nil {
-		d.Close()
+		_ = d.Close()
 		return err
 	}
 	return d.Close()
@@ -26,17 +26,17 @@ func SyncDir(dir string) error {
 // Lock takes an exclusive flock on path. The kernel drops it when the process
 // dies, so a kill -9 never leaves the store locked.
 func Lock(path string) (func(), error) {
-	f, err := os.OpenFile(path, os.O_RDWR|os.O_CREATE, FilePerm)
+	f, err := os.OpenFile(path, os.O_RDWR|os.O_CREATE, FilePerm) //nolint:gosec // G304: the store's own lock file
 	if err != nil {
 		return nil, err
 	}
 	if err := unix.Flock(int(f.Fd()), unix.LOCK_EX); err != nil {
-		f.Close()
+		_ = f.Close()
 		return nil, err
 	}
 	return func() {
 		_ = unix.Flock(int(f.Fd()), unix.LOCK_UN)
-		f.Close()
+		_ = f.Close()
 	}, nil
 }
 

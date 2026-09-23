@@ -138,7 +138,7 @@ func Open(primary string, opts Options) (*Store, error) {
 	if err != nil {
 		return nil, err
 	}
-	b, err := os.ReadFile(filepath.Join(abs, mapName))
+	b, err := os.ReadFile(filepath.Join(abs, mapName)) //nolint:gosec // G304: the store's own volume map
 	if errors.Is(err, fs.ErrNotExist) {
 		return nil, fmt.Errorf("%w: no volume map at %s (is the primary volume mounted?)", ErrNotAStore, abs)
 	}
@@ -155,7 +155,7 @@ func Open(primary string, opts Options) (*Store, error) {
 		st, err := local.Open(filepath.Join(e.path, volDir), local.Options{})
 		switch {
 		case errors.Is(err, local.ErrNotAStore) && i == 0:
-			return nil, fmt.Errorf("%w: primary volume: %v", ErrNotAStore, err)
+			return nil, fmt.Errorf("%w: primary volume: %w", ErrNotAStore, err)
 		case errors.Is(err, local.ErrNotAStore):
 			s.readOnly = true // missing: open read-only rather than guess
 		case err != nil:
@@ -218,7 +218,7 @@ func decodeMap(b []byte) ([]mapEntry, error) {
 		entries = append(entries, mapEntry{id: hex.EncodeToString(id), path: string(path)})
 	}
 	if err := r.Done(); err != nil {
-		return nil, fmt.Errorf("%w: %v", ErrCorrupt, err)
+		return nil, fmt.Errorf("%w: %w", ErrCorrupt, err)
 	}
 	return entries, nil
 }

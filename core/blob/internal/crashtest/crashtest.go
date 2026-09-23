@@ -202,7 +202,8 @@ func SwapRoot(t *testing.T, dir string, open Opener) {
 			okValues[string(Value(p.lastTry))] = p.lastTry
 		}
 		n, ok := okValues[string(r.Value)]
-		if !ok && !(current < 0 && p.lastDone < next && len(r.Value) == 0) {
+		stillEmpty := current < 0 && p.lastDone < next && len(r.Value) == 0 // killed before the first swap ever landed
+		if !ok && !stillEmpty {
 			t.Fatalf("iteration %d: after kill -9 the root is %q; want the last completed swap or the one in "+
 				"flight (%v): the store is neither old nor new", i, r.Value, okValues)
 		}

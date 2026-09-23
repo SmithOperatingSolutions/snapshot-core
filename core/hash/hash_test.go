@@ -73,8 +73,9 @@ func TestZeroAndCompare(t *testing.T) {
 		t.Fatal("IsZero must be true only for the zero hash (SHA-256 of nothing is not zero)")
 	}
 	a, b := hash.Hash{0: 1}, hash.Hash{0: 2}
-	if a.Compare(b) != -1 || b.Compare(a) != 1 || a.Compare(a) != 0 {
-		t.Fatalf("Compare is not bytewise: %d %d %d", a.Compare(b), b.Compare(a), a.Compare(a))
+	same := a
+	if a.Compare(b) != -1 || b.Compare(a) != 1 || a.Compare(same) != 0 {
+		t.Fatalf("Compare is not bytewise: %d %d %d", a.Compare(b), b.Compare(a), a.Compare(same))
 	}
 	c := hash.Hash{31: 1}
 	if zero.Compare(c) != -1 {

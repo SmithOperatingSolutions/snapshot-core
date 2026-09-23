@@ -75,7 +75,7 @@ func keyFileAAD(header []byte) []byte {
 func kekAEAD(passphrase, salt []byte, p Argon2Params) (*dnx.AEAD, error) {
 	kek, err := dnx.DeriveKEK(passphrase, salt, dnx.Argon2Params{Time: p.Time, Memory: p.Memory, Threads: p.Threads})
 	if err != nil {
-		return nil, fmt.Errorf("%w: %v", ErrParams, err)
+		return nil, fmt.Errorf("%w: %w", ErrParams, err)
 	}
 	defer clear(kek)
 	return dnx.NewAEAD(kek)
@@ -137,7 +137,7 @@ func OpenKeyFile(file, passphrase []byte) (*Keyring, error) {
 	id := r.Fixed(32)
 	sealed := r.Fixed(32 + dnx.Overhead)
 	if err := r.Done(); err != nil {
-		return nil, fmt.Errorf("%w: %v", ErrCorrupt, err)
+		return nil, fmt.Errorf("%w: %w", ErrCorrupt, err)
 	}
 	if string(magic) != keyFileMagic || version != keyFileVersion {
 		return nil, fmt.Errorf("%w: not a v%d key file", ErrCorrupt, keyFileVersion)
@@ -204,7 +204,7 @@ func UnwrapKeyring(ctx context.Context, w Wrapper, envelope []byte) (*Keyring, e
 	id := r.Fixed(32)
 	wrapped := r.LenBytes(maxWrapped)
 	if err := r.Done(); err != nil {
-		return nil, fmt.Errorf("%w: %v", ErrCorrupt, err)
+		return nil, fmt.Errorf("%w: %w", ErrCorrupt, err)
 	}
 	if string(magic) != envelopeMagic || version != envelopeVersion || len(wrapped) == 0 {
 		return nil, fmt.Errorf("%w: not a v%d key envelope", ErrCorrupt, envelopeVersion)
