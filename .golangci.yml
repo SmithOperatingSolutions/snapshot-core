@@ -68,7 +68,6 @@ linters:
             - "**/core/dnx/**"
             - "**/core/hash/**"
             - "**/core/auth/**"
-            - "**/core/limits/**"
             - "**/core/seal/**"
             - "**/core/cdc/**"
             - "**/core/boundary/**"
