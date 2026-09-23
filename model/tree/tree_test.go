@@ -15,6 +15,7 @@ import (
 	"github.com/SmithOperatingSolutions/snapshot-core/core/chunk/memstore"
 	"github.com/SmithOperatingSolutions/snapshot-core/core/hash"
 	"github.com/SmithOperatingSolutions/snapshot-core/core/model"
+	"github.com/SmithOperatingSolutions/snapshot-core/core/object"
 	"github.com/SmithOperatingSolutions/snapshot-core/core/prolly"
 	"github.com/SmithOperatingSolutions/snapshot-core/model/contract"
 	"github.com/SmithOperatingSolutions/snapshot-core/model/tree"
@@ -267,5 +268,43 @@ func TestPathsAreCheckedOnReadAndMerge(t *testing.T) {
 	}
 	if _, err := (tree.Model{Config: cfg()}).Merge(ctx, base, base, bad, s); !errors.Is(err, chunk.ErrCorrupt) {
 		t.Errorf("merging in a tree holding a/../b = %v, want ErrCorrupt", err)
+	}
+}
+
+// What the tree model cannot serve is refused wherever it is given: a root
+// of another format is ErrUnknownModel to Read, Validate, Diff (either
+// side) and Merge (any side), and Write refuses a path outside the
+// grammar, and a map geometry the core cannot use.
+func TestTreesRefuseWhatTheyCannotServe(t *testing.T) {
+	s := memstore.New()
+	m := tree.Model{Config: cfg()}
+	good := write(t, s, generate(3))
+	other := good
+	other.Format = 2
+	for _, c := range []struct {
+		name string
+		call func() error
+	}{
+		{"Read", func() error { _, err := tree.Read(ctx, s, cfg(), other); return err }},
+		{"Validate", func() error { return m.Validate(ctx, other, s) }},
+		{"Diff from it", func() error { _, err := m.Diff(ctx, other, good, s); return err }},
+		{"Diff to it", func() error { _, err := m.Diff(ctx, good, other, s); return err }},
+		{"Merge from it", func() error { _, err := m.Merge(ctx, other, good, good, s); return err }},
+		{"Merge into it", func() error { _, err := m.Merge(ctx, good, other, good, s); return err }},
+		{"Merge it in", func() error { _, err := m.Merge(ctx, good, good, other, s); return err }},
+	} {
+		if err := c.call(); !errors.Is(err, model.ErrUnknownModel) {
+			t.Errorf("%s: a tree root of format 2 = %v, want ErrUnknownModel", c.name, err)
+		}
+	}
+	for _, p := range []string{"", "a/../b", "/abs", "a//b", "dir/"} {
+		if _, err := tree.Write(ctx, s, cfg(), map[string]tree.Entry{"ok": file("ok"), p: file(p)}); !errors.Is(err, object.ErrInvalidPath) {
+			t.Errorf("Write of a tree holding %q = %v, want ErrInvalidPath", p, err)
+		}
+	}
+	unusable := cfg()
+	unusable.InlineLimit = -1
+	if _, err := tree.Write(ctx, s, unusable, generate(3)); err == nil {
+		t.Error("Write with an inline limit of -1 succeeded")
 	}
 }

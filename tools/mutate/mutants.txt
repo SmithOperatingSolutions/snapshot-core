@@ -2407,3 +2407,45 @@ find: if errors.Is(err, vcs.ErrExists) {\n\t\t\treturn nil, ErrExists
 replace: if err != nil {\n\t\t\treturn nil, ErrExists
 pkg: ./core/repo
 run: ^TestEveryStoreFailureIsSurvivable$
+
+id: tree-root-format-checked
+file: model/tree/tree.go
+find: if root.Format != Format {
+replace: if root.Format != Format && false {
+pkg: ./model/tree
+run: ^TestTreesRefuseWhatTheyCannotServe$
+
+id: tree-write-checks-paths
+file: model/tree/tree.go
+find: if err := object.ValidPath(p); err != nil {\n\t\t\treturn model.Root{}, err
+replace: if err := object.ValidPath(p); err != nil && false {\n\t\t\treturn model.Root{}, err
+pkg: ./model/tree
+run: ^TestTreesRefuseWhatTheyCannotServe$
+
+id: tree-read-only-refuses-writes
+file: model/tree/tree.go
+find: return hash.Hash{}, errors.New("tree: this store is read-only")
+replace: return hash.Hash{}, errors.Unwrap(nil)
+pkg: ./model/tree
+run: ^TestTheReadOnlyStoreRefusesWrites$
+
+id: tree-read-surfaces-iteration-errors
+file: model/tree/tree.go
+find: k, v, ok, err := it.Next()\n\t\tif err != nil {\n\t\t\treturn nil, err
+replace: k, v, ok, err := it.Next()\n\t\tif err != nil && false {\n\t\t\treturn nil, err
+pkg: ./model/tree
+run: ^TestStoreErrorsSurfaceAtEveryPoint$
+
+id: tree-merge-surfaces-diff-errors
+file: model/tree/tree.go
+find: if err != nil {\n\t\treturn model.MergeResult{}, err\n\t}\n\tif len(conflicts) > 0 {
+replace: if err != nil && false {\n\t\treturn model.MergeResult{}, err\n\t}\n\tif len(conflicts) > 0 {
+pkg: ./model/tree
+run: ^TestStoreErrorsSurfaceAtEveryPoint$
+
+id: tree-diff-surfaces-iteration-errors
+file: model/tree/tree.go
+find: if err != nil || !ok {\n\t\treturn model.Change{}, false, err
+replace: if err != nil || !ok {\n\t\treturn model.Change{}, false, nil
+pkg: ./model/tree
+run: ^TestStoreErrorsSurfaceAtEveryPoint$

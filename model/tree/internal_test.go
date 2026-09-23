@@ -2,6 +2,7 @@ package tree
 
 import (
 	"bytes"
+	"context"
 	"testing"
 
 	"github.com/SmithOperatingSolutions/snapshot-core/core/model"
@@ -21,4 +22,12 @@ func FuzzDecodeEntry(f *testing.F) {
 			t.Fatal("an entry decoded that does not re-encode to itself")
 		}
 	})
+}
+
+// The store Read, Validate and Diff open trees over refuses writes, so
+// reading a tree never writes one.
+func TestTheReadOnlyStoreRefusesWrites(t *testing.T) {
+	if _, err := (readOnly{}).Put(context.Background(), []byte("a write")); err == nil {
+		t.Fatal("the read-only store took a write")
+	}
 }
