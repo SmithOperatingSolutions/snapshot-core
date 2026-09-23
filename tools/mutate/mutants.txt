@@ -2267,3 +2267,52 @@ find: if err == nil && !ok {\n\t\terr = corrupt("branch %s has no working set", 
 replace: if err == nil && !ok && false {\n\t\terr = corrupt("branch %s has no working set", branch)
 pkg: ./core/vcs
 run: ^TestForgedRefsAreCorrupt$
+
+id: vcs-branches-authorized
+file: core/vcs/vcs.go
+find: func (r *Repo) Branches(ctx context.Context, p auth.Principal) ([]string, error) {\n\tif err := r.check(ctx, p, auth.Read, "repo"); err != nil {
+replace: func (r *Repo) Branches(ctx context.Context, p auth.Principal) ([]string, error) {\n\tif err := r.check(ctx, p, auth.Read, "repo"); err != nil && false {
+pkg: ./core/vcs
+run: ^TestEveryCallIsAuthorized$
+
+id: vcs-read-commit-authorized
+file: core/vcs/vcs.go
+find: func (r *Repo) ReadCommit(ctx context.Context, p auth.Principal, h hash.Hash) (Commit, error) {\n\tif err := r.check(ctx, p, auth.Read, "repo"); err != nil {
+replace: func (r *Repo) ReadCommit(ctx context.Context, p auth.Principal, h hash.Hash) (Commit, error) {\n\tif err := r.check(ctx, p, auth.Read, "repo"); err != nil && false {
+pkg: ./core/vcs
+run: ^TestEveryCallIsAuthorized$
+
+id: vcs-merge-base-authorized
+file: core/vcs/vcs.go
+find: func (r *Repo) MergeBase(ctx context.Context, p auth.Principal, a, b hash.Hash) (hash.Hash, error) {\n\tif err := r.check(ctx, p, auth.Read, "repo"); err != nil {
+replace: func (r *Repo) MergeBase(ctx context.Context, p auth.Principal, a, b hash.Hash) (hash.Hash, error) {\n\tif err := r.check(ctx, p, auth.Read, "repo"); err != nil && false {
+pkg: ./core/vcs
+run: ^TestEveryCallIsAuthorized$
+
+id: vcs-update-working-set-authorized
+file: core/vcs/vcs.go
+find: func (r *Repo) UpdateWorkingSet(ctx context.Context, p auth.Principal, branch string, prev, next WorkingSet) (WorkingSet, error) {\n\tif err := r.branchCheck(ctx, p, auth.Write, branch); err != nil {
+replace: func (r *Repo) UpdateWorkingSet(ctx context.Context, p auth.Principal, branch string, prev, next WorkingSet) (WorkingSet, error) {\n\tif err := r.branchCheck(ctx, p, auth.Write, branch); err != nil && false {
+pkg: ./core/vcs
+run: ^TestEveryCallIsAuthorized$
+
+id: vcs-delete-branch-authorized
+file: core/vcs/vcs.go
+find: func (r *Repo) DeleteBranch(ctx context.Context, p auth.Principal, name string) error {\n\tif err := r.branchCheck(ctx, p, auth.Manage, name); err != nil {
+replace: func (r *Repo) DeleteBranch(ctx context.Context, p auth.Principal, name string) error {\n\tif err := r.branchCheck(ctx, p, auth.Manage, name); err != nil && false {
+pkg: ./core/vcs
+run: ^TestEveryCallIsAuthorized$
+
+id: vcs-merge-authorized
+file: core/vcs/vcs.go
+find: func (r *Repo) Merge(ctx context.Context, p auth.Principal, branch string, theirs hash.Hash) (merge.Result, error) {\n\tif err := r.branchCheck(ctx, p, auth.Write, branch); err != nil {
+replace: func (r *Repo) Merge(ctx context.Context, p auth.Principal, branch string, theirs hash.Hash) (merge.Result, error) {\n\tif err := r.branchCheck(ctx, p, auth.Write, branch); err != nil && false {
+pkg: ./core/vcs
+run: ^TestEveryCallIsAuthorized$
+
+id: vcs-resolve-authorized
+file: core/vcs/vcs.go
+find: func (r *Repo) ResolveConflict(ctx context.Context, p auth.Principal, branch, path string, to *object.Ref) error {\n\tif err := r.branchCheck(ctx, p, auth.Write, branch); err != nil {
+replace: func (r *Repo) ResolveConflict(ctx context.Context, p auth.Principal, branch, path string, to *object.Ref) error {\n\tif err := r.branchCheck(ctx, p, auth.Write, branch); err != nil && false {
+pkg: ./core/vcs
+run: ^TestEveryCallIsAuthorized$

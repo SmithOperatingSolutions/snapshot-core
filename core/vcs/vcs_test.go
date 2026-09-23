@@ -468,11 +468,33 @@ func (r *recording) Authorize(_ context.Context, p auth.Principal, a auth.Action
 	return nil
 }
 
+// readOnly allows reading and nothing else.
+type readOnly struct{}
+
+func (readOnly) Authorize(_ context.Context, _ auth.Principal, a auth.Action, _ string) error {
+	if a != auth.Read {
+		return errors.New("read only")
+	}
+	return nil
+}
+
 // Every call asks the authorizer about exactly what it does; none gets
-// through a repository whose authorizer denies (nil denies too).
+// through a repository whose authorizer denies (nil denies too), and none
+// that changes anything gets through on permission to read.
 func TestEveryCallIsAuthorized(t *testing.T) {
 	f := newFixture(t)
-	head := f.head(vcs.MainBranch).Hash
+	f.put(vcs.MainBranch, "doc", f.obj(8, "base"))
+	f.commit(vcs.MainBranch, "base")
+	f.branchFrom("dev")
+	f.put("dev", "doc", f.obj(8, "dev"))
+	theirs := f.commit("dev", "dev work").Hash
+	f.put(vcs.MainBranch, "doc", f.obj(8, "main"))
+	head := f.commit(vcs.MainBranch, "main work").Hash
+	ws, err := f.r.WorkingSet(ctx, alice, vcs.MainBranch)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resolved := f.obj(8, "resolved")
 	rec := &recording{}
 	o := f.o
 	o.Authorizer = rec
@@ -487,10 +509,25 @@ func TestEveryCallIsAuthorized(t *testing.T) {
 	calls := []call{
 		{"user:bob 1 branch:main", func(r *vcs.Repo) error { _, err := r.Head(ctx, bob, "main"); return err }},
 		{"user:bob 1 branch:main", func(r *vcs.Repo) error { _, err := r.WorkingSet(ctx, bob, "main"); return err }},
-		{"user:bob 2 branch:main", func(r *vcs.Repo) error { _, err := r.CommitWorkingSet(ctx, bob, "main", "m"); return err }},
-		{"user:bob 3 branch:dev", func(r *vcs.Repo) error { return r.CreateBranch(ctx, bob, "dev", head) }},
-		{"user:bob 3 tag:v1", func(r *vcs.Repo) error { _, err := r.CreateTag(ctx, bob, "v1", head, "t"); return err }},
+		{"user:bob 1 repo", func(r *vcs.Repo) error { _, err := r.Branches(ctx, bob); return err }},
+		{"user:bob 1 repo", func(r *vcs.Repo) error { _, err := r.ReadCommit(ctx, bob, head); return err }},
 		{"user:bob 1 repo", func(r *vcs.Repo) error { _, err := r.Log(ctx, bob, head, 1); return err }},
+		{"user:bob 1 repo", func(r *vcs.Repo) error { _, err := r.MergeBase(ctx, bob, head, theirs); return err }},
+		{"user:bob 2 branch:main", func(r *vcs.Repo) error { _, err := r.UpdateWorkingSet(ctx, bob, "main", ws, ws); return err }},
+		{"user:bob 2 branch:main", func(r *vcs.Repo) error { _, err := r.CommitWorkingSet(ctx, bob, "main", "m"); return err }},
+		{"user:bob 3 branch:feature", func(r *vcs.Repo) error { return r.CreateBranch(ctx, bob, "feature", head) }},
+		{"user:bob 1 branch:feature", func(r *vcs.Repo) error {
+			sess, err := r.Checkout(ctx, bob, "feature")
+			if err == nil {
+				sess.Close()
+			}
+			return err
+		}},
+		{"user:bob 3 branch:feature", func(r *vcs.Repo) error { return r.DeleteBranch(ctx, bob, "feature") }},
+		{"user:bob 3 tag:v1", func(r *vcs.Repo) error { _, err := r.CreateTag(ctx, bob, "v1", head, "t"); return err }},
+		{"user:bob 2 branch:main", func(r *vcs.Repo) error { _, err := r.Merge(ctx, bob, "main", theirs); return err }},
+		{"user:bob 1 branch:main", func(r *vcs.Repo) error { _, err := r.Conflicts(ctx, bob, "main"); return err }},
+		{"user:bob 2 branch:main", func(r *vcs.Repo) error { return r.ResolveConflict(ctx, bob, "main", "doc", &resolved) }},
 	}
 	for _, c := range calls {
 		rec.calls = nil
@@ -512,6 +549,17 @@ func TestEveryCallIsAuthorized(t *testing.T) {
 			if err := c.do(denied); !errors.Is(err, auth.ErrDenied) {
 				t.Errorf("%s: %q = %v, want ErrDenied", name, c.want, err)
 			}
+		}
+	}
+	o.Authorizer = readOnly{}
+	reader, err := vcs.Open(ctx, f.s, o)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, c := range calls {
+		reads := strings.Fields(c.want)[1] == "1"
+		if err := c.do(reader); errors.Is(err, auth.ErrDenied) == reads {
+			t.Errorf("read only: %q = %v; want ErrDenied exactly when it needs more than read", c.want, err)
 		}
 	}
 }
