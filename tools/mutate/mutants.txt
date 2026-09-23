@@ -2589,3 +2589,52 @@ find: if err != nil || !deeper || depth == 0 {
 replace: if err != nil || !(deeper || true) || depth == 0 {
 pkg: ./core/stream
 run: ^TestWalkGoesNoFurtherThanVisitSays$
+
+id: prolly-walk-validates-config
+file: core/prolly/walk.go
+find: if _, err := c.rule(); err != nil {
+replace: if _, err := c.rule(); err != nil && false {
+pkg: ./core/prolly
+run: ^TestWalkRefusesForgedMaps$
+
+id: prolly-walk-root-has-two-children
+file: core/prolly/walk.go
+find: if n.level > 0 && len(n.entries) < 2 {
+replace: if n.level > 0 && len(n.entries) < 2 && false {
+pkg: ./core/prolly
+run: ^TestWalkRefusesForgedMaps$
+
+id: prolly-walk-checks-children
+file: core/prolly/walk.go
+find: if err := checkChild(n, i, c); err != nil {
+replace: if err := checkChild(n, i, c); err != nil && false {
+pkg: ./core/prolly
+run: ^TestWalkRefusesForgedMaps$
+
+id: prolly-walk-names-long-values
+file: core/prolly/walk.go
+find: if e.val.ref != nil {\n\t\tif err := stream.Walk(
+replace: if e.val.ref != nil && false {\n\t\tif err := stream.Walk(
+pkg: ./core/prolly
+run: ^TestWalkNamesEveryChunkOfAMap$
+
+id: prolly-walk-reads-long-values-whole
+file: core/prolly/walk.go
+find: v := e.val.inline\n\tif e.val.ref != nil {
+replace: v := e.val.inline\n\tif e.val.ref != nil && false {
+pkg: ./core/prolly
+run: ^TestWalkNamesEveryChunkOfAMap$
+
+id: prolly-walk-honors-visit-for-children
+file: core/prolly/walk.go
+find: if !deeper {\n\t\t\tcontinue
+replace: if !deeper && false {\n\t\t\tcontinue
+pkg: ./core/prolly
+run: ^TestWalkGoesNoFurtherThanVisitSays$
+
+id: prolly-walk-honors-visit-for-the-root
+file: core/prolly/walk.go
+find: if err != nil || !deeper {\n\t\treturn err\n\t}\n\tn, err := w.read(root)
+replace: if err != nil || !(deeper || true) {\n\t\treturn err\n\t}\n\tn, err := w.read(root)
+pkg: ./core/prolly
+run: ^TestWalkGoesNoFurtherThanVisitSays$

@@ -112,24 +112,32 @@ func (m *Map) read(ctx context.Context, h hash.Hash) (*node, error) {
 
 // child reads the child of p's entry i and checks it against the entry.
 func (m *Map) child(ctx context.Context, p *node, i int) (*node, error) {
-	e := p.entries[i]
-	c, err := m.read(ctx, e.child)
+	c, err := m.read(ctx, p.entries[i].child)
 	if err != nil {
 		return nil, err
 	}
-	switch {
-	case c.level != p.level-1:
-		return nil, corrupt("a level-%d node's child is level %d", p.level, c.level)
-	case len(c.entries) == 0:
-		return nil, corrupt("a level-%d node's child is empty", p.level)
-	case !bytes.Equal(c.lastKey(), e.key):
-		return nil, corrupt("a level-%d entry's key is not its child's last key", p.level)
-	case c.total() != e.count:
-		return nil, corrupt("a level-%d entry counts %d entries, its child holds %d", p.level, e.count, c.total())
-	case i > 0 && bytes.Compare(c.entries[0].key, p.entries[i-1].key) <= 0:
-		return nil, corrupt("a level-%d node's children overlap", p.level)
+	if err := checkChild(p, i, c); err != nil {
+		return nil, err
 	}
 	return c, nil
+}
+
+// checkChild checks c, the child of p's entry i, against the entry.
+func checkChild(p *node, i int, c *node) error {
+	e := p.entries[i]
+	switch {
+	case c.level != p.level-1:
+		return corrupt("a level-%d node's child is level %d", p.level, c.level)
+	case len(c.entries) == 0:
+		return corrupt("a level-%d node's child is empty", p.level)
+	case !bytes.Equal(c.lastKey(), e.key):
+		return corrupt("a level-%d entry's key is not its child's last key", p.level)
+	case c.total() != e.count:
+		return corrupt("a level-%d entry counts %d entries, its child holds %d", p.level, e.count, c.total())
+	case i > 0 && bytes.Compare(c.entries[0].key, p.entries[i-1].key) <= 0:
+		return corrupt("a level-%d node's children overlap", p.level)
+	}
+	return nil
 }
 
 // materialize returns a value's bytes, reading a stream for a long one.
