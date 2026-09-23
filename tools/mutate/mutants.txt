@@ -2869,3 +2869,45 @@ find: if !live(r.man.root) {
 replace: if !live(r.man.root) && false {
 pkg: ./core/chunk/packstore
 run: ^TestARoundRefusesALiveSetWithoutTheRoot$
+
+id: packstore-put-skips-condemned-packs
+file: core/chunk/packstore/packstore.go
+find: if loc, ok := s.index.Lookup(h); ok && !s.condemned[loc.Pack.Name] {
+replace: if loc, ok := s.index.Lookup(h); ok && !(s.condemned[loc.Pack.Name] && false) {
+pkg: ./core/chunk/packstore
+run: ^TestWritersDoNotDeduplicateAgainstCondemnedPacks$
+
+id: packstore-publish-checks-survivors
+file: core/chunk/packstore/packstore.go
+find: if err := s.survived(m); err != nil {
+replace: if err := s.survived(m); err != nil && false {
+pkg: ./core/chunk/packstore
+run: ^TestAWriterFencedWhenAPackItCountedOnExpires$
+
+id: packstore-survived-after-a-collection
+file: core/chunk/packstore/packstore.go
+find: if m.gcGen == s.sessGen {
+replace: if m.gcGen == s.sessGen || true {
+pkg: ./core/chunk/packstore
+run: ^TestAWriterFencedWhenAPackItCountedOnExpires$
+
+id: packstore-refresh-rebuilds-after-expiry
+file: core/chunk/packstore/packstore.go
+find: rebuild := s.ver != blob.NoVersion && m.seq > s.man.seq && m.gcGen != s.man.gcGen
+replace: rebuild := false && s.ver != blob.NoVersion && m.seq > s.man.seq && m.gcGen != s.man.gcGen
+pkg: ./core/chunk/packstore
+run: ^TestAStoreForgetsChunksWhosePacksExpired$
+
+id: packstore-get-refreshes-on-a-missing-pack
+file: core/chunk/packstore/packstore.go
+find: if errors.Is(err, blob.ErrNotFound) {\n\t\t// GC may have expired the pack
+replace: if errors.Is(err, blob.ErrNotFound) && false {\n\t\t// GC may have expired the pack
+pkg: ./core/chunk/packstore
+run: ^TestReadingAnExpiredChunkIsNotFound$
+
+id: packstore-round-moves-the-generation
+file: core/chunk/packstore/gc.go
+find: upd.gcGen++
+replace: upd.gcGen += 0
+pkg: ./core/chunk/packstore
+run: ^TestAWriterFencedWhenAPackItCountedOnExpires$

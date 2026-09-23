@@ -78,6 +78,13 @@ type Store struct {
 	ver        blob.Version // its version
 	loaded     map[[32]byte]bool
 	keys       map[seal.Salt]*pack.Keys
+
+	// GC (docs/DESIGN.md §9).
+	condemned   map[string]bool       // packs the newest manifest condemns
+	unpublished map[string]pack.Info  // packs built here that no published index object lists
+	inIndex     map[[32]byte][]string // session index objects written, and the packs each lists
+	deduped     map[hash.Hash]bool    // chunks puts found stored, since the last publish
+	sessGen     uint64                // the gcGen those puts began under
 }
 
 var _ chunk.Store = (*Store)(nil)
@@ -101,7 +108,8 @@ func Open(ctx context.Context, o Options) (*Store, error) {
 		return nil, err
 	}
 	s := &Store{o: o, codec: codec, index: dedup.New(), inflight: map[string][]byte{},
-		loaded: map[[32]byte]bool{}, keys: map[seal.Salt]*pack.Keys{}}
+		loaded: map[[32]byte]bool{}, keys: map[seal.Salt]*pack.Keys{}, condemned: map[string]bool{},
+		unpublished: map[string]pack.Info{}, inIndex: map[[32]byte][]string{}, deduped: map[hash.Hash]bool{}}
 	switch {
 	case o.CacheBytes == 0:
 		s.cache = newCache(DefaultCacheBytes)
@@ -112,11 +120,15 @@ func Open(ctx context.Context, o Options) (*Store, error) {
 		codec.Close()
 		return nil, err
 	}
+	s.sessGen = s.man.gcGen
 	return s, nil
 }
 
 // refresh reads the current manifest and loads any index objects it lists
-// that this store has not loaded.
+// that this store has not loaded. When GC has expired packs since the
+// manifest this store knew (gcGen moved), the index is rebuilt from the
+// manifest's index objects and the packs built here and not yet published,
+// so it names nothing in a deleted pack.
 func (s *Store) refresh(ctx context.Context) error {
 	r, err := s.o.Blobs.Root(ctx)
 	if err != nil {
@@ -129,9 +141,10 @@ func (s *Store) refresh(ctx context.Context) error {
 		}
 	}
 	s.mu.Lock()
+	rebuild := s.ver != blob.NoVersion && m.seq > s.man.seq && m.gcGen != s.man.gcGen
 	var toLoad [][32]byte
 	for _, sum := range m.indexes {
-		if !s.loaded[sum] {
+		if rebuild || !s.loaded[sum] {
 			toLoad = append(toLoad, sum)
 		}
 	}
@@ -146,19 +159,41 @@ func (s *Store) refresh(ctx context.Context) error {
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	for sum, infos := range loaded {
-		if s.loaded[sum] {
-			continue
-		}
-		for _, info := range infos {
-			s.index.Add(info)
-		}
-		s.loaded[sum] = true
-	}
 	// Manifests only move forward (every swap increments seq); a slower
 	// refresh must not roll back what a faster one saw.
-	if s.ver == blob.NoVersion || m.seq > s.man.seq {
+	newer := s.ver == blob.NoVersion || m.seq > s.man.seq
+	if rebuild && newer {
+		x := dedup.New()
+		s.loaded = map[[32]byte]bool{}
+		for _, sum := range m.indexes {
+			for _, info := range loaded[sum] {
+				x.Add(info)
+			}
+			s.loaded[sum] = true
+		}
+		for _, info := range s.unpublished {
+			x.Add(info)
+		}
+		s.index = x
+	} else if !rebuild {
+		for sum, infos := range loaded {
+			if s.loaded[sum] {
+				continue
+			}
+			for _, info := range infos {
+				s.index.Add(info)
+			}
+			s.loaded[sum] = true
+		}
+	}
+	if newer {
 		s.man, s.ver = m, r.Version
+		s.condemned = map[string]bool{}
+		for _, c := range m.condemned {
+			if c.kind == condemnedPack {
+				s.condemned[dedup.PackName(c.sum)] = true
+			}
+		}
 	}
 	return nil
 }
@@ -214,6 +249,7 @@ func (s *Store) finishPendingLocked() (*pack.Built, error) {
 	}
 	s.index.Add(b.Info)
 	s.inflight[b.Name] = b.Bytes
+	s.unpublished[b.Name] = b.Info
 	return &b, nil
 }
 
@@ -254,7 +290,13 @@ func (s *Store) Put(ctx context.Context, data []byte) (hash.Hash, error) {
 		s.mu.Unlock()
 		return hash.Hash{}, chunk.ErrClosed
 	}
-	if (s.pending != nil && s.pending.Has(h)) || s.index.Has(h) {
+	if s.pending != nil && s.pending.Has(h) {
+		s.mu.Unlock()
+		return h, nil
+	}
+	if loc, ok := s.index.Lookup(h); ok && !s.condemned[loc.Pack.Name] {
+		// Counted on: the publish checks it survived any collection.
+		s.deduped[h] = true
 		s.mu.Unlock()
 		return h, nil
 	}
@@ -325,26 +367,19 @@ func (s *Store) Get(ctx context.Context, h hash.Hash) ([]byte, error) {
 	if data, ok := s.cache.get(h); ok {
 		return verified(h, bytes.Clone(data))
 	}
-	loc, local, keys, err := s.locate(ctx, h)
-	if err != nil {
-		return nil, err
-	}
-	var frame []byte
-	if local != nil {
-		frame = local[loc.Entry.Offset : loc.Entry.Offset+loc.Entry.StoredLen]
-	} else {
-		rc, err := s.o.Blobs.Get(ctx, loc.Pack.Name, int64(loc.Entry.Offset), int64(loc.Entry.StoredLen))
+	loc, frame, keys, err := s.frame(ctx, h)
+	if errors.Is(err, blob.ErrNotFound) {
+		// GC may have expired the pack: a refresh rebuilds the index.
+		if err := s.refresh(ctx); err != nil {
+			return nil, err
+		}
+		loc, frame, keys, err = s.frame(ctx, h)
 		if errors.Is(err, blob.ErrNotFound) {
 			return nil, fmt.Errorf("%w: %s is in pack %s, which is missing", chunk.ErrCorrupt, h.Short(), loc.Pack.Name)
 		}
-		if err != nil {
-			return nil, err
-		}
-		frame, err = io.ReadAll(rc)
-		_ = rc.Close()
-		if err != nil {
-			return nil, err
-		}
+	}
+	if err != nil {
+		return nil, err
 	}
 	data, err := pack.OpenFrame(keys, s.codec, loc.Entry, frame)
 	if err != nil {
@@ -352,6 +387,28 @@ func (s *Store) Get(ctx context.Context, h hash.Hash) ([]byte, error) {
 	}
 	s.cache.put(h, bytes.Clone(data))
 	return data, nil
+}
+
+// frame locates a chunk and reads its sealed frame, from memory or the
+// backend; a pack the backend does not have is blob.ErrNotFound.
+func (s *Store) frame(ctx context.Context, h hash.Hash) (dedup.Location, []byte, *pack.Keys, error) {
+	loc, local, keys, err := s.locate(ctx, h)
+	if err != nil {
+		return dedup.Location{}, nil, nil, err
+	}
+	if local != nil {
+		return loc, local[loc.Entry.Offset : loc.Entry.Offset+loc.Entry.StoredLen], keys, nil
+	}
+	rc, err := s.o.Blobs.Get(ctx, loc.Pack.Name, int64(loc.Entry.Offset), int64(loc.Entry.StoredLen))
+	if err != nil {
+		return loc, nil, nil, err
+	}
+	frame, err := io.ReadAll(rc)
+	_ = rc.Close()
+	if err != nil {
+		return loc, nil, nil, err
+	}
+	return loc, frame, keys, nil
 }
 
 // locate finds a chunk, refreshing the manifest once if it is unknown.
@@ -472,6 +529,9 @@ func (s *Store) CompareAndSetRoot(ctx context.Context, expected, next hash.Hash)
 		if m.root != expected {
 			return chunk.ErrRootConflict // the root moved: the caller's conflict
 		}
+		if err := s.survived(m); err != nil {
+			return err
+		}
 		upd := m
 		upd.seq = m.seq + 1
 		upd.root = next
@@ -487,7 +547,14 @@ func (s *Store) CompareAndSetRoot(ctx context.Context, expected, next hash.Hash)
 		if err == nil {
 			s.mu.Lock()
 			s.man, s.ver = upd, nv
+			for _, sum := range pending {
+				for _, name := range s.inIndex[sum] {
+					delete(s.unpublished, name)
+				}
+				delete(s.inIndex, sum)
+			}
 			s.sessionIdx = s.sessionIdx[len(pending):]
+			s.deduped, s.sessGen = map[hash.Hash]bool{}, upd.gcGen
 			s.mu.Unlock()
 			return nil
 		}
@@ -548,11 +615,34 @@ func (s *Store) writeSessionIndex(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+	names := make([]string, len(session))
+	for i, p := range session {
+		names[i] = p.Name
+	}
 	s.mu.Lock()
 	s.session = s.session[len(session):]
 	s.sessionIdx = append(s.sessionIdx, sum)
 	s.loaded[sum] = true
+	s.inIndex[sum] = names
 	s.mu.Unlock()
+	return nil
+}
+
+// survived fails with chunk.ErrStale when GC expired packs since this
+// store's writes began (m, the manifest about to be replaced, is newer in
+// gcGen) and a chunk a put counted on is no longer stored: publishing would
+// name a chunk that is gone. The index was rebuilt when the store saw m.
+func (s *Store) survived(m manifest) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if m.gcGen == s.sessGen {
+		return nil
+	}
+	for h := range s.deduped {
+		if !s.index.Has(h) && (s.pending == nil || !s.pending.Has(h)) {
+			return fmt.Errorf("%w: %s", chunk.ErrStale, h.Short())
+		}
+	}
 	return nil
 }
 
