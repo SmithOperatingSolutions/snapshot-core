@@ -459,3 +459,48 @@ func TestBaseDefaultsToMainThenTheRootCommit(t *testing.T) {
 			rep.Base, rep.Commits, rep.Checked, err, f.base)
 	}
 }
+
+const remoteContractTest = `package calc
+
+import (
+	"testing"
+
+	"example.com/fx/calc/contract"
+)
+
+func TestContractRemote(t *testing.T) {
+	t.Skip("set an endpoint to run the remote tier")
+	contract.Run(t, Add)
+}
+`
+
+// A test brought in only because it calls a changed contract may need an
+// environment the check does not have (the MinIO tier skips without an
+// endpoint): its skip is not a deleted test, and it is not judged. A contract
+// change must still be seen to fail somewhere, so every caller skipping is.
+func TestAContractCallerThatSkipsIsNotJudged(t *testing.T) {
+	f := contractFixture(t, "")
+	f.write("calc/remote_test.go", remoteContractTest)
+	f.commit("chore: a remote contract run that needs an endpoint")
+	f.write("calc/contract/contract.go", contractV1)
+	f.commit("test(calc): the contract requires Add to add")
+	f.write("calc/calc.go", addImpl)
+	f.commit("feat(calc): Add adds")
+
+	rep := f.check()
+	if len(rep.Violations) != 0 || rep.TestsRun != 1 {
+		t.Fatalf("a contract caller that skipped for want of an environment blocked the commit "+
+			"or was counted as run (ran %d):\n%s", rep.TestsRun, reasons(rep))
+	}
+
+	g := newFixture(t)
+	g.write("calc/contract/contract.go", contractV0)
+	g.write("calc/remote_test.go", remoteContractTest)
+	g.commit("chore: only a remote contract run")
+	g.write("calc/contract/contract.go", contractV1)
+	g.commit("test(calc): the contract requires Add to add")
+	rep = g.check()
+	if len(rep.Violations) != 1 || !strings.Contains(rep.Violations[0].Reason, "skipped") || rep.TestsRun != 0 {
+		t.Fatalf("a contract change whose every caller skipped was accepted (ran %d):\n%s", rep.TestsRun, reasons(rep))
+	}
+}
