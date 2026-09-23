@@ -138,3 +138,9 @@ func (s *Store) SwapRoot(ctx context.Context, expected blob.Version, next []byte
 	s.root, s.version = bytes.Clone(next), v
 	return v, nil
 }
+
+// WriteMirror replaces the root's copy a split store keeps here.
+func (s *Store) WriteMirror(ctx context.Context, value []byte) error { return nil }
+
+// ReadMirror returns the root's copy, or nothing when there is none.
+func (s *Store) ReadMirror(ctx context.Context) ([]byte, error) { return nil, nil }

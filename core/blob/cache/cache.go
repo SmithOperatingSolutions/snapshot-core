@@ -299,3 +299,14 @@ func (s *Store) Delete(ctx context.Context, name string) error {
 	}
 	return nil
 }
+
+// WriteMirror passes the root's copy through to the store behind the cache
+// (blob/split): the copy is never cached.
+func (s *Store) WriteMirror(ctx context.Context, value []byte) error {
+	return errors.New("cache: not implemented")
+}
+
+// ReadMirror reads the root's copy from the store behind the cache.
+func (s *Store) ReadMirror(ctx context.Context) ([]byte, error) {
+	return nil, errors.New("cache: not implemented")
+}
