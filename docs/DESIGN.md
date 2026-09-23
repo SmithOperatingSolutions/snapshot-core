@@ -230,4 +230,20 @@ stream ref  root [32] · size · depth
   boundary, so it rewrites exactly one node per level: height + 1 nodes.
 - `Diff` walks both trees in key order and skips every pair of aligned
   subtrees whose hashes match, so its reads grow with the size of the change
-  times the height, not with the size of the map.
+  times the height, not with the size of the map. Wherever both sides' parent
+  entries match (same key, same child), the child is skipped without being
+  read, at the highest level where they match (Dolt's `skipCommon`); two maps
+  with equal roots read nothing.
+- Bounds the tests hold the code to: one edit reads at most 3·(height+1)
+  nodes to flush; a same-length value edit writes exactly height+1; a flush
+  that changes nothing writes nothing (a re-chunked node identical to the
+  one it replaces is named, not stored again); a diff of n changes reads at
+  most 4·n·(height+1).
+- Every store error surfaces as that error, from every operation at every
+  point it touches the store: a failed read is never a missing key, the end
+  of an iteration or "no difference", and a flush that failed leaves the
+  editor's edits in place to retry.
+- Values over the inline limit are written as streams when the editor
+  flushes; `Get`, iteration and `Diff` read them back whole. The map and its
+  editor are concrete types, not a port: there is one implementation, and
+  the chunk store beneath it is the swappable part.

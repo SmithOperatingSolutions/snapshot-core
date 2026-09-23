@@ -70,6 +70,15 @@ Red-Check: mutants mem-swap-compares-version
 redcheck then requires the commit's tests to pass, and each named mutant to be
 killed by those tests alone.
 
+**Property tests and their red.** A `test:` commit's red run fails its
+`rapid` properties on purpose, and rapid saves each failure under
+`testdata/rapid/`. Those files record the stub, not a bug: delete them
+before committing. (A real property failure found later is the opposite:
+minimize it and check it in as a regression case.) And check that a
+property's cases reach the inputs it is about: rapid draws mostly small
+values, so a property over trees must see deep trees (`deepEnough` in
+`core/prolly` fails a run that did not).
+
 ## Regressions
 
 Every bug gets a test named after its ticket, written before the fix:
