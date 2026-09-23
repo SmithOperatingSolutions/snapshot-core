@@ -372,3 +372,79 @@ func TestAnObjectBiggerThanTheCacheDoesNotFlushIt(t *testing.T) {
 		t.Error("an object bigger than the whole cache was served from it")
 	}
 }
+
+var errMidRead = errors.New("connection reset mid-read")
+
+// flaky's reads fail halfway through while fail is set; it counts the
+// readers it hands out and the ones closed.
+type flaky struct {
+	blob.BlobStore
+	fail           atomic.Bool
+	opened, closed atomic.Int64
+}
+
+type body struct {
+	r      io.Reader
+	fail   bool
+	closed *atomic.Int64
+}
+
+func (b *body) Read(p []byte) (int, error) {
+	n, err := b.r.Read(p)
+	if err == io.EOF && b.fail {
+		return n, errMidRead
+	}
+	return n, err
+}
+
+func (b *body) Close() error {
+	b.closed.Add(1)
+	return nil
+}
+
+func (f *flaky) Get(ctx context.Context, name string, off, n int64) (io.ReadCloser, error) {
+	rc, err := f.BlobStore.Get(ctx, name, off, n)
+	if err != nil {
+		return nil, err
+	}
+	b, err := io.ReadAll(rc)
+	_ = rc.Close()
+	if err != nil {
+		return nil, err
+	}
+	f.opened.Add(1)
+	if f.fail.Load() {
+		return &body{r: bytes.NewReader(b[:len(b)/2]), fail: true, closed: &f.closed}, nil
+	}
+	return &body{r: bytes.NewReader(b), closed: &f.closed}, nil
+}
+
+// A backend read that fails partway is the caller's error: the backend's
+// reader (an S3 response body) is closed, and the half that arrived is not
+// kept to be served later as the object.
+func TestAFailedBackendReadIsReturnedAndNotKept(t *testing.T) {
+	inner := &flaky{BlobStore: mem.New()}
+	c, _ := newCache(t, inner, 64<<20)
+	data := payload("flaky", 4000)
+	if err := c.Put(ctx, "packs/hh/f", bytes.NewReader(data), int64(len(data))); err != nil {
+		t.Fatal(err)
+	}
+	inner.fail.Store(true)
+	rc, err := c.Get(ctx, "packs/hh/f", 0, -1)
+	if err == nil {
+		_ = rc.Close()
+	}
+	if !errors.Is(err, errMidRead) {
+		t.Fatalf("a read that failed mid-stream = %v, want the backend's error", err)
+	}
+	if o, cl := inner.opened.Load(), inner.closed.Load(); o != 1 || cl != 1 {
+		t.Errorf("the backend handed out %d readers and %d were closed, want 1 and 1", o, cl)
+	}
+	if c.Used() != 0 {
+		t.Errorf("a failed read left %d bytes in the cache", c.Used())
+	}
+	inner.fail.Store(false)
+	if got := read(t, c, "packs/hh/f", 0, -1); !bytes.Equal(got, data) {
+		t.Fatal("once the backend healed, the read returned the wrong bytes")
+	}
+}

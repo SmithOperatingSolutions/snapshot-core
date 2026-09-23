@@ -1125,3 +1125,17 @@ find: if int64(len(b)) > s.max {
 replace: if int64(len(b)) > s.max && false {
 pkg: ./core/blob/cache
 run: ^TestAnObjectBiggerThanTheCacheDoesNotFlushIt$
+
+id: cache-read-error-returned
+file: core/blob/cache/cache.go
+find: head, err := io.ReadAll(io.LimitReader(rc, s.entryLimit+1))\n\tif err != nil {
+replace: head, err := io.ReadAll(io.LimitReader(rc, s.entryLimit+1))\n\tif err != nil && false {
+pkg: ./core/blob/cache
+run: ^TestAFailedBackendReadIsReturnedAndNotKept$
+
+id: cache-read-error-closes
+file: core/blob/cache/cache.go
+find: _ = rc.Close()\n\t\treturn nil, err
+replace: return nil, err
+pkg: ./core/blob/cache
+run: ^TestAFailedBackendReadIsReturnedAndNotKept$
