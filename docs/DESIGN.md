@@ -269,14 +269,16 @@ Written once by `Init`, never changed, and read by `Open` before the chunk
 layer: it says how everything else was written.
 
 ```
-config     "SCRC" · version u16 · repo id [16] · salt [32] · seal(Config, ctx = header, plaintext)
-plaintext  "SCRP" · version u16 · key id [32] · cdc min u32 · cdc max u32 · cdc mask u64 ·
+config     "SCRC" · version u16 · repo id [16] · key id [32] · salt [32] · seal(Config, ctx = header, plaintext)
+plaintext  "SCRP" · version u16 · cdc min u32 · cdc max u32 · cdc mask u64 ·
            node min u32 · node target u32 · node max u32 · inline limit u32 · pack size u32
 ```
 
-The repo id rides in the header in the clear (it is not a secret, and a key
-cannot be derived without it); the header is authenticated. The key id lets
-`Open` tell a wrong master key from a damaged config.
+The repo id and key id ride in the header in the clear (neither is a secret,
+and no key can be derived without the repo id); the header is
+authenticated. The key id is outside the seal so that `Open` can tell a
+wrong master key (`ErrWrongKey`, before trying to decrypt) from a damaged
+config (`ErrConfig`).
 
 ### Objects (`core/object`, `core/model`)
 
