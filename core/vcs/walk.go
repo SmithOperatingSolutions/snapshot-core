@@ -105,6 +105,11 @@ func (w *walker) workingSet(h hash.Hash) error {
 	if ws.Merge == nil {
 		return nil
 	}
+	for _, ns := range []hash.Hash{ws.Merge.PreWorking, ws.Merge.PreStaged} {
+		if err := w.namespace(ns); err != nil {
+			return err
+		}
+	}
 	w.commits = append(w.commits, ws.Merge.Base, ws.Merge.Theirs)
 	return prolly.Walk(w.ctx, w.rd, w.o.Config, ws.Merge.Conflicts, w.visit, func(key, val []byte) error {
 		c, err := decodeConflict(string(key), val)

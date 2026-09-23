@@ -114,7 +114,8 @@ func decodeTag(b []byte) (Tag, error) {
 }
 
 // Working set chunk: 0x05 · working [32] · staged [32] · merging u8 ·
-// [base [32] · theirs [32] · conflicts [32]].
+// [base [32] · theirs [32] · conflicts [32] · working before [32] ·
+// staged before [32]].
 func (ws WorkingSet) encode() []byte {
 	var w wire.Writer
 	w.U8(kindWorkingSet)
@@ -128,6 +129,8 @@ func (ws WorkingSet) encode() []byte {
 	w.Raw(ws.Merge.Base[:])
 	w.Raw(ws.Merge.Theirs[:])
 	w.Raw(ws.Merge.Conflicts[:])
+	w.Raw(ws.Merge.PreWorking[:])
+	w.Raw(ws.Merge.PreStaged[:])
 	return w.Bytes()
 }
 
@@ -147,6 +150,8 @@ func decodeWorkingSet(b []byte) (WorkingSet, error) {
 		copy(ws.Merge.Base[:], r.Fixed(hash.Size))
 		copy(ws.Merge.Theirs[:], r.Fixed(hash.Size))
 		copy(ws.Merge.Conflicts[:], r.Fixed(hash.Size))
+		copy(ws.Merge.PreWorking[:], r.Fixed(hash.Size))
+		copy(ws.Merge.PreStaged[:], r.Fixed(hash.Size))
 	}
 	if err := r.Done(); err != nil {
 		return WorkingSet{}, corrupt("working set: %v", err)

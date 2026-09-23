@@ -48,7 +48,7 @@ var (
 	ErrInvalidName         = errors.New("vcs: invalid branch or tag name")
 	ErrInvalidLimit        = errors.New("vcs: log limit must be 1 to 10,000")
 	ErrUnresolvedConflicts = errors.New("vcs: unresolved merge conflicts")
-	ErrMergeState          = errors.New("vcs: only merging, resolving and committing change a merge in progress")
+	ErrMergeState          = errors.New("vcs: only merging, resolving, committing and abandoning change a merge in progress")
 	ErrNoMerge             = errors.New("vcs: no merge in progress")
 )
 
@@ -398,8 +398,8 @@ func (r *Repo) WorkingSet(ctx context.Context, p auth.Principal, branch string) 
 // UpdateWorkingSet replaces a branch's working set with next if it is still
 // prev (ErrConflict otherwise), and returns next as stored. It changes the
 // namespaces only: next carries the merge in progress as stored
-// (ErrMergeState otherwise), which only merging, resolving and committing
-// change.
+// (ErrMergeState otherwise), which only merging, resolving, committing and
+// abandoning change.
 func (r *Repo) UpdateWorkingSet(ctx context.Context, p auth.Principal, branch string, prev, next WorkingSet) (WorkingSet, error) {
 	if err := r.branchCheck(ctx, p, auth.Write, branch); err != nil {
 		return WorkingSet{}, err
@@ -860,15 +860,48 @@ func (r *Repo) Merge(ctx context.Context, p auth.Principal, branch string, their
 		return merge.Result{}, err
 	}
 	next := WorkingSet{Working: res.Merged.Root(), Staged: res.Merged.Root(),
-		Merge: &MergeState{Base: baseHash, Theirs: theirs, Conflicts: conflicts.Root()}}
+		Merge: &MergeState{Base: baseHash, Theirs: theirs, Conflicts: conflicts.Root(), PreWorking: ws.Working, PreStaged: ws.Staged}}
 	if _, err := r.setWorkingSet(ctx, branch, ws, next, false); err != nil {
 		return merge.Result{}, err
 	}
 	return res, nil
 }
 
-// AbortMerge abandons a branch's merge in progress.
-func (r *Repo) AbortMerge(ctx context.Context, p auth.Principal, branch string) error { return nil }
+// AbortMerge abandons a branch's merge in progress: it drops the merge
+// state and puts back the working and staged namespaces the merge started
+// from. What the merge brought in, its resolutions and every edit made
+// since it began are discarded; edits made before it began are not. It
+// needs write on the branch and on every path it changes, and with no
+// merge in progress it is ErrNoMerge.
+func (r *Repo) AbortMerge(ctx context.Context, p auth.Principal, branch string) error {
+	if err := r.branchCheck(ctx, p, auth.Write, branch); err != nil {
+		return err
+	}
+	return r.update(ctx, func(m *prolly.Map, e *prolly.Editor) error {
+		_, work, err := branchRefs(ctx, m, branch)
+		if err != nil {
+			return err
+		}
+		ws, err := r.readWorkingSet(ctx, work)
+		if err != nil {
+			return err
+		}
+		if ws.Merge == nil {
+			return fmt.Errorf("%w: %s", ErrNoMerge, branch)
+		}
+		back := WorkingSet{Working: ws.Merge.PreWorking, Staged: ws.Merge.PreStaged}
+		for _, ns := range [][2]hash.Hash{{ws.Working, back.Working}, {ws.Staged, back.Staged}} {
+			if err := r.checkPaths(ctx, p, branch, ns[0], ns[1]); err != nil {
+				return err
+			}
+		}
+		h, err := r.s.Put(ctx, back.encode())
+		if err != nil {
+			return err
+		}
+		return e.Put(workKey(branch), h[:])
+	})
+}
 
 // Conflicts lists a branch's unresolved merge conflicts.
 func (r *Repo) Conflicts(ctx context.Context, p auth.Principal, branch string) ([]merge.Conflict, error) {
@@ -925,7 +958,8 @@ func (r *Repo) ResolveConflict(ctx context.Context, p auth.Principal, branch, pa
 			return fmt.Errorf("vcs: no conflict at %s on %s", path, branch)
 		}
 		next := ws
-		next.Merge = &MergeState{Base: ws.Merge.Base, Theirs: ws.Merge.Theirs}
+		merging := *ws.Merge // resolving keeps where the merge started
+		next.Merge = &merging
 		for _, dst := range []*hash.Hash{&next.Working, &next.Staged} {
 			n, err := r.Namespace(ctx, *dst)
 			if err != nil {

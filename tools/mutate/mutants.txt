@@ -2781,13 +2781,6 @@ replace: w.commits = append(w.commits, ws.Merge.Base)
 pkg: ./core/vcs
 run: ^TestAWalkNamesAllTheRepositoryHolds$
 
-id: vcs-walk-follows-conflicts
-file: core/vcs/walk.go
-find: if err := object.WalkRef(w.ctx, w.rd, w.o.Registry, side, w.visit); err != nil {
-replace: if err := error(nil); side.Model == 0 && err != nil {
-pkg: ./core/vcs
-run: ^TestAWalkNamesAllTheRepositoryHolds$
-
 id: vcs-walk-follows-parents
 file: core/vcs/walk.go
 find: w.commits = append(w.commits, c.Parents...)
@@ -3256,3 +3249,87 @@ find: end := prefix[:len(prefix)-1] + "0" // '0' follows '/'
 replace: end := "~" // '0' follows '/'
 pkg: ./core/vcs
 run: ^TestTagsAreListedAndReadBack$
+
+id: vcs-abort-authorized
+file: core/vcs/vcs.go
+find: func (r *Repo) AbortMerge(ctx context.Context, p auth.Principal, branch string) error {\n\tif err := r.branchCheck(ctx, p, auth.Write, branch); err != nil {
+replace: func (r *Repo) AbortMerge(ctx context.Context, p auth.Principal, branch string) error {\n\tif err := r.branchCheck(ctx, p, auth.Write, branch); err != nil && false {
+pkg: ./core/vcs
+run: ^TestEveryCallIsAuthorized$
+
+id: vcs-abort-needs-a-merge
+file: core/vcs/vcs.go
+find: if ws.Merge == nil {\n\t\t\treturn fmt.Errorf("%w: %s", ErrNoMerge, branch)
+replace: if ws.Merge == nil && false {\n\t\t\treturn fmt.Errorf("%w: %s", ErrNoMerge, branch)
+pkg: ./core/vcs
+run: ^TestOnlyAMergeInProgressCanBeAbandoned$
+
+id: vcs-abort-checks-paths
+file: core/vcs/vcs.go
+find: back.Working}, {ws.Staged, back.Staged}} {\n\t\t\tif err := r.checkPaths(ctx, p, branch, ns[0], ns[1]); err != nil {
+replace: back.Working}, {ws.Staged, back.Staged}} {\n\t\t\tif err := r.checkPaths(ctx, p, branch, ns[0], ns[1]); err != nil && false {
+pkg: ./core/vcs
+run: ^TestWritesAreAuthorizedPerPath$
+
+id: vcs-abort-puts-back-the-working-namespace
+file: core/vcs/vcs.go
+find: back := WorkingSet{Working: ws.Merge.PreWorking, Staged: ws.Merge.PreStaged}
+replace: back := WorkingSet{Working: ws.Working, Staged: ws.Merge.PreStaged}
+pkg: ./core/vcs
+run: ^TestAnAbandonedMergeLeavesTheBranchAsItWas$
+
+id: vcs-abort-puts-back-the-staged-namespace
+file: core/vcs/vcs.go
+find: back := WorkingSet{Working: ws.Merge.PreWorking, Staged: ws.Merge.PreStaged}
+replace: back := WorkingSet{Working: ws.Merge.PreWorking, Staged: ws.Merge.PreWorking}
+pkg: ./core/vcs
+run: ^TestAnAbandonedMergeLeavesTheBranchAsItWas$
+
+id: vcs-merge-records-the-working-namespace
+file: core/vcs/vcs.go
+find: PreWorking: ws.Working, PreStaged: ws.Staged}}
+replace: PreWorking: res.Merged.Root(), PreStaged: ws.Staged}}
+pkg: ./core/vcs
+run: ^TestAnAbandonedMergeLeavesTheBranchAsItWas$
+
+id: vcs-merge-records-the-staged-namespace
+file: core/vcs/vcs.go
+find: PreWorking: ws.Working, PreStaged: ws.Staged}}
+replace: PreWorking: ws.Working, PreStaged: ws.Working}}
+pkg: ./core/vcs
+run: ^TestAnAbandonedMergeLeavesTheBranchAsItWas$
+
+id: vcs-resolve-keeps-where-the-merge-started
+file: core/vcs/vcs.go
+find: merging := *ws.Merge // resolving keeps where the merge started\n\t\tnext.Merge = &merging
+replace: merging := *ws.Merge // resolving keeps where the merge started\n\t\tnext.Merge = &MergeState{Base: merging.Base, Theirs: merging.Theirs}
+pkg: ./core/vcs
+run: ^TestAnAbandonedMergeLeavesTheBranchAsItWas$
+
+id: vcs-working-set-writes-where-the-merge-started
+file: core/vcs/encode.go
+find: w.Raw(ws.Merge.PreStaged[:])
+replace: _ = ws
+pkg: ./core/vcs
+run: ^TestForgedChunksAreCorrupt$
+
+id: vcs-working-set-reads-where-the-merge-started
+file: core/vcs/encode.go
+find: copy(ws.Merge.PreStaged[:], r.Fixed(hash.Size))
+replace: _ = ws
+pkg: ./core/vcs
+run: ^TestForgedChunksAreCorrupt$
+
+id: vcs-walk-follows-the-staged-namespace-a-merge-started-from
+file: core/vcs/walk.go
+find: for _, ns := range []hash.Hash{ws.Merge.PreWorking, ws.Merge.PreStaged} {
+replace: for _, ns := range []hash.Hash{ws.Merge.PreWorking} {
+pkg: ./core/vcs
+run: ^TestAWalkNamesAllTheRepositoryHolds$
+
+id: vcs-walk-follows-the-working-namespace-a-merge-started-from
+file: core/vcs/walk.go
+find: for _, ns := range []hash.Hash{ws.Merge.PreWorking, ws.Merge.PreStaged} {
+replace: for _, ns := range []hash.Hash{ws.Merge.PreStaged} {
+pkg: ./core/vcs
+run: ^TestAWalkNamesAllTheRepositoryHolds$

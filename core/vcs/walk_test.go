@@ -163,7 +163,8 @@ func objectDiff(from, to *object.Namespace) ([]object.Change, error) {
 // all a repository holds: kept alone, those chunks read back as the whole
 // repository, every branch's history, working sets, a merge in progress
 // (whose theirs only the merge holds, its branch deleted, and whose ours
-// only the conflict holds, rewritten since) with an edit made during it
+// only the conflict and the namespace it started from hold, rewritten
+// since) with an edit made during it
 // and the namespaces it started from (working and staged apart, which only
 // the merge holds once the edit replaces them), and a tag of an old commit. And it must not name what nothing holds any
 // longer: a working set replaced, a deleted branch's commit and object, an
@@ -196,7 +197,7 @@ func TestAWalkNamesAllTheRepositoryHolds(t *testing.T) {
 	if r, err := f.r.Merge(ctx, alice, main, theirs.Hash); err != nil || len(r.Conflicts) != 1 {
 		t.Fatalf("fixture: the merge found %d conflicts (%v), want 1", len(r.Conflicts), err)
 	}
-	f.put(main, "doc", f.obj(8, "rewritten during the merge")) // now only the conflict holds ours
+	f.put(main, "doc", f.obj(8, "rewritten during the merge")) // now only the merge holds ours
 	f.put(main, "during", f.obj(7, "written during the merge"))
 	if err := f.r.DeleteBranch(ctx, alice, "dev"); err != nil { // now only the merge holds theirs
 		t.Fatal(err)
