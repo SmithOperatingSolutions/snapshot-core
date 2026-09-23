@@ -3998,3 +3998,73 @@ find: if _, err := io.ReadFull(c.r, c.rec); err != nil {
 replace: if _, err := io.ReadFull(c.r, c.rec); err != nil && false {
 pkg: ./core/dedup
 run: ^TestATableCutUnderneathReportsAnError$
+
+id: packstore-index-dir-must-be-a-directory
+file: core/chunk/packstore/packstore.go
+find: if st, err := os.Stat(o.IndexDir); err != nil || !st.IsDir() {
+replace: if st, err := os.Stat(o.IndexDir); err != nil || (st.IsDir() && false) {
+pkg: ./core/chunk/packstore
+run: ^TestASpilledIndexNeedsItsDirectory$
+
+id: packstore-spill-surfaces-a-failed-read
+file: core/chunk/packstore/spill.go
+find: if infos, err = s.loadIndex(ctx, sum); err != nil {\n\t\t\t\tb.Abort()\n\t\t\t\treturn nil, err\n\t\t\t}
+replace: if infos, err = s.loadIndex(ctx, sum); err != nil && false {\n\t\t\t\tb.Abort()\n\t\t\t\treturn nil, err\n\t\t\t}
+pkg: ./core/chunk/packstore
+run: ^TestASpilledIndexNeedsItsDirectory$
+
+id: round-rewrite-surfaces-a-failed-read
+file: core/chunk/packstore/gc.go
+find: infos, err := loadIndex(ctx, r.o, sum)\n\t\tif err != nil {\n\t\t\treturn nil, err\n\t\t}\n\t\tfor _, info := range infos {\n\t\t\tif keep[info.Name]
+replace: infos, err := loadIndex(ctx, r.o, sum)\n\t\tif err != nil && false {\n\t\t\treturn nil, err\n\t\t}\n\t\tfor _, info := range infos {\n\t\t\tif keep[info.Name]
+pkg: ./core/chunk/packstore
+run: ^TestABackendFailureDuringARoundIsTheRoundsError$
+
+id: repack-starts-another-pack-when-one-fills
+file: core/chunk/packstore/gc.go
+find: if err = w.Add(e.Hash, data); errors.Is(err, pack.ErrFull) {
+replace: if err = w.Add(e.Hash, data); errors.Is(err, pack.ErrFull) && false {
+pkg: ./core/chunk/packstore
+run: ^TestRepackingFillsSeveralPacksWhenTheyAreFull$
+
+id: round-records-only-packs-and-index-objects
+file: core/chunk/packstore/gc.go
+find: return condemned{}, false\n}
+replace: return condemned{kind: deletedPack}, true\n}
+pkg: ./core/chunk/packstore
+run: ^TestARoundRecordsTheOrphansItDeletes$
+
+id: spill-refuses-a-record-of-another-width
+file: core/chunk/packstore/spill.go
+find: if len(v) != locLen {\n\t\treturn dedup.Location{}, false
+replace: if false {\n\t\treturn dedup.Location{}, false
+pkg: ./core/chunk/packstore
+run: ^TestAForgedIndexTableRecordIsRefused$
+
+id: spill-refuses-a-pack-it-does-not-list
+file: core/chunk/packstore/spill.go
+find: if pi >= uint32(len(sp.packs)) {
+replace: if false {
+pkg: ./core/chunk/packstore
+run: ^TestAForgedIndexTableRecordIsRefused$
+
+id: round-join-refuses-a-record-of-another-width
+file: core/chunk/packstore/gc.go
+find: if len(v) != locLen {\n\t\t\t\treturn fmt.Errorf("%w: round index record
+replace: if false {\n\t\t\t\treturn fmt.Errorf("%w: round index record
+pkg: ./core/chunk/packstore
+run: ^TestAForgedIndexTableRecordIsRefused$
+
+id: round-join-refuses-a-pack-it-does-not-list
+file: core/chunk/packstore/gc.go
+find: if pi >= uint32(len(r.packs)) {
+replace: if false {
+pkg: ./core/chunk/packstore
+run: ^TestAForgedIndexTableRecordIsRefused$
+
+id: packstore-stats-count-the-table
+file: core/chunk/packstore/packstore.go
+find: n += s.disk.len() // a chunk in both is counted twice: about, not exactly
+replace: n += 0
+pkg: ./core/chunk/packstore
+run: ^TestAStoreSpillsItsIndexToDisk$

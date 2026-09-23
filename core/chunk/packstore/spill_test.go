@@ -2,7 +2,10 @@ package packstore_test
 
 import (
 	"bytes"
+	"context"
+	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -11,7 +14,9 @@ import (
 
 	"github.com/SmithOperatingSolutions/snapshot-core/core/blob"
 	"github.com/SmithOperatingSolutions/snapshot-core/core/blob/mem"
+	"github.com/SmithOperatingSolutions/snapshot-core/core/chunk"
 	"github.com/SmithOperatingSolutions/snapshot-core/core/chunk/packstore"
+	"github.com/SmithOperatingSolutions/snapshot-core/core/dedup"
 	"github.com/SmithOperatingSolutions/snapshot-core/core/hash"
 	"github.com/SmithOperatingSolutions/snapshot-core/core/seal"
 )
@@ -78,6 +83,9 @@ func TestAStoreSpillsItsIndexToDisk(t *testing.T) {
 		if err != nil || !bytes.Equal(got, contents[i]) {
 			t.Fatalf("chunk %d reads as %d bytes, %v through the table", i, len(got), err)
 		}
+	}
+	if st, err := b.Stats(ctx); err != nil || st.Chunks != int64(len(hs)) {
+		t.Fatalf("a spilled store counts %d chunks, %v; want %d", st.Chunks, err, len(hs))
 	}
 	packs := objects(t, bs, "packs/")
 	if _, err := b.Put(ctx, contents[7]); err != nil {
@@ -176,12 +184,38 @@ func TestASpilledIndexNeedsItsDirectory(t *testing.T) {
 		_ = s.Close()
 		t.Fatalf("a store opened with its index directory %s missing", missing)
 	}
+	file := filepath.Join(t.TempDir(), "a-file")
+	if err := os.WriteFile(file, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	o.IndexDir = file
+	if s, err := packstore.Open(ctx, o); err == nil {
+		_ = s.Close()
+		t.Fatalf("a store opened with its index directory %s a file", file)
+	}
 	o.IndexDir = t.TempDir()
 	s, err := packstore.Open(ctx, o)
 	if err != nil {
 		t.Fatalf("positive control: the same store with a directory that exists: %v", err)
 	}
 	_ = s.Close()
+	// A backend failing while the index is spilled at Open is Open's error:
+	// the first read counts the chunks, the spill reads the objects again.
+	reads := 0
+	fb := &failingNamed{BlobStore: bs, fail: func(name string, get bool) bool {
+		if get && strings.HasPrefix(name, "index/") {
+			reads++
+			return reads > 1
+		}
+		return false
+	}}
+	o.Blobs, o.IndexInMemory = fb, 1
+	if s, err := packstore.Open(ctx, o); err == nil || !strings.Contains(err.Error(), "injected") {
+		if s != nil {
+			_ = s.Close()
+		}
+		t.Fatalf("with the backend failing on index objects, Open with the index spilled returned %v, want the injected failure", err)
+	}
 }
 
 // A session's packs go into index objects of at most 8 MiB estimated, not
@@ -266,6 +300,125 @@ func TestASpilledIndexReturnsToMemoryWhenTheRepositoryShrinks(t *testing.T) {
 	for _, h := range live {
 		if _, _, _, ok := reader.Location(h); !ok {
 			t.Fatalf("a live chunk %s is not located after the rebuild", h.Short())
+		}
+	}
+}
+
+// A round needs its index directory like a store does, and a backend that
+// fails while a round reads its index objects or writes its new packs and
+// index objects is the round's error: nothing is decided on a half-read
+// index, and the round leaves no table behind.
+func TestABackendFailureDuringARoundIsTheRoundsError(t *testing.T) {
+	bs, kr := mem.New(), keyring(t)
+	s := open(t, bs, kr)
+	live := payload("live", 1<<10)
+	hs := packed(t, s, hash.Hash{}, []byte("the root"), payload("dead one", 3<<10), payload("dead two", 3<<10), live)
+	dir := t.TempDir()
+	missing := filepath.Join(dir, "not", "here")
+	if r, err := packstore.Begin(ctx, packstore.Options{Blobs: bs, Keys: kr, Repo: repo, IndexDir: missing}); err == nil {
+		_ = r.Close()
+		t.Fatalf("a round began with its index directory %s missing", missing)
+	}
+	isIndex := func(name string, get bool) bool { return get && strings.HasPrefix(name, "index/") }
+	reads := 0
+	for _, tc := range []struct {
+		name string
+		fail func(name string, get bool) bool
+	}{
+		{"reading an index object", isIndex},
+		{"reading an index object again to rewrite it", func(name string, get bool) bool {
+			if isIndex(name, get) {
+				reads++
+				return reads > 2 // Begin's read and the candidate's; the rewrite's fails
+			}
+			return false
+		}},
+		{"reading a pack to repack it", func(name string, get bool) bool { return get && strings.HasPrefix(name, "packs/") }},
+		{"writing a new pack", func(name string, get bool) bool { return !get && strings.HasPrefix(name, "packs/") }},
+		{"writing an index object", func(name string, get bool) bool { return !get && strings.HasPrefix(name, "index/") }},
+	} {
+		fb := &failingNamed{BlobStore: bs, fail: tc.fail}
+		r, err := packstore.Begin(ctx, packstore.Options{Blobs: fb, Keys: kr, Repo: repo, IndexDir: dir})
+		if err == nil {
+			_, err = r.Apply(ctx, liveSet(hs[0], hs[3]), t0, time.Hour)
+		}
+		if err == nil || !strings.Contains(err.Error(), "injected") {
+			t.Fatalf("%s failing, the round returned %v, want the injected failure", tc.name, err)
+		}
+		entries, err := os.ReadDir(dir)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(entries) != 0 {
+			t.Fatalf("%s failing, the round left %d files in %s, want none", tc.name, len(entries), dir)
+		}
+	}
+	if out := repackRound(t, bs, kr, liveSet(hs[0], hs[3]), t0, packstore.Repack{}); out.Repacked != 1 {
+		t.Fatalf("positive control: with the backend well the round repacked %d", out.Repacked)
+	}
+}
+
+// failingNamed fails Get or Put for the objects fail picks.
+type failingNamed struct {
+	blob.BlobStore
+	fail func(name string, get bool) bool
+}
+
+func (f *failingNamed) Get(ctx context.Context, name string, off, n int64) (io.ReadCloser, error) {
+	if f.fail(name, true) {
+		return nil, errors.New("injected: backend unavailable")
+	}
+	return f.BlobStore.Get(ctx, name, off, n)
+}
+
+func (f *failingNamed) Put(ctx context.Context, name string, r io.Reader, size int64) error {
+	if f.fail(name, false) {
+		return errors.New("injected: backend unavailable")
+	}
+	return f.BlobStore.Put(ctx, name, r, size)
+}
+
+// A record in an index table that is not a location, or that names a pack
+// the table does not list, is corrupt: a store's lookup and a round's join
+// both refuse it rather than read a pack that is not there.
+func TestAForgedIndexTableRecordIsRefused(t *testing.T) {
+	key := hash.Sum([]byte("a chunk"))
+	table := func(valueLen int, value []byte) *dedup.Table {
+		b, err := dedup.NewBuilder(t.TempDir(), valueLen)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := b.Add(key, value); err != nil {
+			t.Fatal(err)
+		}
+		tb, err := b.Finish()
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { _ = tb.Close() })
+		return tb
+	}
+	good := make([]byte, 17) // pack 0
+	if _, ok, err := packstore.ForgedSpilled(table(17, good), 1).Lookup(key); !ok || err != nil {
+		t.Fatalf("positive control: a well-formed record: %v %v", ok, err)
+	}
+	if err := packstore.JoinForged(table(17, good), 1, liveSet(key)); err != nil {
+		t.Fatalf("positive control: a well-formed record joins: %v", err)
+	}
+	pack9 := make([]byte, 17)
+	pack9[0] = 9
+	for name, tc := range map[string]struct {
+		valueLen int
+		value    []byte
+	}{
+		"a record of another width":      {16, make([]byte, 16)},
+		"a pack the table does not list": {17, pack9},
+	} {
+		if _, ok, err := packstore.ForgedSpilled(table(tc.valueLen, tc.value), 1).Lookup(key); !errors.Is(err, chunk.ErrCorrupt) {
+			t.Fatalf("%s: a lookup answered %v, %v; want ErrCorrupt", name, ok, err)
+		}
+		if err := packstore.JoinForged(table(tc.valueLen, tc.value), 1, liveSet(key)); !errors.Is(err, chunk.ErrCorrupt) {
+			t.Fatalf("%s: a join answered %v, want ErrCorrupt", name, err)
 		}
 	}
 }

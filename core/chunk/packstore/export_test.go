@@ -103,3 +103,30 @@ func PackOrder(ctx context.Context, o Options) ([]string, error) {
 	}
 	return out, nil
 }
+
+// ForgedSpilled is a spilled index over a table whose records were written
+// by hand, to prove the record decoder refuses what it should.
+func ForgedSpilled(t *dedup.Table, packs int) interface {
+	Lookup(h hash.Hash) (dedup.Location, bool, error)
+} {
+	sp := &spilled{table: t}
+	for range packs {
+		sp.packs = append(sp.packs, packRef{})
+	}
+	return forged{sp}
+}
+
+type forged struct{ sp *spilled }
+
+func (f forged) Lookup(h hash.Hash) (dedup.Location, bool, error) { return f.sp.lookup(h) }
+
+// JoinForged runs a round's join over a forged index table with the given
+// number of packs, against a live set of every key in it.
+func JoinForged(t *dedup.Table, packs int, live Live) error {
+	r := &Round{index: &spilled{table: t}}
+	for range packs {
+		r.packs = append(r.packs, packSummary{})
+	}
+	_, _, err := r.join(live)
+	return err
+}

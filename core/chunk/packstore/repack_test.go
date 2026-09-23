@@ -307,13 +307,15 @@ func TestRepackingRefusesACorruptPack(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	replace(whole[:len(whole)-1])
-	r, err := packstore.Begin(ctx, packstore.Options{Blobs: bs, Keys: kr, Repo: repo})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := r.Apply(ctx, liveSet(hs[0], hs[1]), t0, time.Hour); !errors.Is(err, chunk.ErrCorrupt) {
-		t.Fatalf("repacking a pack a byte short: %v, want ErrCorrupt", err)
+	for name, cut := range map[string][]byte{"a byte short": whole[:len(whole)-1], "cut in the middle of its frames": whole[:len(whole)/2]} {
+		replace(cut)
+		r, err := packstore.Begin(ctx, packstore.Options{Blobs: bs, Keys: kr, Repo: repo})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := r.Apply(ctx, liveSet(hs[0], hs[1]), t0, time.Hour); !errors.Is(err, chunk.ErrCorrupt) {
+			t.Fatalf("repacking a pack %s: %v, want ErrCorrupt", name, err)
+		}
 	}
 	replace(whole)
 	if out := repackRound(t, bs, kr, liveSet(hs[0], hs[1]), t0, packstore.Repack{}); out.Repacked != 1 {
@@ -358,4 +360,35 @@ func TestPacksInServiceComeFirstInTheIndex(t *testing.T) {
 		return
 	}
 	t.Fatal("in 64 draws the repacked pack never sorted before its replacement: the fixture cannot reach the order under test")
+}
+
+// The live chunks of a repacked pack fill new packs of the round's pack
+// size: more live bytes than one pack takes go into several.
+func TestRepackingFillsSeveralPacksWhenTheyAreFull(t *testing.T) {
+	bs, kr := mem.New(), keyring(t)
+	s := open(t, bs, kr)
+	chunks := [][]byte{[]byte("the root")}
+	for i := range 4 {
+		chunks = append(chunks, payload("live "+string(rune('a'+i)), 1<<10))
+	}
+	chunks = append(chunks, payload("dead", 8<<10))
+	hs := packed(t, s, hash.Hash{}, chunks...)
+	old := objects(t, bs, "packs/")
+	r, err := packstore.Begin(ctx, packstore.Options{Blobs: bs, Keys: kr, Repo: repo, PackSize: 3 << 10})
+	if err != nil {
+		t.Fatal(err)
+	}
+	out, err := r.Apply(ctx, liveSet(hs[:5]...), t0, time.Hour)
+	if err != nil || out.Repacked != 1 {
+		t.Fatalf("repacked %d, %v; want the one pack", out.Repacked, err)
+	}
+	if added := newNames(old, objects(t, bs, "packs/")); len(added) < 2 {
+		t.Fatalf("four live KiB repacked at a pack size of 3 KiB went into %d new packs, want at least two", len(added))
+	}
+	fresh := open(t, bs, kr)
+	for i := 1; i <= 4; i++ {
+		if got, err := fresh.Get(ctx, hs[i]); err != nil || !bytes.Equal(got, chunks[i]) {
+			t.Fatalf("live chunk %d reads as %d bytes, %v after the repack", i, len(got), err)
+		}
+	}
 }
