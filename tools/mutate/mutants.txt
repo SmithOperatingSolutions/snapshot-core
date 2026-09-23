@@ -2001,3 +2001,45 @@ find: case r.Err() != nil || present > 1:
 replace: case r.Err() != nil:
 pkg: ./core/vcs
 run: ^TestForgedChunksAreCorrupt$
+
+id: repo-wrong-key-before-decrypting
+file: core/repo/repo.go
+find: if c.KeyID != kr.ID() {
+replace: if c.KeyID != kr.ID() && false {
+pkg: ./core/repo
+run: ^TestOpenTellsAWrongKeyFromADamagedConfig$
+
+id: repo-geometry-checked-before-writing
+file: core/repo/repo.go
+find: if err := g.validate(); err != nil {\n\t\treturn nil, err\n\t}\n\tif err := auth.Check
+replace: if err := g.validate(); err != nil && false {\n\t\treturn nil, err\n\t}\n\tif err := auth.Check
+pkg: ./core/repo
+run: ^TestInitValidatesTheGeometry$
+
+id: repo-needs-a-key
+file: core/repo/repo.go
+find: if o.Blobs == nil || o.Keys == nil || o.Registry == nil {
+replace: if o.Blobs == nil || o.Registry == nil {
+pkg: ./core/repo
+run: ^TestThereIsNoRepositoryWithoutAConfigOrAKey$
+
+id: repo-init-refuses-an-existing-repository
+file: core/repo/repo.go
+find: if errors.Is(err, blob.ErrExists) {\n\t\t\treturn nil, ErrExists
+replace: if errors.Is(err, blob.ErrExists) && false {\n\t\t\treturn nil, ErrExists
+pkg: ./core/repo
+run: ^TestInitThenOpen$
+
+id: repo-open-finds-no-repository
+file: core/repo/repo.go
+find: if errors.Is(err, blob.ErrNotFound) {\n\t\treturn nil, ErrNoRepo
+replace: if errors.Is(err, blob.ErrNotFound) && false {\n\t\treturn nil, ErrNoRepo
+pkg: ./core/repo
+run: ^TestThereIsNoRepositoryWithoutAConfigOrAKey$
+
+id: repo-zero-geometry-is-the-default
+file: core/repo/repo.go
+find: if g == (Geometry{}) {
+replace: if g == (Geometry{}) && false {
+pkg: ./core/repo
+run: ^TestInitThenOpen$
