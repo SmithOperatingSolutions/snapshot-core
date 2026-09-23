@@ -96,16 +96,17 @@ func (b *Builder) spill() error {
 	b.runs = append(b.runs, f.Name())
 	w := bufio.NewWriterSize(f, mergeBuffer)
 	for _, i := range idx {
-		if _, err := w.Write(b.buf[int(i)*b.rec : int(i+1)*b.rec]); err != nil {
-			_ = f.Close()
-			return err
+		if _, err = w.Write(b.buf[int(i)*b.rec : int(i+1)*b.rec]); err != nil {
+			break
 		}
 	}
-	if err := w.Flush(); err != nil {
-		_ = f.Close()
-		return err
+	if err == nil {
+		err = w.Flush()
 	}
-	if err := f.Close(); err != nil {
+	if cerr := f.Close(); err == nil {
+		err = cerr
+	}
+	if err != nil {
 		return err
 	}
 	b.buf, b.n = b.buf[:0], 0
@@ -122,7 +123,7 @@ func (b *Builder) Finish() (*Table, error) {
 	return t, nil
 }
 
-func (b *Builder) finish() (*Table, error) {
+func (b *Builder) finish() (t *Table, err error) {
 	if err := b.spill(); err != nil {
 		return nil, err
 	}
@@ -138,11 +139,11 @@ func (b *Builder) finish() (*Table, error) {
 				return nil, err
 			}
 			next = append(next, out.Name())
-			if _, err := b.merge(group, out, nil); err != nil {
-				_ = out.Close()
-				return nil, err
+			_, err = b.merge(group, out, nil)
+			if cerr := out.Close(); err == nil {
+				err = cerr
 			}
-			if err := out.Close(); err != nil {
+			if err != nil {
 				return nil, err
 			}
 			removeAll(group)
@@ -154,9 +155,14 @@ func (b *Builder) finish() (*Table, error) {
 		return nil, err
 	}
 	path := f.Name()
+	defer func() {
+		if err != nil {
+			_ = f.Close()
+			_ = os.Remove(path)
+		}
+	}()
 	samples, err := os.CreateTemp(b.dir, "snapshot-samples-*")
 	if err != nil {
-		_ = f.Close()
 		return nil, err
 	}
 	defer func() {
@@ -164,21 +170,17 @@ func (b *Builder) finish() (*Table, error) {
 		_ = os.Remove(samples.Name())
 	}()
 	var hdr [tableHeader]byte
-	if _, err := f.Write(hdr[:]); err != nil {
-		_ = f.Close()
+	if _, err = f.Write(hdr[:]); err != nil {
 		return nil, err
 	}
 	count, err := b.merge(b.runs, f, samples)
 	if err != nil {
-		_ = f.Close()
 		return nil, err
 	}
-	if _, err := samples.Seek(0, io.SeekStart); err != nil {
-		_ = f.Close()
+	if _, err = samples.Seek(0, io.SeekStart); err != nil {
 		return nil, err
 	}
-	if _, err := io.Copy(f, samples); err != nil {
-		_ = f.Close()
+	if _, err = io.Copy(f, samples); err != nil {
 		return nil, err
 	}
 	copy(hdr[:], tableMagic)
@@ -186,21 +188,16 @@ func (b *Builder) finish() (*Table, error) {
 	binary.LittleEndian.PutUint16(hdr[6:], uint16(b.valueLen))
 	binary.LittleEndian.PutUint64(hdr[8:], uint64(count))
 	binary.LittleEndian.PutUint32(hdr[16:], sampleEvery)
-	if _, err := f.WriteAt(hdr[:], 0); err != nil {
-		_ = f.Close()
+	if _, err = f.WriteAt(hdr[:], 0); err != nil {
 		return nil, err
 	}
-	if err := f.Close(); err != nil {
+	if err = f.Close(); err != nil {
+		f = nil // closed already; the deferred cleanup only removes
 		return nil, err
 	}
 	removeAll(b.runs)
 	b.runs = nil
-	t, err := OpenTable(path)
-	if err != nil {
-		_ = os.Remove(path)
-		return nil, err
-	}
-	return t, nil
+	return OpenTable(path)
 }
 
 // Abort removes the runs of a build that will not finish.
