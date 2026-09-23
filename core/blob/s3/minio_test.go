@@ -28,6 +28,9 @@ func realS3(t *testing.T) (*awss3.Client, string) {
 		}
 		t.Skip("set SNAPSHOT_S3_ENDPOINT (and SNAPSHOT_S3_REQUIRED=1 in CI) to run against a real S3-compatible server")
 	}
+	if !strings.Contains(ep, "://") {
+		ep = "https://" + ep // a bare host, as providers print it, is HTTPS
+	}
 	region := os.Getenv("SNAPSHOT_S3_REGION")
 	if region == "" {
 		region = "us-east-1"

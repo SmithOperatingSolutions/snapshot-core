@@ -59,6 +59,9 @@ func TestARepositoryRunsOnTheRealProvider(t *testing.T) {
 		}
 		t.Skip("set SNAPSHOT_S3_ENDPOINT (and SNAPSHOT_S3_REQUIRED=1 in CI) to run against a real S3-compatible provider")
 	}
+	if !strings.Contains(ep, "://") {
+		ep = "https://" + ep // a bare host, as providers print it, is HTTPS
+	}
 	region := os.Getenv("SNAPSHOT_S3_REGION")
 	if region == "" {
 		region = "us-east-1"
