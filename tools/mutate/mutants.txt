@@ -372,8 +372,8 @@ run: ^TestOpenRefusesAStoreOthersCanRead$
 
 id: local-open-requires-marker
 file: core/blob/local/local.go
-find: b, err := os.ReadFile(filepath.Join(dir, markerName))\n\tif errors.Is(err, fs.ErrNotExist) {\n\t\treturn nil, fmt.Errorf("%w: %s", ErrNotAStore, dir)\n\t}
-replace: b, err := os.ReadFile(filepath.Join(dir, markerName))\n\tif errors.Is(err, fs.ErrNotExist) {\n\t\tb, err = nil, nil\n\t}
+find: if errors.Is(err, fs.ErrNotExist) {\n\t\treturn nil, fmt.Errorf("%w: %s", ErrNotAStore, dir)\n\t}
+replace: if errors.Is(err, fs.ErrNotExist) {\n\t\tb, err = nil, nil\n\t}
 pkg: ./core/blob/local
 run: ^TestOpenRefusesADirectoryThatIsNotAStore$
 
