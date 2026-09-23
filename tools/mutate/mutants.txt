@@ -312,3 +312,10 @@ find: s.root, s.version = bytes.Clone(next), v
 replace: v = blob.Version(next)\n\ts.root, s.version = bytes.Clone(next), v
 pkg: ./core/blob/mem
 run: ^TestContract$/^VersionsNeverRepeat$
+
+id: mutation-env-reaches-test
+file: tools/internal/mutation/mutation.go
+find: cmd.Env = append(os.Environ(), env...)
+replace: cmd.Env = os.Environ()
+pkg: ./tools/internal/mutation
+run: ^TestParseAndRunHonorEnv$

@@ -6,8 +6,9 @@
 // and a survivor is reported, never dropped (§10).
 //
 // The mutants file is stanzas of "key: value" lines separated by blank lines;
-// '#' starts a comment. Keys: id, file, find, replace, pkg, run. In find and
-// replace, \n, \t and \\ are escapes.
+// '#' starts a comment. Keys: id, file, find, replace, pkg, run, and env
+// (KEY=VALUE for the test run; may repeat). In find and replace, \n, \t and
+// \\ are escapes.
 package mutation
 
 import (
@@ -26,12 +27,12 @@ import (
 
 // Mutant is one deliberate defect and the test that must catch it.
 type Mutant struct {
-	ID      string // short name, unique in the file
-	File    string // path relative to the repository root
-	Find    string // exact text; must occur exactly once in File
-	Replace string // what it becomes
-	Pkg     string // package to test, e.g. ./core/blob/mem
-	Run     string // -run pattern naming the guarding test
+	ID      string   // short name, unique in the file
+	File    string   // path relative to the repository root
+	Find    string   // exact text; must occur exactly once in File
+	Replace string   // what it becomes
+	Pkg     string   // package to test, e.g. ./core/blob/mem
+	Run     string   // -run pattern naming the guarding test
 	Env     []string // extra KEY=VALUE for the test run (e.g. crash iterations)
 	Line    int      // line in the mutants file, for messages
 }
@@ -68,6 +69,7 @@ func Parse(r io.Reader) ([]Mutant, error) {
 	var (
 		ms   []Mutant
 		cur  map[string]string
+		env  []string
 		at   int
 		seen = map[string]int{}
 	)
@@ -76,7 +78,7 @@ func Parse(r io.Reader) ([]Mutant, error) {
 			return nil
 		}
 		m := Mutant{ID: cur["id"], File: cur["file"], Find: unescape(cur["find"]),
-			Replace: unescape(cur["replace"]), Pkg: cur["pkg"], Run: cur["run"], Line: at}
+			Replace: unescape(cur["replace"]), Pkg: cur["pkg"], Run: cur["run"], Env: env, Line: at}
 		for _, k := range []string{"id", "file", "find", "pkg", "run"} {
 			if cur[k] == "" {
 				return fmt.Errorf("line %d: mutant is missing %q", at, k)
@@ -93,7 +95,7 @@ func Parse(r io.Reader) ([]Mutant, error) {
 		}
 		seen[m.ID] = at
 		ms = append(ms, m)
-		cur = nil
+		cur, env = nil, nil
 		return nil
 	}
 	sc := bufio.NewScanner(r)
@@ -115,12 +117,20 @@ func Parse(r io.Reader) ([]Mutant, error) {
 		}
 		key = strings.TrimSpace(key)
 		switch key {
-		case "id", "file", "find", "replace", "pkg", "run":
+		case "id", "file", "find", "replace", "pkg", "run", "env":
 		default:
 			return nil, fmt.Errorf("line %d: unknown key %q", n, key)
 		}
 		if cur == nil {
 			cur, at = map[string]string{}, n
+		}
+		if key == "env" {
+			kv := strings.TrimPrefix(val, " ")
+			if k, _, ok := strings.Cut(kv, "="); !ok || k == "" {
+				return nil, fmt.Errorf("line %d: env wants KEY=VALUE", n)
+			}
+			env = append(env, kv)
+			continue
 		}
 		if _, dup := cur[key]; dup {
 			return nil, fmt.Errorf("line %d: %q given twice", n, key)
@@ -214,7 +224,7 @@ func runOne(ctx context.Context, o Options, work string, m Mutant) Outcome {
 	if out, err := goCmd(ctx, o, work, "test", "-count=1", "-run", "^$", m.Pkg); err != nil {
 		return Outcome{Mutant: m, Status: Invalid, Detail: "does not compile: " + firstLines(out, 3)}
 	}
-	out, err := goCmd(ctx, o, work, "test", "-count=1", "-run", m.Run, m.Pkg)
+	out, err := goCmdEnv(ctx, o, work, m.Env, "test", "-count=1", "-run", m.Run, m.Pkg)
 	if strings.Contains(out, "no tests to run") {
 		return Outcome{Mutant: m, Status: Invalid, Detail: fmt.Sprintf("-run %q matches no test in %s", m.Run, m.Pkg)}
 	}
@@ -230,8 +240,13 @@ func runOne(ctx context.Context, o Options, work string, m Mutant) Outcome {
 }
 
 func goCmd(ctx context.Context, o Options, dir string, args ...string) (string, error) {
+	return goCmdEnv(ctx, o, dir, nil, args...)
+}
+
+func goCmdEnv(ctx context.Context, o Options, dir string, env []string, args ...string) (string, error) {
 	cmd := exec.CommandContext(ctx, o.GoCmd, args...)
 	cmd.Dir = dir
+	cmd.Env = append(os.Environ(), env...)
 	out, err := cmd.CombinedOutput()
 	return string(out), err
 }
