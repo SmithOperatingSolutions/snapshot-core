@@ -34,6 +34,7 @@ var (
 	ErrParams          = errors.New("seal: unacceptable key-derivation parameters")
 	ErrPassphrase      = errors.New("seal: unacceptable passphrase")
 	ErrDestroyed       = errors.New("seal: key destroyed")
+	ErrWrapOnly        = errors.New("seal: this wrapper holds only a public key and cannot unwrap")
 )
 
 // Domain says what a sealed value is. The zero Domain is invalid.

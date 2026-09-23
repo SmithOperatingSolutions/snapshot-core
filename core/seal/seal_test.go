@@ -447,8 +447,9 @@ func TestX25519WrapOnlyWithoutPrivateKey(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := wrapOnly.Unwrap(context.Background(), w); err == nil {
-		t.Fatal("a wrapper holding only the public key unwrapped a secret")
+	if _, err := wrapOnly.Unwrap(context.Background(), w); !errors.Is(err, seal.ErrWrapOnly) {
+		t.Fatalf("a wrap-only wrapper's Unwrap: %v, want ErrWrapOnly — a host must be able to tell "+
+			"\"this machine holds only the public key\" from \"the wrapped key is corrupt\"", err)
 	}
 	full, err := seal.NewX25519Wrapper(pub, priv)
 	if err != nil {
