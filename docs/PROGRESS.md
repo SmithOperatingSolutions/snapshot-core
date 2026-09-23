@@ -5,8 +5,8 @@ every "first failing test" checkbox in both specs. Updated at each milestone
 boundary and whenever a checklist item turns green; the evidence for each item
 is the named test, and the commit that added it carries its red.
 
-**Updated 2026-09-23** · branch `storage-core` (local, not pushed) · 122 commits
-· red-check clean · 228 checked-in mutants, all killed · lint clean · every
+**Updated 2026-09-23** · branch `storage-core` (local, not pushed) · 169 commits
+· red-check clean · 363 checked-in mutants, all killed · lint clean · every
 package at or above its coverage gate
 
 ## Milestones
@@ -16,7 +16,7 @@ package at or above its coverage gate
 | **C0 Foundations** | ✅ Done | Repo, `mise.toml` (Go 1.27), CI (static, race on Linux+macOS, MinIO tier, red-check; nightly fuzz/crash/slow/mutants), `tools/ci` run-all, `tools/redcheck`, `tools/mutate`, `core/dnx` + `core/dnx/compat` | Compat suite green against the pinned disknexus tag ✅ |
 | **C1 Blobs and chunks** | ✅ Done | `core/hash`, `core/internal/wire`, `core/cdc`, `core/seal` (per-object HKDF keys, key files, KMS port + contract); `core/blob` port + contract, `blob/mem`, `blob/local`, `blob/multivol`, `blob/s3` (pure-Go in-process S3 server `s3fake`, startup probe, MinIO tier), `blob/cache`; `core/pack`, `core/dedup`; `core/chunk` port + contract, `chunk/memstore`, `chunk/packstore` | Blob contract green on all backends ✅ (mem, local, multivol, s3 in-process and MinIO, and through the cache); crash harness passes ✅ (local and multivol at the blob layer, packstore at the chunk layer) |
 | **C2 Keyed data** | ✅ Done | `core/boundary` (the integer split rule), `core/stream` (CDC byte streams under a content-defined index tree), `core/prolly` (Map, Editor with incremental Flush, Diff) | Determinism and bounded-diff properties hold on 1M entries ✅ (`-tags slow`, about 9 s) |
-| **C3 History and models** | ⏳ Next | — | A folder of files branches, diffs and merges end to end; model interface frozen |
+| **C3 History and models** | ✅ Done | `core/auth` (Principal, default-deny Authorizer), `core/model` (the port, frozen, and the registry), `core/object` (46-byte object references, the path grammar, namespaces and their diff), `model/contract`, `model/blob`, `model/tree`, `core/merge` (the zipped three-way driver), `core/vcs` (refs, commits, tags, working sets, merge base, log, merge and conflicts), `core/repo` (Init and Open over the sealed config object) | A folder of files branches, diffs and merges end to end ✅ (`TestAFolderBranchesDiffsAndMerges`, on a local disk store through encrypted packs); model interface frozen ✅ (`core/model`, port version 1) |
 | **C4 GC and hardening** | ⏳ | (per-object keys, and the manifest's gcGen and condemned list, already landed) | GC safety property holds; security table fully verified |
 
 **Closing C1** took more than the last component. The coverage gate found
@@ -41,22 +41,43 @@ each error surfacing. One real defect: a flush that changed nothing still
 re-stored the nodes it re-chunked (now fixed). A mutant that hangs led to
 a per-mutant timeout in the mutation engine.
 
+**Closing C3** began at the coverage gate: four packages under 90%, nearly
+all of it untested error paths and refusals. Backfilling them found three
+real defects. `UpdateWorkingSet` stored whatever merge state it was handed,
+so a host could drop a merge's conflicts, or empty them, and commit past
+them, or name a commit never merged as the second parent; it now refuses
+to change a merge in progress (`ErrMergeState`). Merging a branch's own
+head started a merge whose commit named the head as both parents, which
+the decoder refuses, so the branch could never be read again; merging what
+a branch already holds is now a no-op. An `Init` that stopped between
+writing the config and writing the refs left a store that neither `Init`
+(the config was there) nor `Open` (no refs) would take; the next `Init`
+now finishes it. Two test weaknesses showed too: `DenyAll` cannot tell
+which check stopped a call (a reader could have resolved conflicts
+unseen), so authorization is also tested with read-only permission; and
+a conflict list of one node never exercised reading it.
+
 **Coverage gate: met.** Statement coverage over the merged suite (`go run ./tools/ci -only cover`):
 
 | Package | Coverage | Gate |
 | --- | --- | --- |
-| `cdc`, `internal/wire` | 100% | 90% |
+| `auth`, `cdc`, `internal/wire`, `model`, `object` | 100% | 90% |
+| `blob/mem`, `chunk/memstore`, `model/tree` | 98.4% | 90% |
+| `repo` | 97.8% | 90% |
+| `prolly` | 97.6% | 90% |
 | `stream` | 97.3% | 90% |
-| `boundary`, `prolly` | 97.1% | 90% |
-| `blob/mem`, `chunk/memstore` | 98.4% | 90% |
+| `vcs` | 97.2% | 90% |
+| `boundary` | 97.1% | 90% |
+| `model/blob` | 96.2% | 90% |
+| `merge` | 95.0% | 90% |
 | `hash` | 94.1% | 90% |
 | `blob` | 93.5% | 90% |
+| `chunk/packstore` | 93.3% | 90% |
 | `blob/cache` | 93.0% | 90% |
 | `blob/multivol` | 92.6% | 90% |
 | `pack` | 92.3% | 90% |
 | `blob/local` | 92.2% | 90% |
 | `dnx` | 91.7% | 80% |
-| `chunk/packstore` | 91.4% | 90% |
 | `seal` | 91.1% | 90% |
 | `dedup` | 91.0% | 90% |
 | `blob/internal/fsutil` | 90.7% | 90% |
@@ -83,37 +104,37 @@ packages have no gate: their callers exercise them.
 - [x] A prolly value over the inline limit is stored via `cdc` and reads back byte-identical (`TestAValueOverTheInlineLimitIsAStream`)
 
 ### Object model and commit graph
-- [ ] One commit holding a table, a blob and a JSON document round-trips all three
-- [ ] Changing one file in a 100,000-path namespace reads fewer than 200 nodes to diff
-- [ ] An object with an unregistered model id returns `ErrUnknownModel`; nothing is decoded
-- [ ] Invalid paths (`a/../b`, empty segment, 256-byte segment, NUL) are rejected (property test)
-- [ ] GC never deletes a chunk reachable from any ref or working set (property test), and does delete unreachable ones after the grace window
+- [x] One commit holding a table, a blob and a JSON document round-trips all three (`TestACommitHoldingThreeModelsRoundTrips`; the table and document models are fakes here, being the consuming repository's)
+- [x] Changing one file in a 100,000-path namespace reads fewer than 200 nodes to diff (`TestChangingOneFileInA100kNamespaceReadsFewNodes`)
+- [x] An object with an unregistered model id returns `ErrUnknownModel`; nothing is decoded (`TestAnUnregisteredModelIsUnknownAndNothingIsRead`: nothing of it is even read)
+- [x] Invalid paths (`a/../b`, empty segment, 256-byte segment, NUL) are rejected (property test) (`TestInvalidPathsAreRejected`, and the rapid property `TestPathsAgreeWithTheGrammar` against an independent statement of the grammar)
+- [ ] GC never deletes a chunk reachable from any ref or working set (property test), and does delete unreachable ones after the grace window (C4)
 
 ### Data-model plugins
-- [ ] NewRegistry with two models sharing an id returns an error and no registry
-- [ ] A repo opened with a registry that lacks a model its objects use refuses those objects with ErrUnknownModel
-- [ ] `model/blob`: both sides edit one file → exactly one conflict; one side edits → clean merge
-- [ ] `model/tree`: branch A deletes `x/`, branch B edits `x/y` → delete-vs-edit conflict on `x/y`
-- [ ] Every registered model passes `model/contract`
+- [x] NewRegistry with two models sharing an id returns an error and no registry (`TestNewRegistryRefusesTwoModelsWithOneID`)
+- [x] A repo opened with a registry that lacks a model its objects use refuses those objects with ErrUnknownModel (`TestAnUnregisteredModelIsUnknownAndNothingIsRead`, `TestResolveKnowsOnlyItsModelsAndFormats`; a format newer than the model knows is refused the same way, `TestDetailNeverHandsAModelAnUnknownFormat`)
+- [x] `model/blob`: both sides edit one file → exactly one conflict; one side edits → clean merge (`TestBothSidesEditingIsOneConflict`)
+- [x] `model/tree`: branch A deletes `x/`, branch B edits `x/y` → delete-vs-edit conflict on `x/y` (`TestDeletingADirectoryAgainstAnEditIsAConflict`)
+- [x] Every registered model passes `model/contract` (`TestContract` in `model/blob` and `model/tree`: identity, round trip, determinism, diff against the edits made, merge identities, garbage refused)
 
 ### Security: disknexus gaps and how the core closes them
 | disknexus behavior | Status | Evidence |
 | --- | --- | --- |
 | `InitRepo` creates dirs `0755`, files `0644` | ✅ | `core/blob/local` never calls `InitRepo`; `TestNothingIsWiderThanOwnerOnly` (under umask 0), `TestOpenRefusesAStoreOthersCanRead`; the disk cache is owner-only (`TestCacheFilesAreOwnerOnly`) |
-| `EncryptNone` is a valid mode | 🔶 | `seal` has no plaintext mode; "opening a repo without a key fails" lands with `core/repo` (C3) |
+| `EncryptNone` is a valid mode | ✅ | `seal` has no plaintext mode, and a repository is neither created nor opened without a key (`TestThereIsNoRepositoryWithoutAConfigOrAKey`); a destroyed key creates and opens nothing (`TestARefusedInitWritesNothing`) |
 | `Encrypt`/`Decrypt` accept no domain tag | ✅ | `dnx` refuses untagged calls (`TestAEADBindsTheDomainTag`); `seal` seals only under its `Domain` constants |
 | Identity can be a hash of normalized bytes | ✅ | `TestChunkIdentityIsSHA256OfExactBytes`; chunk contract `IdentityIsSHA256` |
 | Random 96-bit nonces under one master key | ✅ | Every pack, index object and manifest has its own salt and so its own HKDF keys (`TestSaltsAreFreshPerPack`); a key's seal budget is 2^20 and a pack holds at most 2^16 chunks |
 | Index encryption unverified | ✅ | Index objects sealed under `vdb/index/v1` and bound to their repository (`TestNoPlaintextHashInAnIndexObject`, `TestIndexObjectsRefuseTamperingAndStrangers`); nothing plaintext reaches a backend (`TestNoPlaintextOnDisk`) |
 
 ### Security: core requirements
-- [ ] AES-256-GCM for all data and metadata at rest (chunks, pack indexes, index objects and the manifest ✅; the repository config object lands with `core/repo` in C3)
+- [x] AES-256-GCM for all data and metadata at rest (chunks, pack indexes, index objects, the manifest, and the repository config: `TestTheConfigIsTheDocumentedFormat`)
 - [x] Master keys from a KMS or Argon2id passphrase; keys never stored beside data (`seal.Wrapper` + contract, key files returned to the host, never written to a backend)
 - [x] SHA-256 verified on every read, from every backend, cached or not (chunk contract on every backend, `TestCachedReadsAreVerified`; disk-cache entries carry their own SHA-256, `TestDamagedEntryIsRefetched`)
-- [ ] Hand-written, bounds-checked decoders, fuzzed (`wire`, key file, KMS envelope, local root file and marker, multivol volume map, pack, index object, manifest, stream index node and prolly node ✅, each sealed format also with a v1 golden file and every format with forgery tests; the rest as they land)
-- [ ] Model ids resolved only against the compiled-in registry (C3)
-- [ ] Every public call takes a `Principal`; default-deny `Authorizer` (C3)
-- [ ] Hard limits: object size ✅, list page ✅, chunk size ✅, pack size and chunks per pack ✅, index objects per manifest ✅, key size ✅, inline value size ✅, tree height ✅; path depth, conflicts per merge, `Log` length (C3)
+- [ ] Hand-written, bounds-checked decoders, fuzzed (`wire`, key file, KMS envelope, local root file and marker, multivol volume map, pack, index object, manifest, stream index node, prolly node, commit, working set, conflict record and tree entry ✅, each sealed format also with a v1 golden file and every format with forgery tests; the object reference and the repository config have forgery tests and no fuzz target yet, C4)
+- [x] Model ids resolved only against the compiled-in registry (registries are built explicitly by the host, `model.NewRegistry`; nothing registers itself, and an id or format the registry lacks is `ErrUnknownModel` before anything is read)
+- [ ] Every public call takes a `Principal`; the core passes it to a default-deny `Authorizer` per branch and per path prefix. Per branch, tag and repository ✅ (`TestEveryCallIsAuthorized` over all fifteen version-graph calls under a recording, a denying, a nil and a read-only authorizer; `Init` asks for admin before writing, `TestARefusedInitWritesNothing`; a nil authorizer denies, `TestDenyAllRefusesEveryCall`), with one exception argued in DESIGN §8: `Namespace` opens what a hash names. Per path prefix: not yet (C4)
+- [x] Hard limits: object size, list page, chunk size, pack size and chunks per pack, index objects per manifest, key size, inline value size, tree height; path depth and length (`TestInvalidPathsAreRejected`), conflicts per merge (`TestTooManyConflictsAbort`, default 100,000), `Log` length (`TestLogIsBoundedAndHighestFirst`), commit and tag messages (`TestMessagesAreBoundedUTF8`), principal ids
 - [x] Supply chain: disknexus pinned by version and `go.sum`; `go mod verify`, `govulncheck` in CI
 - [x] CI: `staticcheck` (via golangci-lint), `golangci-lint` warnings as errors, `govulncheck`, red-check
 
@@ -158,9 +179,32 @@ packages have no gate: their callers exercise them.
 
 Beyond the list: every incremental Flush equals a bulk build (`TestIncrementalFlushEqualsBulkBuild`), a flush reads only around its edits and a no-op flush writes nothing, and every store error surfaces at every point (`TestStoreErrorsSurfaceAtEveryPoint`).
 
-### L2 version graph, L3 diff and merge
-All ⏳ (C3). The items are in `docs/specs/engine-spec.md`; they will be
-listed here with their tests as they land.
+### L2 version graph (`core/vcs`)
+- [x] A new repo has one branch `main` pointing at an empty-root initial commit (`TestANewRepoHasMainAtAnEmptyInitialCommit`)
+- [x] Committing a working set produces a commit whose parent is the old head (`TestCommittingParentsTheOldHead`)
+- [x] Two sessions commit to the same branch concurrently: both commits land, in some order, and neither is lost (`TestConcurrentCommitsBothLand`)
+- [x] `UpdateWorkingSet` with a stale `prev` returns `ErrConflict` (`TestAStaleWorkingSetUpdateIsAConflict`)
+- [x] `MergeBase` is correct on linear history, a simple fork, and a criss-cross merge (`TestMergeBase`)
+- [x] Invalid branch names (`../x`, `a..b`, 129 chars, empty, `x.lock`) are rejected (`TestInvalidBranchNamesAreRejected`)
+- [x] Deleting the checked-out branch of an active session returns `ErrBranchInUse` (`TestDeletingACheckedOutBranchIsRefused`)
+- [x] Golden test: a fixed sequence of commits yields a fixed head hash (`TestAFixedHistoryHasAFixedHead`, which pins the store root too)
+- [x] (rules) Every ref update is one `CompareAndSetRoot`, retried on a lost swap and bounded (`TestAWriterThatKeepsLosingGivesUp`); the author is the principal (`TestTheAuthorIsThePrincipal`); `Log` is capped (`TestLogIsBoundedAndHighestFirst`)
+
+Beyond the list: every store error at every point surfaces and leaves the refs as they were (`TestStoreErrorsSurfaceAndLeaveTheRefs`, about two hundred failure points), forged refs and chunks are `ErrCorrupt` (`TestForgedRefsAreCorrupt`, `TestForgedChunksAreCorrupt`, three fuzz targets), refs name only stored objects (`TestRefsNameOnlyStoredObjects`), and a lost `Init` race is `ErrExists` (`TestAnInitThatLosesTheRaceIsErrExists`).
+
+### L3 diff and merge (`core/merge`, with the merge state in `core/vcs`)
+- [x] One table-driven test per row in the rule table (`TestEveryRuleOfTheTable`, with the rows DESIGN §8 adds)
+- [x] Fast-forward: when base == ours, result root equals theirs' root with zero work (`TestFastForwardDoesNoWork`)
+- [x] Property: merge(base, ours, ours) == ours for any edits (`TestMergingTheSameEditsIsIdentity`)
+- [x] Property: merges with no overlapping keys are symmetric (`TestDisjointMergesAreSymmetric`)
+- [x] Two branches edit different parts of one object: the model combines them with no conflict (the spec's "columns of a row" is the table model's, in the consuming repository; here `TestChangesToDifferentEntriesCombine` for trees and the line-set model in `TestConflictsBlockTheCommitUntilResolved`)
+- [x] Two branches edit the same part: exactly one conflict, with the right base, ours and theirs (`TestEveryRuleOfTheTable`, `TestBothSidesEditingIsOneConflict`, `TestConflictsPerEntry`)
+- [x] A `CellMerger` error mid-merge leaves the working set hash unchanged (`TestAFailedMergeLeavesTheWorkingSetUnchanged`, which also passes the conflict limit)
+- [x] Past the conflict limit the merge returns `ErrTooManyConflicts` and changes nothing (`TestTooManyConflictsAbort` at a limit of 10, the default being 100,000; `TestAFailedMergeLeavesTheWorkingSetUnchanged`)
+- [x] Merging 1M-row tables with 10 changed rows reads fewer than 1,000 nodes (`TestSlowMergingA1MNamespaceReadsLittle`, a million paths under `-tags slow`; 100,000 in `TestMergingLargeNamespacesReadsLittle`)
+- [x] (rules) Conflicts are stored in the working set; a commit is refused while any remain (`TestConflictsBlockTheCommitUntilResolved`), and nothing but merging, resolving and committing changes a merge in progress (`TestUpdateWorkingSetKeepsTheMergeState`)
+
+Beyond the list: merging what a branch already holds changes nothing (`TestMergingWhatIsAlreadyMergedChangesNothing`), and merges out of turn are refused (`TestMergesOutOfTurnAreRefused`).
 
 ## Decisions made while building (see also `docs/DESIGN.md` §1–2, §6)
 
@@ -171,7 +215,7 @@ listed here with their tests as they land.
 - **The chunk layer publishes by manifest swap**: packs and one index object per commit are durable before the sealed manifest names the new root; a swap that loses only to a manifest change is retried (at most 10), a moved root is the caller's conflict at once.
 - **A closed chunk store refuses every call** (`ErrClosed`), so a caller holding one past `Close` fails loudly instead of reaching a released backend.
 - **Backfills carry a `Red-Check: mutants` trailer**: a test for behavior that already exists proves itself with a mutant it kills.
-- **redcheck judges a contract change on the tests that run the contract**; a caller that skips for want of an environment (the MinIO tier) is not judged, but a change every caller skipped is refused. With no base named it checks from `main`, else the root commit.
+- **redcheck judges a contract change on the tests that run the contract**; a caller that skips for want of an environment (the MinIO tier) is not judged, but a change every caller skipped is refused. With no base named it checks from `main`, else the root commit. A backfill's mutants are built with the tags of the tests that prove them.
 - **Coverage is measured over the merged `-coverpkg` profile**, so `core/dnx` counts its compat suite.
 - **The 1 GiB CDC property runs under `-tags slow`**; the normal suite checks it at 16 MiB.
 - **Not mutation-provable here:** removing an `fsync`. kill -9 keeps the page cache, so only a power cut would show it.
@@ -179,7 +223,12 @@ listed here with their tests as they land.
 - **Every format test carries its own codec**, written from the DESIGN text, so the writer is checked against the documented format and the reader against hand-built input; goldens pin what only the implementation could produce.
 - **A mutant that hangs counts as killed** at the mutation engine's per-run timeout (three minutes).
 - **Property tests prove their reach**: a property over trees fails unless enough of its cases built deep ones.
-- **Equivalent mutants, not catalogued:** the cache's `Dir` check (`MkdirAll("")` fails anyway) and its `MkdirAll` error path (the `Chmod` after it fails); the pack index's per-entry read check (the reader's error is sticky and `Done` reports it); `OpenFrame`'s length check (authentication fails anyway); the manifest's count limits (the read fails at the first missing entry). Their statements are covered; no test can tell the mutant from the original.
+- **The merge state is the version graph's**: `UpdateWorkingSet` changes a branch's namespaces and nothing else, checked against the stored working set; there is no merge abort in v1.
+- **Merging what a branch already holds is a no-op**, and merging a descendant is not fast-forwarded (it makes a two-parent commit).
+- **`Init` is resumable**: it claims the store by writing the config, and the next `Init` with the same key finishes one that stopped after that; `Open` reports such a store as `ErrNoRepo`.
+- **`vcs.Namespace` asks no authorizer**: it opens what a hash names, and a host holding the hash holds the chunk store.
+- **Store errors are swept, not sampled**: every package with a store under it has a test that fails exactly one store call at every point an operation makes one (chunk layer, keyed data, objects, trees, the version graph and, at the blob level, `Init` and `Open`).
+- **Equivalent mutants, not catalogued:** the cache's `Dir` check (`MkdirAll("")` fails anyway) and its `MkdirAll` error path (the `Chmod` after it fails); the pack index's per-entry read check (the reader's error is sticky and `Done` reports it); `OpenFrame`'s length check (authentication fails anyway); the manifest's count limits (the read fails at the first missing entry); the repository config's 4 KiB bound (the read is cut there anyway and a cut config fails to authenticate). Their statements are covered; no test can tell the mutant from the original.
 
 ## What testing has found so far
 
@@ -205,16 +254,29 @@ listed here with their tests as they land.
 | mutant `prolly-flush-resyncs` survived | Resyncing changes only cost, which nothing measured | `TestFlushReadsOnlyAroundItsEdits` |
 | a red test | A flush that changed nothing re-stored the nodes it re-chunked | Identical nodes are named, not stored |
 | the coverage gate | Every operation's store-error paths were dark | `TestStoreErrorsSurfaceAtEveryPoint`, with a store failing exactly one read or write |
-| (redcheck on this branch) | Build-tagged tests unjudged; `TestMain` judged; pairs not matched by scope; contract changes invisible; environment-bound callers refused; no `main` in a new clone | Tool fixed each time, with a red test |
+| the coverage gate, C3 | Store-error paths and refusals dark in `vcs`, `repo`, `object` and `tree` | Fault sweeps and refusal tests, each with the mutants it kills |
+| a red test | `UpdateWorkingSet` let a host drop or empty a merge's conflicts, or forge its second parent | `ErrMergeState`, checked against the stored working set |
+| a red test | Merging a branch's own head made a commit with one parent twice, and the branch unreadable | Merging what a branch holds is a no-op |
+| a red test | An `Init` that stopped after the config left a store no call would take | The next `Init` finishes it; `Open` says `ErrNoRepo` |
+| mutant `vcs-resolve-authorized` survived | `DenyAll` cannot tell which check stopped a call | A read-only authorizer pass |
+| mutant `vcs-conflicts-surface-iteration-errors` survived | A one-node conflict list is never read past its root | A conflict list spanning nodes |
+| mutant `repo-init-finishes-on-the-configs-geometry` survived at first | Nothing `Init` writes depends on the node geometry | Five hundred objects written through the finished repository, compared by root |
+| (redcheck on this branch) | Build-tagged tests unjudged; `TestMain` judged; pairs not matched by scope; contract changes invisible; environment-bound callers refused; no `main` in a new clone; a tagged backfill's mutants built without its tag | Tool fixed each time, with a red test |
 
 ## Next
 
-1. **C3 history and models** (DESIGN §8): `core/auth` (Principal, default-deny
-   Authorizer), `core/model` (the port, frozen at C3, and the registry),
-   `core/object` (object references, the path grammar, namespaces and their
-   diff), `model/contract`, `model/blob`, `model/tree`, `core/merge` (the
-   zipped three-way driver), `core/vcs` (refs, commits, tags, working sets,
-   merge base, log) and `core/repo` (Init and Open over the `config` object).
+1. **C4 GC and hardening**: `core/gc` (mark from every ref and working set,
+   gcGen fencing, the condemned list with a grace window, orphan cleanup,
+   index compaction) and its safety property over random histories; fuzz
+   targets for the object reference and the repository config; authorization
+   per path prefix (the spec asks for it beside per branch; the version
+   graph asks per branch, tag and repository today); the security table
+   verified end to end. One design point to settle first: marking needs
+   every chunk an object reaches, and only its model knows (a tree entry
+   holds its blob's root inside the model's own bytes), but the frozen
+   port has no way to ask. The additive answer keeps the freeze: an
+   optional interface a model implements to list its references, with GC
+   refusing to run, rather than guessing, over a model that lacks it.
 2. **Before the PR**: this clone has no `main` (its first branch is
    `storage-core`, rooted at the scaffold commit). Opening the one PR needs a
    base branch on GitHub; to settle when the push is asked for.
