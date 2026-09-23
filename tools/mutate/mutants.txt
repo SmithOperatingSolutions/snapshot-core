@@ -2050,3 +2050,31 @@ find: func (r *Repo) Chunks() chunk.ReadWriter { return readWriter{r.chunks} }
 replace: func (r *Repo) Chunks() chunk.ReadWriter { return r.chunks }
 pkg: ./core/repo
 run: ^TestHostsWriteObjectsThroughTheRepository$
+
+id: e2e-tree-applies-theirs
+file: model/tree/tree.go
+find: if err = apply(ed, ct); err == nil {
+replace: if err = error(nil); err == nil {
+pkg: ./e2e
+run: ^TestAFolderBranchesDiffsAndMerges$
+
+id: e2e-merge-commit-has-two-parents
+file: core/vcs/vcs.go
+find: c.Parents = append(c.Parents, theirs.Hash)
+replace: _ = theirs.Hash
+pkg: ./e2e
+run: ^TestAFolderBranchesDiffsAndMerges$
+
+id: e2e-different-edits-conflict
+file: model/tree/tree.go
+find: case bytes.Equal(ours.To, theirs.To):
+replace: case true:
+pkg: ./e2e
+run: ^TestAFolderBranchesDiffsAndMerges$
+
+id: e2e-commits-write-their-index
+file: core/chunk/packstore/packstore.go
+find: if err := s.writeSessionIndex(ctx); err != nil {
+replace: if err := error(nil); err != nil {
+pkg: ./e2e
+run: ^TestAFolderBranchesDiffsAndMerges$
