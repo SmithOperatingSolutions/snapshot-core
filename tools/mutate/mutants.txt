@@ -1644,3 +1644,66 @@ find: func (r *Registry) IDs() []ID { return append([]ID(nil), r.ids...) }
 replace: func (r *Registry) IDs() []ID { return r.ids }
 pkg: ./core/model
 run: ^TestARegistryCannotChange$
+
+id: object-ref-flags-zero
+file: core/object/object.go
+find: if r.Done() != nil || ref.Flags != 0 || ref.Model == 0 || ref.Root.Format == 0 {
+replace: if r.Done() != nil || ref.Model == 0 || ref.Root.Format == 0 {
+pkg: ./core/object
+run: ^TestARefIsTheDocumented46Bytes$
+
+id: object-path-dot-segments
+file: core/object/object.go
+find: if depth > MaxDepth || seg == "" || len(seg) > MaxSegmentLen || seg == "." || seg == ".." {
+replace: if depth > MaxDepth || seg == "" || len(seg) > MaxSegmentLen {
+pkg: ./core/object
+run: ^TestInvalidPathsAreRejected$
+
+id: object-path-max-depth
+file: core/object/object.go
+find: if depth > MaxDepth || seg == "" || len(seg) > MaxSegmentLen || seg == "." || seg == ".." {
+replace: if seg == "" || len(seg) > MaxSegmentLen || seg == "." || seg == ".." {
+pkg: ./core/object
+run: ^TestInvalidPathsAreRejected$
+
+id: object-path-control-characters
+file: core/object/object.go
+find: if seg[i] < 0x20 || seg[i] == 0x7f {
+replace: if seg[i] < 0x20 && seg[i] == 0x7f {
+pkg: ./core/object
+run: ^TestInvalidPathsAreRejected$
+
+id: object-get-validates-path
+file: core/object/object.go
+find: func (n *Namespace) Get(ctx context.Context, path string) (Ref, model.Model, bool, error) {\n\tif err := ValidPath(path); err != nil {
+replace: func (n *Namespace) Get(ctx context.Context, path string) (Ref, model.Model, bool, error) {\n\tif err := ValidPath(path); err != nil && false {
+pkg: ./core/object
+run: ^TestEditsRefuseInvalidPathsAndRefs$
+
+id: object-get-resolves-the-model
+file: core/object/object.go
+find: m, err := n.reg.Resolve(ref.Model, ref.Root.Format)\n\tif err != nil {
+replace: m, err := n.reg.Resolve(ref.Model, ref.Root.Format)\n\tif err != nil && false {
+pkg: ./core/object
+run: ^TestAnUnregisteredModelIsUnknownAndNothingIsRead$
+
+id: object-put-resolves-the-model
+file: core/object/object.go
+find: if _, err := e.n.reg.Resolve(ref.Model, ref.Root.Format); err != nil {
+replace: if _, err := e.n.reg.Resolve(ref.Model, ref.Root.Format); err != nil && false {
+pkg: ./core/object
+run: ^TestAnUnregisteredModelIsUnknownAndNothingIsRead$
+
+id: object-put-refuses-flags
+file: core/object/object.go
+find: if ref.Flags != 0 {
+replace: if ref.Flags != 0 && false {
+pkg: ./core/object
+run: ^TestEditsRefuseInvalidPathsAndRefs$
+
+id: object-detail-needs-one-model
+file: core/object/object.go
+find: if c.Kind != prolly.Modified || c.From.Model != c.To.Model {
+replace: if c.Kind != prolly.Modified {
+pkg: ./core/object
+run: ^TestDetailAsksTheOwningModel$
