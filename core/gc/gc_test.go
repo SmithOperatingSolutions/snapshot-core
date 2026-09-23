@@ -125,6 +125,8 @@ type tb interface {
 	Fatalf(format string, args ...any)
 }
 
+func memBlobs() blob.BlobStore { return mem.New() }
+
 func newWorld(t *testing.T) *world {
 	t.Helper()
 	w := worldFor(t)

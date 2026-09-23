@@ -3121,3 +3121,66 @@ find: if err := r.check(ctx, p, auth.Write, pathResource(branch, c.Path)); err !
 replace: if err := r.check(ctx, p, auth.Write, pathResource(branch, c.Path)); err != nil && false {
 pkg: ./core/vcs
 run: ^TestWritesAreAuthorizedPerPath$
+
+id: gc-refuses-a-negative-grace
+file: core/gc/gc.go
+find: if grace < 0 {
+replace: if grace < 0 && false {
+pkg: ./core/gc
+run: ^TestGCRefusesOptionsItCannotUse$
+
+id: gc-default-grace-is-seven-days
+file: core/gc/gc.go
+find: grace = DefaultGrace
+replace: grace = time.Hour
+pkg: ./core/gc
+run: ^TestGCDefaultsToSevenDaysAndTheWallClock$
+
+id: gc-default-clock-is-the-wall-clock
+file: core/gc/gc.go
+find: clock = time.Now
+replace: clock = func() time.Time { return time.Time{} }
+pkg: ./core/gc
+run: ^TestGCDefaultsToSevenDaysAndTheWallClock$
+
+id: gc-gives-up-when-writers-never-stop
+file: core/gc/gc.go
+find: return rep, fmt.Errorf("gc: the repository changed during %d rounds in a row", maxRounds)
+replace: return rep, nil
+pkg: ./core/gc
+run: ^TestGCGivesUpWhenWritersNeverStop$
+
+id: gc-nothing-live-without-a-root
+file: core/gc/gc.go
+find: if root.IsZero() {\n\t\treturn live, nil\n\t}
+replace: if root.IsZero() && false {\n\t\treturn live, nil\n\t}
+pkg: ./core/gc
+run: ^TestGCOnAStoreWithNoRepository$
+
+id: gc-orphans-every-page
+file: core/gc/gc.go
+find: if len(page) < blob.MaxListPage {\n\t\t\t\tbreak\n\t\t\t}\n\t\t\tafter = page[len(page)-1].Name
+replace: break
+pkg: ./core/gc
+run: ^TestGCOnAStoreWithNoRepository$
+
+id: gc-surfaces-a-failed-round
+file: core/gc/gc.go
+find: if err != nil {\n\t\t\treturn rep, err\n\t\t}\n\t\trep.Live, rep.Condemned
+replace: if err != nil && false {\n\t\t\treturn rep, err\n\t\t}\n\t\trep.Live, rep.Condemned
+pkg: ./core/gc
+run: ^TestEveryStoreFailureIsGCsError$
+
+id: gc-surfaces-a-failed-probe
+file: core/gc/gc.go
+find: now, err := backendNow(ctx, o.Blobs)\n\t\tif err != nil {
+replace: now, err := backendNow(ctx, o.Blobs)\n\t\tif err != nil && false {
+pkg: ./core/gc
+run: ^TestEveryStoreFailureIsGCsError$
+
+id: gc-surfaces-a-failed-listing
+file: core/gc/gc.go
+find: page, err := bs.List(ctx, prefix, after, blob.MaxListPage)\n\t\t\tif err != nil {
+replace: page, err := bs.List(ctx, prefix, after, blob.MaxListPage)\n\t\t\tif err != nil && false {
+pkg: ./core/gc
+run: ^TestEveryStoreFailureIsGCsError$
