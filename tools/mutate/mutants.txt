@@ -684,3 +684,10 @@ find: if len(body) <= nonceSize || len(body) > nonceSize+blob.MaxRootSize {
 replace: if len(body) < 0 || len(body) > nonceSize+blob.MaxRootSize {
 pkg: ./core/blob/s3
 run: ^TestTruncatedRootObjectIsCorrupt$
+
+id: s3-list-reads-past-short-pages
+file: core/blob/s3/s3.go
+find: if !aws.ToBool(page.IsTruncated) || page.NextContinuationToken == nil {
+replace: if true {
+pkg: ./core/blob/s3
+run: ^TestListFillsPagesAcrossShortServerPages$

@@ -37,6 +37,7 @@ type Server struct {
 	ignoreIfMatch     bool
 	ignoreIfNoneMatch bool
 	dropNext          int
+	maxPage           int
 	requests          map[string]int
 	lastPut           http.Header
 	srv               *httptest.Server
@@ -85,6 +86,14 @@ func (s *Server) DropNextResponses(n int) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.dropNext = n
+}
+
+// MaxPage caps every ListObjectsV2 page at n keys (0: no cap), marking the
+// page truncated: real S3 may return fewer keys than asked for.
+func (s *Server) MaxPage(n int) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.maxPage = n
 }
 
 // Requests returns how many requests of each kind (PUT, GET, HEAD, DELETE,
@@ -338,6 +347,9 @@ func (s *Server) list(w http.ResponseWriter, r *http.Request, bucket string) {
 		}
 	}
 	s.mu.Lock()
+	if s.maxPage > 0 && s.maxPage < maxKeys {
+		maxKeys = s.maxPage
+	}
 	b := s.buckets[bucket]
 	if b == nil {
 		s.mu.Unlock()

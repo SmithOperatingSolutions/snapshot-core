@@ -202,3 +202,29 @@ func TestRangeGetIsOneRequest(t *testing.T) {
 		t.Fatalf("a range read cost %v requests, want exactly one GET", got)
 	}
 }
+
+// S3 may answer with a truncated page shorter than asked. The port says a
+// short page is the last, so List must keep reading until the page is full
+// or the listing really ends.
+func TestListFillsPagesAcrossShortServerPages(t *testing.T) {
+	srv, c := fake(t)
+	st := open(t, c, randomPrefix(t))
+	for i := 0; i < 7; i++ {
+		n := "packs/" + string(rune('a'+i))
+		if err := st.Put(ctx, n, strings.NewReader(n), int64(len(n))); err != nil {
+			t.Fatal(err)
+		}
+	}
+	srv.MaxPage(2)
+	infos, err := st.List(ctx, "packs/", "", 5)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(infos) != 5 || infos[0].Name != "packs/a" || infos[4].Name != "packs/e" {
+		t.Fatalf("List(limit 5) over 2-key server pages returned %d objects %v: a short page would look like the end", len(infos), infos)
+	}
+	rest, err := st.List(ctx, "packs/", infos[4].Name, 5)
+	if err != nil || len(rest) != 2 {
+		t.Fatalf("the final page = %v, %v; want the 2 remaining objects", rest, err)
+	}
+}
