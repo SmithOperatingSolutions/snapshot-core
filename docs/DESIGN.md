@@ -99,7 +99,7 @@ associated data is `tag 0 context`. The key id is
 | KMS envelope | `"SCKW"` · version u16 · key id [32] · wrapped (len-prefixed, ≤ 8 KiB) |
 | Pack | header `"SCPK"` · version u16 · flags u16 · salt [32]; frames `seal(Chunk, ctx = chunk hash, zstd-or-raw)`; index `seal(PackIndex, ctx = header, "SCPI" · version · count · entries sorted by hash: hash [32] · offset · stored · raw · codec)`; trailer index-offset u64 · index-length u32 · `"SCPE"` |
 | Index object | `"SCIX"` · version u16 · salt [32] · `seal(Index, ctx = header, "SCIP" · version · packs: pack hash [32] · salt [32] · size · entries …)`, packs and entries strictly sorted |
-| Manifest (the root value) | `"SCMF"` · version u16 · salt [32] · `seal(Refs, ctx = header, "SCMP" · version · seq u64 · gcGen u64 · root [32] · count · index-object hashes [32] strictly sorted · count · condemned (kind u8: 1 pack, 2 index object · hash [32] · at i64 unix ns))` |
+| Manifest (the root value) | `"SCMF"` · version u16 · salt [32] · `seal(Refs, ctx = header, "SCMP" · version · seq u64 · gcGen u64 · root [32] · count · index-object hashes [32] strictly sorted · count · condemned (kind u8: 1 pack, 2 index object, 3 orphan pack deleted, 4 orphan index object deleted · hash [32] · at i64 unix ns))` |
 | local store | `.snapshot-core` marker (`"SCLS"` · version · store id [16]) · `objects/<segment>~` · `tmp/` · `root` (`"SCRF"` · version · value · SHA-256) · `root.lock` |
 | multivol map | `"SCMV"` · version u16 · count u16 · (volume id [16] · path) … · SHA-256 |
 | S3 keys | `<prefix>objects/<name>!` (the `!` keeps any key from being both an object and a path prefix, which MinIO hides from listings; it sorts below every name byte) · `<prefix>root` = 16-byte nonce ‖ value · `<prefix>probe/…` |
@@ -462,18 +462,38 @@ unreachable. One run:
    manifest can still load them for a grace window); gcGen + 1 when anything
    expired. A swap that loses to a writer starts the run over, from a fresh
    read and a fresh mark.
-4. Delete the expired packs and the expired index objects, then any pack or
-   index object no manifest names (left by a writer that never published)
-   once it is older than the grace window.
+4. Delete the expired packs and the expired index objects, then the
+   orphans: packs and index objects no manifest names (left by a writer
+   that never published) that are older than the grace window. GC lists
+   them before its swap and records each in it as deleted, at its own
+   clock, and deletes only once the swap has landed; the record stays for a
+   grace window and an hour.
 
 **Writers.** Put never deduplicates against a chunk whose only copy is in a
 condemned pack; it stores it again. A writer remembers the chunks it did
 deduplicate, and when the manifest's gcGen has moved by the time it
-publishes, it first checks each is still stored; if one expired, the publish
-fails with `chunk.ErrStale`, which the version graph reports as `ErrConflict`,
-and the writer's host re-reads and writes again. A store that sees a new gcGen
-rebuilds its index from the manifest's index objects, so nothing points into
-a deleted pack.
+publishes, it first checks each is still stored. A store that sees a new
+gcGen rebuilds its index from the manifest's index objects, so nothing
+points into a deleted pack.
+
+A writer's own unpublished packs and index objects are checked at publish
+too: the publish is refused if the manifest it would replace records one of
+them as a deleted orphan, or if one it uploaded more than an hour ago (by
+its own clock) is no longer stored. The record makes a publish that races
+the deletion fail inside the swap itself: GC's swap comes first, so the
+writer either swaps against a manifest that carries the record or loses to
+it and reads it next; the existence check covers deletions older than a
+record lasts, and an ordinary publish, whose uploads are fresh, checks
+nothing.
+
+**A lost session.** Either way, what the store told its callers was stored
+is partly gone, and it cannot know which roots in flight reach it: a chunk
+written into a deleted pack was promised to a put as surely as one found
+stored. So the publish fails with `chunk.ErrSessionLost` (the version
+graph's `ErrSessionLost`), and from then on the store refuses every write;
+reads go on. The host reopens the repository, which starts a fresh
+session, and writes again. Only a host that broke the grace window gets
+here.
 
 **Clocks.** Expiry is GC's own reckoning: it dates condemnations by its
 clock, and an expired pack is deleted by name whatever else is true. An
@@ -501,7 +521,7 @@ reads, and at the end that nothing unreachable is left to condemn.
 **What a host must do.** Publish what it writes, and use what it reads,
 within the grace window. A chunk is deleted only when it was unreachable at
 two marks at least a grace window apart, so a host that holds a hash, or an
-unpublished write, across that span can lose it; the check at publish covers
-deduplication, and `UpdateWorkingSet` refuses namespace roots that are not
-stored, but a host that sits on hashes for a week is outside the contract, as
+unpublished write, across that span can lose it; the checks at publish
+cover deduplication and the writer's own uploads, and `UpdateWorkingSet`
+refuses namespace roots that are not stored, but a host that sits on hashes for a week is outside the contract, as
 it is with git's `gc.pruneExpire`.
