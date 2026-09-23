@@ -79,3 +79,17 @@ func RepackedNames(ctx context.Context, o Options) ([]string, error) {
 	sort.Strings(out)
 	return out, nil
 }
+
+// PackOrder lists the packs the store's manifest indexes, in the order a
+// store loads them.
+func PackOrder(ctx context.Context, o Options) ([]string, error) {
+	r, err := Begin(ctx, o)
+	if err != nil {
+		return nil, err
+	}
+	var out []string
+	for _, p := range r.packs {
+		out = append(out, p.Name)
+	}
+	return out, nil
+}

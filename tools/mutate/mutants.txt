@@ -3808,7 +3808,7 @@ file: core/chunk/packstore/packstore.go
 find: if cond[info.Name] == (pass == 1) {
 replace: if cond[info.Name] == (pass == 0) {
 pkg: ./core/chunk/packstore
-run: ^TestARoundRepacksAPackThatIsMostlyDead$
+run: ^TestPacksInServiceComeFirstInTheIndex$
 
 id: gc-run-passes-the-repack-policy
 file: core/gc/gc.go
@@ -3942,3 +3942,10 @@ find: if s.disk != nil {\n\t\treturn s.disk.has(h)\n\t}
 replace: if s.disk != nil {\n\t\treturn false, nil\n\t}
 pkg: ./core/chunk/packstore
 run: ^TestAStoreSpillsItsIndexToDisk$
+
+id: packstore-spill-adds-the-packs-in-service-first
+file: core/chunk/packstore/spill.go
+find: if cond[info.Name] {\n\t\t\t\tlater = append(later, info)
+replace: if false {\n\t\t\t\tlater = append(later, info)
+pkg: ./core/chunk/packstore
+run: ^TestPacksInServiceComeFirstInTheIndex$

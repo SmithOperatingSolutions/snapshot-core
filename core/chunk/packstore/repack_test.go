@@ -314,3 +314,42 @@ func TestRepackingRefusesACorruptPack(t *testing.T) {
 		t.Fatalf("the pack whole again, the round repacked %d, want it", out.Repacked)
 	}
 }
+
+// The packs in service come first in every index, in memory and on disk,
+// whatever order the index objects list them in (they sort packs by hash):
+// a chunk a repacked pack still holds resolves to its new pack. The
+// fixture is drawn again until the repacked pack sorts before the new one,
+// the order in which nothing but the rule gets this right.
+func TestPacksInServiceComeFirstInTheIndex(t *testing.T) {
+	for attempt := 0; attempt < 64; attempt++ {
+		bs, kr := mem.New(), keyring(t)
+		s := open(t, bs, kr)
+		live := payload("live", 1<<10)
+		hs := packed(t, s, hash.Hash{}, []byte("the root"), payload("dead one", 3<<10), payload("dead two", 3<<10), live)
+		old := objects(t, bs, "packs/")
+		if out := repackRound(t, bs, kr, liveSet(hs[0], hs[3]), t0, packstore.Repack{}); out.Repacked != 1 {
+			t.Fatalf("fixture: repacked %d", out.Repacked)
+		}
+		added := newNames(old, objects(t, bs, "packs/"))
+		order, err := packstore.PackOrder(ctx, packstore.Options{Blobs: bs, Keys: kr, Repo: repo})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(order) != 2 {
+			t.Fatalf("fixture: the index lists %d packs, want the repacked one and its replacement", len(order))
+		}
+		if order[0] != old[0] {
+			continue // the new pack happens to sort first; draw again
+		}
+		fresh := open(t, bs, kr)
+		if got := locationOf(t, fresh, hs[3]); got != added[0] {
+			t.Fatalf("with the repacked pack listed first, a fresh store in memory locates the live chunk in it (%s), want the new pack %s", got, added[0])
+		}
+		spilled := openSpilled(t, bs, kr, t.TempDir())
+		if got := locationOf(t, spilled, hs[3]); got != added[0] {
+			t.Fatalf("with the repacked pack listed first, a fresh store on disk locates the live chunk in it (%s), want the new pack %s", got, added[0])
+		}
+		return
+	}
+	t.Fatal("in 64 draws the repacked pack never sorted before its replacement: the fixture cannot reach the order under test")
+}
