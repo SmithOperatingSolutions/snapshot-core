@@ -18,6 +18,7 @@ import (
 	"github.com/SmithOperatingSolutions/snapshot-core/core/model"
 	"github.com/SmithOperatingSolutions/snapshot-core/core/object"
 	"github.com/SmithOperatingSolutions/snapshot-core/core/prolly"
+	"github.com/SmithOperatingSolutions/snapshot-core/core/stream"
 )
 
 // ID is the tree model's id.
@@ -72,7 +73,10 @@ type Model struct {
 	Config prolly.Config
 }
 
-var _ model.Model = Model{}
+var (
+	_ model.Model  = Model{}
+	_ model.Walker = Model{}
+)
 
 // ID implements model.Model.
 func (Model) ID() model.ID { return ID }
@@ -170,6 +174,24 @@ func Read(ctx context.Context, r chunk.Reader, c prolly.Config, root model.Root)
 func (m Model) Validate(ctx context.Context, root model.Root, r chunk.Reader) error {
 	_, err := Read(ctx, r, m.Config, root)
 	return err
+}
+
+// Walk implements model.Walker: a tree's map, and each entry's content,
+// which is a stream.
+func (m Model) Walk(ctx context.Context, root model.Root, r chunk.Reader, visit func(hash.Hash) (bool, error)) error {
+	if root.Format != Format {
+		return fmt.Errorf("%w: tree format %d", model.ErrUnknownModel, root.Format)
+	}
+	if root.Depth != 0 {
+		return fmt.Errorf("%w: a tree root claims stream depth %d", chunk.ErrCorrupt, root.Depth)
+	}
+	return prolly.Walk(ctx, r, m.Config, root.Hash, visit, func(key, val []byte) error {
+		e, err := checked(key, val)
+		if err != nil {
+			return err
+		}
+		return stream.Walk(ctx, r, stream.Ref{Root: e.Content.Hash, Size: e.Content.Size, Depth: e.Content.Depth}, visit)
+	})
 }
 
 var kinds = map[prolly.ChangeKind]model.ChangeKind{prolly.Added: model.Added, prolly.Removed: model.Removed, prolly.Modified: model.Modified}

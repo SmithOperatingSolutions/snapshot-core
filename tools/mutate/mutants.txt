@@ -2652,3 +2652,38 @@ find: return stream.Walk(ctx, r, stream.Ref{Root: root.Hash, Size: root.Size, De
 replace: return stream.Walk(ctx, r, stream.Ref{Root: root.Hash, Size: root.Size}, visit)
 pkg: ./model/blob
 run: ^TestABlobWalksToEveryChunk$
+
+id: tree-walk-checks-the-format
+file: model/tree/tree.go
+find: if root.Format != Format {\n\t\treturn fmt.Errorf(
+replace: if root.Format != Format && false {\n\t\treturn fmt.Errorf(
+pkg: ./model/tree
+run: ^TestATreeWalksToItsEntriesContents$
+
+id: tree-walk-checks-the-depth
+file: model/tree/tree.go
+find: if root.Depth != 0 {\n\t\treturn fmt.Errorf(
+replace: if root.Depth != 0 && false {\n\t\treturn fmt.Errorf(
+pkg: ./model/tree
+run: ^TestATreeWalksToItsEntriesContents$
+
+id: tree-walk-checks-paths
+file: model/tree/tree.go
+find: e, err := checked(key, val)\n\t\tif err != nil {
+replace: e, err := checked(key, val)\n\t\tif err != nil && false {
+pkg: ./model/tree
+run: ^TestATreeWalksToItsEntriesContents$
+
+id: tree-walk-content-depth
+file: model/tree/tree.go
+find: Depth: e.Content.Depth}, visit)
+replace: Depth: 0}, visit)
+pkg: ./model/tree
+run: ^TestATreeWalksToItsEntriesContents$
+
+id: tree-walk-names-contents
+file: model/tree/tree.go
+find: Depth: e.Content.Depth}, visit)
+replace: Depth: e.Content.Depth}, func(hash.Hash) (bool, error) { return false, nil })
+pkg: ./model/tree
+run: ^TestATreeWalksToItsEntriesContents$
