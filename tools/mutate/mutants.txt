@@ -2324,7 +2324,7 @@ file: core/vcs/vcs.go
 find: func (r *Repo) ResolveConflict(ctx context.Context, p auth.Principal, branch, path string, to *object.Ref) error {\n\tif err := r.branchCheck(ctx, p, auth.Write, branch); err != nil {
 replace: func (r *Repo) ResolveConflict(ctx context.Context, p auth.Principal, branch, path string, to *object.Ref) error {\n\tif err := r.branchCheck(ctx, p, auth.Write, branch); err != nil && false {
 pkg: ./core/vcs
-run: ^TestEveryCallIsAuthorized$
+run: ^(TestEveryCallIsAuthorized|TestAWriteNeedsTheBranchAsWellAsItsPaths)$
 
 id: repo-init-finishes-a-stopped-init
 file: core/repo/repo.go

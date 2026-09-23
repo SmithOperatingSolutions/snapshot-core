@@ -128,3 +128,58 @@ func TestWritesAreAuthorizedPerPath(t *testing.T) {
 		t.Fatalf("positive control: alice resolving it: %v", err)
 	}
 }
+
+// pathsOnly allows reading anything and writing any path, and nothing more.
+type pathsOnly struct{}
+
+func (pathsOnly) Authorize(_ context.Context, _ auth.Principal, a auth.Action, res string) error {
+	if a == auth.Read || strings.HasPrefix(res, "path:") {
+		return nil
+	}
+	return errors.New("paths only")
+}
+
+// Permission on paths is not permission on the branch: with every path
+// granted and the branch not, every write is ErrDenied: an update, a
+// commit, a merge, and a resolution.
+func TestAWriteNeedsTheBranchAsWellAsItsPaths(t *testing.T) {
+	f := newFixture(t)
+	main := vcs.MainBranch
+	f.put(main, "doc", f.obj(8, "base"))
+	f.commit(main, "base")
+	f.branchFrom("dev")
+	f.put("dev", "doc", f.obj(8, "dev"))
+	theirs := f.commit("dev", "dev work")
+	f.put(main, "doc", f.obj(8, "main"))
+	f.commit(main, "main work")
+	if res, err := f.r.Merge(ctx, alice, main, theirs.Hash); err != nil || len(res.Conflicts) != 1 {
+		t.Fatalf("fixture: the merge found %d conflicts (%v), want 1", len(res.Conflicts), err)
+	}
+	o := f.o
+	o.Authorizer = pathsOnly{}
+	r, err := vcs.Open(ctx, f.s, o)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ws, err := r.WorkingSet(ctx, bob, main)
+	if err != nil {
+		t.Fatalf("positive control: reading: %v", err)
+	}
+	resolved := f.obj(8, "resolved")
+	for _, c := range []struct {
+		name string
+		call func() error
+	}{
+		{"UpdateWorkingSet", func() error { _, err := r.UpdateWorkingSet(ctx, bob, main, ws, ws); return err }},
+		{"CommitWorkingSet", func() error { _, err := r.CommitWorkingSet(ctx, bob, "dev", "c"); return err }},
+		{"Merge", func() error { _, err := r.Merge(ctx, bob, "dev", theirs.Hash); return err }},
+		{"ResolveConflict", func() error { return r.ResolveConflict(ctx, bob, main, "doc", &resolved) }},
+	} {
+		if err := c.call(); !errors.Is(err, auth.ErrDenied) {
+			t.Errorf("%s with the paths granted and the branch not = %v, want ErrDenied", c.name, err)
+		}
+	}
+	if now, _ := r.WorkingSet(ctx, bob, main); now.Hash != ws.Hash {
+		t.Fatal("a refused write changed main's working set")
+	}
+}
