@@ -23,6 +23,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"time"
 )
 
 // Mutant is one deliberate defect and the test that must catch it.
@@ -172,9 +173,10 @@ func unescape(s string) string {
 
 // Options configures a run.
 type Options struct {
-	Root  string    // repository root to copy
-	GoCmd string    // defaults to "go"
-	Log   io.Writer // progress; nil discards
+	Root    string        // repository root to copy
+	GoCmd   string        // defaults to "go"
+	Log     io.Writer     // progress; nil discards
+	Timeout time.Duration // per mutant test run
 }
 
 // Run applies each mutant in a throwaway copy of Root and reports outcomes.

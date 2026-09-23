@@ -7,6 +7,7 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 )
 
 const mutantsFile = `# A comment, then two mutants separated by a blank line.
@@ -159,5 +160,25 @@ func TestParseAndRunHonorEnv(t *testing.T) {
 	}
 	if outs[0].Status != Killed {
 		t.Fatalf("with env CALC_STRICT=1 the mutant was %v (%s): the env did not reach the test", outs[0].Status, outs[0].Detail)
+	}
+}
+
+// A mutant that makes its test hang is killed at the run's timeout, not
+// after go test's default ten minutes.
+func TestAHangingMutantIsKilledAtTheTimeout(t *testing.T) {
+	root := fixtureModule(t)
+	ms := []Mutant{{ID: "hang", File: "calc/calc.go", Find: "return a + b", Replace: "for {\n\t}", Pkg: "./calc", Run: "^TestAdd$"}}
+	ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second) // a net, should the timeout not apply
+	defer cancel()
+	start := time.Now()
+	outs, err := Run(ctx, Options{Root: root, Timeout: 2 * time.Second}, ms)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if o := outs[0]; o.Status != Killed || !strings.Contains(o.Detail, "timed out") {
+		t.Fatalf("a mutant that hangs its test was %v (%s), want killed at the timeout", o.Status, o.Detail)
+	}
+	if el := time.Since(start); el > 40*time.Second {
+		t.Fatalf("killing a hanging mutant took %v with a 2s timeout", el)
 	}
 }
