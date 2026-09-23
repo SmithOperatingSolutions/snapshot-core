@@ -228,3 +228,103 @@ func TestListFillsPagesAcrossShortServerPages(t *testing.T) {
 		t.Fatalf("the final page = %v, %v; want the 2 remaining objects", rest, err)
 	}
 }
+
+// ignoring is a server that applies PUTs regardless of both conditions, as
+// Backblaze B2 is reported to (#8).
+func ignoring(t *testing.T) (*s3fake.Server, *awss3.Client) {
+	t.Helper()
+	srv, c := fake(t)
+	srv.IgnoreIfMatch(true)
+	srv.IgnoreIfNoneMatch(true)
+	return srv, c
+}
+
+func openObjectsOnly(t *testing.T, c *awss3.Client, prefix string) *s3.Store {
+	t.Helper()
+	st, err := s3.Open(ctx, s3.Options{Client: c, Bucket: bucket, Prefix: prefix, AllowHTTP: true, ObjectsOnly: true})
+	if err != nil {
+		t.Fatalf("Open, objects only, on an endpoint that ignores conditional writes: %v", err)
+	}
+	return st
+}
+
+// DESIGN §4, #8: an endpoint that ignores conditional writes cannot hold a
+// root (Open refuses it), but can hold objects: opened objects-only it passes
+// the blob contract for objects, with the root elsewhere.
+func TestObjectsOnlyRunsWhereConditionalWritesAreIgnored(t *testing.T) {
+	_, c := ignoring(t)
+	if _, err := s3.Open(ctx, s3.Options{Client: c, Bucket: bucket, Prefix: randomPrefix(t), AllowHTTP: true}); !errors.Is(err, s3.ErrUnsafeEndpoint) {
+		t.Fatalf("positive control: a full store on the endpoint = %v, want ErrUnsafeEndpoint", err)
+	}
+	contract.Run(t, func(t *testing.T) blob.BlobStore { return openObjectsOnly(t, c, randomPrefix(t)) },
+		contract.Options{ObjectsOnly: true})
+}
+
+// Objects only, a put is a HEAD and then a PUT, so one writer at a time
+// still gets ErrExists on a name that is taken, at the price of one HEAD; a
+// name that is taken costs the HEAD alone.
+func TestObjectsOnlyPutIsAHeadThenAPut(t *testing.T) {
+	srv, c := ignoring(t)
+	st := openObjectsOnly(t, c, randomPrefix(t))
+	srv.ResetRequests()
+	if err := st.Put(ctx, "packs/a", strings.NewReader("a"), 1); err != nil {
+		t.Fatal(err)
+	}
+	if got := srv.Requests(); got["HEAD"] != 1 || got["PUT"] != 1 || len(got) != 2 {
+		t.Fatalf("a put cost %v requests, want one HEAD and one PUT", got)
+	}
+	srv.ResetRequests()
+	if err := st.Put(ctx, "packs/a", strings.NewReader("b"), 1); !errors.Is(err, blob.ErrExists) {
+		t.Fatalf("a put on a taken name = %v, want ErrExists", err)
+	}
+	if got := srv.Requests(); got["HEAD"] != 1 || len(got) != 1 {
+		t.Fatalf("a put on a taken name cost %v requests, want the HEAD alone", got)
+	}
+	rc, err := st.Get(ctx, "packs/a", 0, -1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, _ := io.ReadAll(rc)
+	rc.Close()
+	if string(b) != "a" {
+		t.Fatalf("the taken name now holds %q, want the first writer's %q", b, "a")
+	}
+}
+
+// The root's copy a split store keeps is replaced in place under the
+// store's prefix, read back as the latest, is nothing before the first write,
+// and is no object: no listing reaches it.
+func TestTheMirrorIsReplacedInPlace(t *testing.T) {
+	_, c := ignoring(t)
+	for name, st := range map[string]*s3.Store{
+		"objects only": openObjectsOnly(t, c, randomPrefix(t)),
+	} {
+		t.Run(name, func(t *testing.T) {
+			if got, err := st.ReadMirror(ctx); err != nil || len(got) != 0 {
+				t.Fatalf("a mirror never written reads %q, %v; want nothing", got, err)
+			}
+			for _, v := range []string{"root one", "root two"} {
+				if err := st.WriteMirror(ctx, []byte(v)); err != nil {
+					t.Fatalf("WriteMirror(%q) = %v", v, err)
+				}
+				if got, err := st.ReadMirror(ctx); err != nil || string(got) != v {
+					t.Fatalf("after WriteMirror(%q) the mirror reads %q, %v", v, got, err)
+				}
+			}
+			infos, err := st.List(ctx, "", "", blob.MaxListPage)
+			if err != nil || len(infos) != 0 {
+				t.Fatalf("the store lists %v (%v) after mirror writes, want no objects", infos, err)
+			}
+		})
+	}
+	_, full := fake(t)
+	st := open(t, full, randomPrefix(t))
+	for _, v := range []string{"a copy", "a newer copy"} { // in place: the second write must land too
+		if err := st.WriteMirror(ctx, []byte(v)); err != nil {
+			t.Fatalf("WriteMirror(%q) on a full store = %v", v, err)
+		}
+		if got, err := st.ReadMirror(ctx); err != nil || string(got) != v {
+			t.Fatalf("a full store's mirror reads %q, %v; want %q", got, err, v)
+		}
+	}
+}

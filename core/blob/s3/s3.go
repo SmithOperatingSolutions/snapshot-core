@@ -59,7 +59,16 @@ type Options struct {
 	// SSEKMSKeyID, when set, asks S3 to encrypt every object at rest with
 	// that KMS key as well (defense in depth; the data is already sealed).
 	SSEKMSKeyID string
+	// ObjectsOnly runs on a provider that ignores conditional writes: the
+	// store holds objects and no root (blob.ErrNoRoot), for blob/split.
+	ObjectsOnly bool
 }
+
+// WriteMirror replaces the root's copy a split store keeps here.
+func (s *Store) WriteMirror(ctx context.Context, value []byte) error { return nil }
+
+// ReadMirror returns the root's copy, or nothing when there is none.
+func (s *Store) ReadMirror(ctx context.Context) ([]byte, error) { return nil, nil }
 
 // NewClient builds a path-style client for an endpoint with static
 // credentials, for tests and MinIO. Checksums are computed only when S3
