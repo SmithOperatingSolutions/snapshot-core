@@ -7,6 +7,8 @@ package auth
 import (
 	"context"
 	"errors"
+	"fmt"
+	"unicode/utf8"
 )
 
 // MaxIDLen is the longest principal id.
@@ -26,7 +28,17 @@ type Principal struct {
 
 // Validate reports whether p can be recorded: a non-empty, valid UTF-8 id of
 // at most MaxIDLen bytes with no control characters.
-func (p Principal) Validate() error { return nil }
+func (p Principal) Validate() error {
+	if p.ID == "" || len(p.ID) > MaxIDLen || !utf8.ValidString(p.ID) {
+		return fmt.Errorf("%w: id of %d bytes", ErrInvalidPrincipal, len(p.ID))
+	}
+	for _, r := range p.ID {
+		if r < 0x20 || r == 0x7f {
+			return fmt.Errorf("%w: id %q holds a control character", ErrInvalidPrincipal, p.ID)
+		}
+	}
+	return nil
+}
 
 // Action is what a call would do.
 type Action uint8
@@ -50,7 +62,7 @@ type DenyAll struct{}
 
 // Authorize implements Authorizer.
 func (DenyAll) Authorize(ctx context.Context, p Principal, a Action, resource string) error {
-	return nil
+	return fmt.Errorf("%w: no authorizer allows %s", ErrDenied, p.ID)
 }
 
 // AllowAll allows everything, for tests and single-user tools that choose it.
@@ -63,5 +75,17 @@ func (AllowAll) Authorize(ctx context.Context, p Principal, a Action, resource s
 
 // Check validates p, then asks az (DenyAll when nil) about the call.
 func Check(ctx context.Context, az Authorizer, p Principal, a Action, resource string) error {
+	if err := p.Validate(); err != nil {
+		return err
+	}
+	if az == nil {
+		az = DenyAll{}
+	}
+	if err := az.Authorize(ctx, p, a, resource); err != nil {
+		if errors.Is(err, ErrDenied) {
+			return err
+		}
+		return fmt.Errorf("%w: %w", ErrDenied, err)
+	}
 	return nil
 }

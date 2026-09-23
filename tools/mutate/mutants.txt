@@ -1602,3 +1602,24 @@ find: cut, err := cdc.New(r, c.CDC)\n\tif err != nil {
 replace: cut, err := cdc.New(r, c.CDC)\n\tif err != nil && false {
 pkg: ./core/prolly
 run: ^TestStreamRefusesImpossibleRefsAndOffsets$
+
+id: auth-nil-means-deny
+file: core/auth/auth.go
+find: if az == nil {\n\t\taz = DenyAll{}
+replace: if az == nil {\n\t\taz = AllowAll{}
+pkg: ./core/auth
+run: ^TestDenyAllRefusesEveryCall$
+
+id: auth-principal-checked-first
+file: core/auth/auth.go
+find: if err := p.Validate(); err != nil {\n\t\treturn err
+replace: if err := p.Validate(); err != nil && false {\n\t\treturn err
+pkg: ./core/auth
+run: ^TestPrincipalsAreValidated$
+
+id: auth-no-control-characters
+file: core/auth/auth.go
+find: if r < 0x20 || r == 0x7f {
+replace: if r < 0x20 && r == 0x7f {
+pkg: ./core/auth
+run: ^TestPrincipalsAreValidated$
