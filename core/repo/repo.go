@@ -192,7 +192,10 @@ func (o Options) vcs(g Geometry) vcs.Options {
 }
 
 // Init creates a repository in o.Blobs. Writing the config (put-if-absent)
-// claims the store; the chunk layer and the version graph follow.
+// claims the store; the chunk layer and the version graph follow. An Init
+// that stopped after writing the config is finished by the next Init with
+// the same key, on the geometry that config records; a store claimed by
+// another key, or holding a finished repository, is ErrExists.
 func Init(ctx context.Context, p auth.Principal, o Options) (*Repo, error) {
 	if err := o.check(); err != nil {
 		return nil, err
@@ -216,44 +219,55 @@ func Init(ctx context.Context, p auth.Principal, o Options) (*Repo, error) {
 		return nil, err
 	}
 	if err := o.Blobs.Put(ctx, configName, bytes.NewReader(b), int64(len(b))); err != nil {
-		if errors.Is(err, blob.ErrExists) {
-			return nil, ErrExists
+		if !errors.Is(err, blob.ErrExists) {
+			return nil, err
 		}
-		return nil, err
+		if c, err = readConfig(ctx, o); err != nil {
+			return nil, fmt.Errorf("%w: %w", ErrExists, err)
+		}
 	}
-	chunks, err := packstore.Open(ctx, packstore.Options{Blobs: o.Blobs, Keys: o.Keys, Repo: c.RepoID, PackSize: g.PackSize})
+	chunks, err := packstore.Open(ctx, packstore.Options{Blobs: o.Blobs, Keys: o.Keys, Repo: c.RepoID, PackSize: c.Geometry.PackSize})
 	if err != nil {
 		return nil, err
 	}
-	v, err := vcs.Init(ctx, chunks, p, o.vcs(g))
+	v, err := vcs.Init(ctx, chunks, p, o.vcs(c.Geometry))
 	if err != nil {
 		_ = chunks.Close()
+		if errors.Is(err, vcs.ErrExists) {
+			return nil, ErrExists
+		}
 		return nil, err
 	}
 	return &Repo{Repo: v, Config: c, chunks: chunks}, nil
 }
 
-// Open opens the repository in o.Blobs.
-func Open(ctx context.Context, o Options) (*Repo, error) {
-	if err := o.check(); err != nil {
-		return nil, err
-	}
+// readConfig reads and opens the config object.
+func readConfig(ctx context.Context, o Options) (Config, error) {
 	rc, err := o.Blobs.Get(ctx, configName, 0, -1)
 	if errors.Is(err, blob.ErrNotFound) {
-		return nil, ErrNoRepo
+		return Config{}, ErrNoRepo
 	}
 	if err != nil {
-		return nil, err
+		return Config{}, err
 	}
 	b, err := io.ReadAll(io.LimitReader(rc, maxConfig+1))
 	_ = rc.Close()
 	if err != nil {
-		return nil, err
+		return Config{}, err
 	}
 	if len(b) > maxConfig {
-		return nil, fmt.Errorf("%w: over %d bytes", ErrConfig, maxConfig)
+		return Config{}, fmt.Errorf("%w: over %d bytes", ErrConfig, maxConfig)
 	}
-	c, err := openConfig(b, o.Keys)
+	return openConfig(b, o.Keys)
+}
+
+// Open opens the repository in o.Blobs. A store whose Init stopped before
+// it finished holds no repository yet (ErrNoRepo): Init finishes it.
+func Open(ctx context.Context, o Options) (*Repo, error) {
+	if err := o.check(); err != nil {
+		return nil, err
+	}
+	c, err := readConfig(ctx, o)
 	if err != nil {
 		return nil, err
 	}
@@ -264,6 +278,9 @@ func Open(ctx context.Context, o Options) (*Repo, error) {
 	v, err := vcs.Open(ctx, chunks, o.vcs(c.Geometry))
 	if err != nil {
 		_ = chunks.Close()
+		if errors.Is(err, vcs.ErrNoRepo) {
+			return nil, fmt.Errorf("%w: an Init stopped before it finished; Init again to finish it", ErrNoRepo)
+		}
 		return nil, err
 	}
 	return &Repo{Repo: v, Config: c, chunks: chunks}, nil

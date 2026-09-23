@@ -2025,15 +2025,15 @@ run: ^TestThereIsNoRepositoryWithoutAConfigOrAKey$
 
 id: repo-init-refuses-an-existing-repository
 file: core/repo/repo.go
-find: if errors.Is(err, blob.ErrExists) {\n\t\t\treturn nil, ErrExists
-replace: if errors.Is(err, blob.ErrExists) && false {\n\t\t\treturn nil, ErrExists
+find: if errors.Is(err, vcs.ErrExists) {\n\t\t\treturn nil, ErrExists
+replace: if errors.Is(err, vcs.ErrExists) && false {\n\t\t\treturn nil, ErrExists
 pkg: ./core/repo
 run: ^TestInitThenOpen$
 
 id: repo-open-finds-no-repository
 file: core/repo/repo.go
-find: if errors.Is(err, blob.ErrNotFound) {\n\t\treturn nil, ErrNoRepo
-replace: if errors.Is(err, blob.ErrNotFound) && false {\n\t\treturn nil, ErrNoRepo
+find: if errors.Is(err, blob.ErrNotFound) {\n\t\treturn Config{}, ErrNoRepo
+replace: if errors.Is(err, blob.ErrNotFound) && false {\n\t\treturn Config{}, ErrNoRepo
 pkg: ./core/repo
 run: ^TestThereIsNoRepositoryWithoutAConfigOrAKey$
 
@@ -2316,3 +2316,24 @@ find: func (r *Repo) ResolveConflict(ctx context.Context, p auth.Principal, bran
 replace: func (r *Repo) ResolveConflict(ctx context.Context, p auth.Principal, branch, path string, to *object.Ref) error {\n\tif err := r.branchCheck(ctx, p, auth.Write, branch); err != nil && false {
 pkg: ./core/vcs
 run: ^TestEveryCallIsAuthorized$
+
+id: repo-init-finishes-a-stopped-init
+file: core/repo/repo.go
+find: if c, err = readConfig(ctx, o); err != nil {\n\t\t\treturn nil, fmt.Errorf("%w: %w", ErrExists, err)\n\t\t}
+replace: return nil, ErrExists
+pkg: ./core/repo
+run: ^TestAnInitThatStoppedIsFinishedByTheNext$
+
+id: repo-another-key-cannot-finish
+file: core/repo/repo.go
+find: if c, err = readConfig(ctx, o); err != nil {
+replace: if c, err = readConfig(ctx, o); err != nil && false {
+pkg: ./core/repo
+run: ^TestAnInitThatStoppedIsFinishedByTheNext$
+
+id: repo-open-reports-a-stopped-init
+file: core/repo/repo.go
+find: if errors.Is(err, vcs.ErrNoRepo) {
+replace: if errors.Is(err, vcs.ErrNoRepo) && false {
+pkg: ./core/repo
+run: ^TestAnInitThatStoppedIsFinishedByTheNext$
