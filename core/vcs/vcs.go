@@ -345,11 +345,24 @@ func (r *Repo) WorkingSet(ctx context.Context, p auth.Principal, branch string) 
 }
 
 // UpdateWorkingSet replaces a branch's working set with next if it is still
-// prev (ErrConflict otherwise), and returns next as stored.
+// prev (ErrConflict otherwise), and returns next as stored. It changes the
+// namespaces only: next carries the merge in progress as stored
+// (ErrMergeState otherwise), which only merging, resolving and committing
+// change.
 func (r *Repo) UpdateWorkingSet(ctx context.Context, p auth.Principal, branch string, prev, next WorkingSet) (WorkingSet, error) {
 	if err := r.branchCheck(ctx, p, auth.Write, branch); err != nil {
 		return WorkingSet{}, err
 	}
+	return r.setWorkingSet(ctx, branch, prev, next, true)
+}
+
+func sameMerge(a, b *MergeState) bool {
+	return a == nil && b == nil || a != nil && b != nil && *a == *b
+}
+
+// setWorkingSet is UpdateWorkingSet, and with keepMerge false it may
+// change the merge state too.
+func (r *Repo) setWorkingSet(ctx context.Context, branch string, prev, next WorkingSet, keepMerge bool) (WorkingSet, error) {
 	have, err := r.s.Has(ctx, []hash.Hash{next.Working, next.Staged})
 	if err != nil {
 		return WorkingSet{}, err
@@ -368,6 +381,15 @@ func (r *Repo) UpdateWorkingSet(ctx context.Context, p auth.Principal, branch st
 		}
 		if work != prev.Hash {
 			return fmt.Errorf("%w: branch %s", ErrConflict, branch)
+		}
+		if keepMerge {
+			stored, err := r.readWorkingSet(ctx, work)
+			if err != nil {
+				return err
+			}
+			if !sameMerge(stored.Merge, next.Merge) {
+				return fmt.Errorf("%w: branch %s", ErrMergeState, branch)
+			}
 		}
 		return e.Put(workKey(branch), h[:])
 	})
@@ -710,7 +732,7 @@ func (r *Repo) Merge(ctx context.Context, p auth.Principal, branch string, their
 	}
 	next := WorkingSet{Working: res.Merged.Root(), Staged: res.Merged.Root(),
 		Merge: &MergeState{Base: baseHash, Theirs: theirs, Conflicts: conflicts.Root()}}
-	if _, err := r.UpdateWorkingSet(ctx, p, branch, ws, next); err != nil {
+	if _, err := r.setWorkingSet(ctx, branch, ws, next, false); err != nil {
 		return merge.Result{}, err
 	}
 	return res, nil
@@ -796,7 +818,7 @@ func (r *Repo) ResolveConflict(ctx context.Context, p auth.Principal, branch, pa
 			return err
 		}
 		next.Merge.Conflicts = cm.Root()
-		if _, err = r.UpdateWorkingSet(ctx, p, branch, ws, next); !errors.Is(err, ErrConflict) {
+		if _, err = r.setWorkingSet(ctx, branch, ws, next, false); !errors.Is(err, ErrConflict) {
 			return err
 		}
 	}

@@ -2120,3 +2120,17 @@ find: k, v, ok, err := it.Next()\n\t\tif err != nil || !ok {\n\t\t\treturn out, 
 replace: k, v, ok, err := it.Next()\n\t\tif err != nil || !ok {\n\t\t\treturn out, nil
 pkg: ./core/vcs
 run: ^TestStoreErrorsSurfaceAndLeaveTheRefs$
+
+id: vcs-update-keeps-the-merge-state
+file: core/vcs/vcs.go
+find: if !sameMerge(stored.Merge, next.Merge) {
+replace: if !sameMerge(stored.Merge, next.Merge) && false {
+pkg: ./core/vcs
+run: ^TestUpdateWorkingSetKeepsTheMergeState$
+
+id: vcs-merge-state-checked-against-the-store
+file: core/vcs/vcs.go
+find: stored, err := r.readWorkingSet(ctx, work)
+replace: stored, err := prev, error(nil)
+pkg: ./core/vcs
+run: ^TestUpdateWorkingSetKeepsTheMergeState$
