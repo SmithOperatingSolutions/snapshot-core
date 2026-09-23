@@ -502,3 +502,45 @@ find: defer os.Remove(name) // no-op after the rename
 replace: _ = name
 pkg: ./core/blob/internal/fsutil
 run: ^TestWriteFileAtomicFailureAfterTempCleansUp$
+
+id: local-put-cleans-its-temp
+file: core/blob/local/local.go
+find: defer os.Remove(tmpName) // after a successful link it is just a second name; CreateTemp makes it 0600
+replace: _ = tmpName
+pkg: ./core/blob/local
+run: ^TestPutFailureAfterTheBodyCleansItsTemp$
+
+id: local-unreadable-is-not-not-found
+file: core/blob/local/local.go
+find: f, err := os.Open(s.objectPath(name))\n\tif errors.Is(err, fs.ErrNotExist) {\n\t\treturn nil, blob.ErrNotFound\n\t}\n\tif err != nil {\n\t\treturn nil, err\n\t}
+replace: f, err := os.Open(s.objectPath(name))\n\tif err != nil {\n\t\treturn nil, blob.ErrNotFound\n\t}
+pkg: ./core/blob/local
+run: ^TestUnreadableObjectIsAnErrorNotNotFound$
+
+id: local-delete-reports-failure
+file: core/blob/local/local.go
+find: if errors.Is(err, fs.ErrNotExist) {\n\t\t\treturn nil\n\t\t}\n\t\treturn err
+replace: return nil
+pkg: ./core/blob/local
+run: ^TestDeleteReportsFailures$
+
+id: local-sweep-keeps-young-temps
+file: core/blob/local/local.go
+find: time.Since(info.ModTime()) > staleTemp
+replace: time.Since(info.ModTime()) > 0
+pkg: ./core/blob/local
+run: ^TestStaleTempFilesAreSweptAtOpen$
+
+id: local-sweep-removes-old-temps
+file: core/blob/local/local.go
+find: time.Since(info.ModTime()) > staleTemp
+replace: time.Since(info.ModTime()) < 0
+pkg: ./core/blob/local
+run: ^TestStaleTempFilesAreSweptAtOpen$
+
+id: local-root-checks-magic
+file: core/blob/local/local.go
+find: if err := r.Done(); err != nil || string(magic) != rootMagic || len(v) == 0 {
+replace: if err := r.Done(); err != nil || (string(magic) != rootMagic && false) || len(v) == 0 {
+pkg: ./core/blob/local
+run: ^TestRootFileForgeriesAreCorrupt$
