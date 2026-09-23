@@ -1223,3 +1223,17 @@ find: if errors.Is(err, blob.ErrNotFound) {\n\t\t\treturn nil, fmt.Errorf("%w: %
 replace: if errors.Is(err, blob.ErrNotFound) && false {\n\t\t\treturn nil, fmt.Errorf("%w: %s is in pack %s, which is missing"
 pkg: ./core/chunk/packstore
 run: ^TestAChunkWhosePackIsGoneIsCorrupt$
+
+id: packstore-cache-evicts
+file: core/chunk/packstore/cache.go
+find: for c.used > c.max {
+replace: for c.used > c.max && false {
+pkg: ./core/chunk/packstore
+run: ^TestTheChunkCacheIsByteBounded$
+
+id: packstore-cache-skips-oversize
+file: core/chunk/packstore/cache.go
+find: if c == nil || len(data) > c.max {
+replace: if c == nil {
+pkg: ./core/chunk/packstore
+run: ^TestTheChunkCacheIsByteBounded$

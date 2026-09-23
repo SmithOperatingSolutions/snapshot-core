@@ -1,9 +1,14 @@
 package packstore_test
 
 import (
+	"context"
 	"errors"
+	"io"
+	"strings"
+	"sync/atomic"
 	"testing"
 
+	"github.com/SmithOperatingSolutions/snapshot-core/core/blob"
 	"github.com/SmithOperatingSolutions/snapshot-core/core/blob/mem"
 	"github.com/SmithOperatingSolutions/snapshot-core/core/chunk"
 	"github.com/SmithOperatingSolutions/snapshot-core/core/chunk/packstore"
@@ -44,5 +49,69 @@ func TestCachedReadsAreVerified(t *testing.T) {
 	}
 	if b, err := s.Get(ctx, h); !errors.Is(err, chunk.ErrCorrupt) {
 		t.Fatalf("a read served from a corrupted cache = %d bytes, %v; want ErrCorrupt", len(b), err)
+	}
+}
+
+// packReads counts the reads that reach the backend's packs.
+type packReads struct {
+	blob.BlobStore
+	n atomic.Int64
+}
+
+func (p *packReads) Get(ctx context.Context, name string, off, n int64) (io.ReadCloser, error) {
+	if strings.HasPrefix(name, "packs/") {
+		p.n.Add(1)
+	}
+	return p.BlobStore.Get(ctx, name, off, n)
+}
+
+// The chunk cache holds at most CacheBytes: going over evicts the least
+// recently read chunk, and a chunk bigger than the whole cache is never
+// kept, nor does it flush what is there on its way through.
+func TestTheChunkCacheIsByteBounded(t *testing.T) {
+	inner, kr := &packReads{BlobStore: mem.New()}, keyring(t)
+	w := open(t, inner, kr)
+	a, b, c, big := payload("a", 4000), payload("b", 4000), payload("c", 4000), payload("big", 12000)
+	for _, d := range [][]byte{a, b, c, big} {
+		if _, err := w.Put(ctx, d); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := w.CompareAndSetRoot(ctx, hash.Hash{}, hash.Sum(a)); err != nil {
+		t.Fatal(err)
+	}
+	s, err := packstore.Open(ctx, packstore.Options{Blobs: inner, Keys: kr, Repo: repo, CacheBytes: 10000})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	reads := func(d []byte) int64 { // backend reads one Get took
+		t.Helper()
+		before := inner.n.Load()
+		if _, err := s.Get(ctx, hash.Sum(d)); err != nil {
+			t.Fatal(err)
+		}
+		return inner.n.Load() - before
+	}
+	if reads(a) != 1 || reads(a) != 0 {
+		t.Fatal("positive control: a chunk read twice was not cached")
+	}
+	reads(b) // a and b: 8000 of 10000 bytes
+	if reads(a) != 0 {
+		t.Fatal("a was evicted while the cache had room") // a is now the most recent
+	}
+	reads(big)
+	if reads(a) != 0 || reads(b) != 0 {
+		t.Error("reading a chunk bigger than the whole cache flushed it")
+	}
+	if reads(big) != 1 {
+		t.Error("a chunk bigger than the whole cache was kept")
+	}
+	reads(c) // 12000 bytes: over the cap, so the least recent (a) goes
+	if reads(c) != 0 || reads(b) != 0 {
+		t.Error("going over the cap evicted a recent chunk")
+	}
+	if reads(a) != 1 {
+		t.Error("the least recently read chunk survived going over the cap")
 	}
 }
