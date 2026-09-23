@@ -508,7 +508,7 @@ func (c checker) checkTestCommit(commit string, mutants []string) ([]Violation, 
 		vs = append(vs, Violation{Reason: "every test that calls the changed contract skipped, so nothing was seen to fail"})
 	}
 	if mutants != nil {
-		mvs, err := c.checkMutants(wt, changed, mutants)
+		mvs, err := c.checkMutants(wt, changed, tags, mutants)
 		if err != nil {
 			return nil, ran, err
 		}
@@ -536,8 +536,9 @@ func judge(name string, r *testResult, backfill bool) (Violation, bool) {
 }
 
 // checkMutants proves a backfill: every named mutant exists at this commit and
-// is killed by the tests this commit added or changed — not by some other test.
-func (c checker) checkMutants(wt string, changed map[string][]string, ids []string) ([]Violation, error) {
+// is killed by the tests this commit added or changed — not by some other
+// test — built with the tags those tests need.
+func (c checker) checkMutants(wt string, changed, tags map[string][]string, ids []string) ([]Violation, error) {
 	f, err := os.Open(filepath.Join(wt, filepath.FromSlash(c.o.MutantsFile)))
 	if err != nil {
 		return []Violation{{Reason: fmt.Sprintf("names mutants %v but %s is unreadable at this commit: %v", ids, c.o.MutantsFile, err)}}, nil
@@ -558,12 +559,13 @@ func (c checker) checkMutants(wt string, changed map[string][]string, ids []stri
 			vs = append(vs, Violation{Reason: fmt.Sprintf("names mutant %q, which %s at this commit does not define", id, c.o.MutantsFile)})
 			continue
 		}
-		names := changed[strings.TrimPrefix(path.Clean(m.Pkg), "./")]
+		dir := strings.TrimPrefix(path.Clean(m.Pkg), "./")
+		names := changed[dir]
 		if len(names) == 0 {
 			vs = append(vs, Violation{Reason: fmt.Sprintf("mutant %q is judged in %s, where this commit changed no test", id, m.Pkg)})
 			continue
 		}
-		m.Run = "^(" + strings.Join(names, "|") + ")$"
+		m.Run, m.Tags = "^("+strings.Join(names, "|")+")$", tags[dir]
 		outs, err := mutation.Run(c.ctx, mutation.Options{Root: wt, GoCmd: c.o.GoCmd, Log: c.o.Log}, []mutation.Mutant{m})
 		if err != nil {
 			return nil, err

@@ -35,6 +35,7 @@ type Mutant struct {
 	Pkg     string   // package to test, e.g. ./core/blob/mem
 	Run     string   // -run pattern naming the guarding test
 	Env     []string // extra KEY=VALUE for the test run (e.g. crash iterations)
+	Tags    []string // build tags for the build check and the test run
 	Line    int      // line in the mutants file, for messages
 }
 
@@ -230,11 +231,15 @@ func runOne(ctx context.Context, o Options, work string, m Mutant) Outcome {
 	// Restore from the original bytes, whatever happens (docs/TESTING.md §5).
 	defer func() { _ = os.WriteFile(path, orig, 0o644) }()
 
+	var tags []string
+	if len(m.Tags) > 0 {
+		tags = []string{"-tags", strings.Join(m.Tags, ",")}
+	}
 	// Build-check: compile the package and its tests without running any.
-	if out, err := goCmd(ctx, o, work, "test", "-count=1", "-run", "^$", m.Pkg); err != nil {
+	if out, err := goCmd(ctx, o, work, append(append([]string{"test", "-count=1"}, tags...), "-run", "^$", m.Pkg)...); err != nil {
 		return Outcome{Mutant: m, Status: Invalid, Detail: "does not compile: " + firstLines(out, 3)}
 	}
-	out, err := goCmdEnv(ctx, o, work, m.Env, "test", "-count=1", "-timeout", o.Timeout.String(), "-run", m.Run, m.Pkg)
+	out, err := goCmdEnv(ctx, o, work, m.Env, append(append([]string{"test", "-count=1"}, tags...), "-timeout", o.Timeout.String(), "-run", m.Run, m.Pkg)...)
 	if strings.Contains(out, "no tests to run") {
 		return Outcome{Mutant: m, Status: Invalid, Detail: fmt.Sprintf("-run %q matches no test in %s", m.Run, m.Pkg)}
 	}

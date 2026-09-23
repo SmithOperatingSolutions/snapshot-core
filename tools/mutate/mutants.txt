@@ -2526,3 +2526,17 @@ find: if _, err := d.to.reg.Resolve(side.Model, side.Root.Format); err != nil {
 replace: if _, err := d.to.reg.Resolve(side.Model, side.Root.Format); err != nil && false {
 pkg: ./core/object
 run: ^TestDetailNeverHandsAModelAnUnknownFormat$
+
+id: redcheck-backfill-mutants-get-their-tags
+file: tools/redcheck/redcheck.go
+find: m.Run, m.Tags = "^("+strings.Join(names, "|")+")$", tags[dir]
+replace: m.Run, m.Tags = "^("+strings.Join(names, "|")+")$", nil
+pkg: ./tools/redcheck
+run: ^TestTaggedBackfillIsProvenUnderItsTag$
+
+id: mutation-runs-with-build-tags
+file: tools/internal/mutation/mutation.go
+find: tags = []string{"-tags", strings.Join(m.Tags, ",")}
+replace: tags = nil
+pkg: ./tools/redcheck
+run: ^TestTaggedBackfillIsProvenUnderItsTag$
