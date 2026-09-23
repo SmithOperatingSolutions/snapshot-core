@@ -5,8 +5,8 @@ every "first failing test" checkbox in both specs. Updated at each milestone
 boundary and whenever a checklist item turns green; the evidence for each item
 is the named test, and the commit that added it carries its red.
 
-**Updated 2026-09-23** · red-check clean · 452 checked-in mutants, all killed
-· lint clean · every package at or above its coverage gate
+**Updated 2026-09-23** · red-check clean · every checked-in mutant killed ·
+lint clean · every package at or above its coverage gate
 
 ## Milestones
 
