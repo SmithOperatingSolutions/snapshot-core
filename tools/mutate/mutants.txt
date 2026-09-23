@@ -1490,3 +1490,115 @@ find: if !existing[h] {
 replace: if !existing[h] || true {
 pkg: ./core/prolly
 run: ^TestANoOpFlushWritesNothing$
+
+id: prolly-get-read-error-surfaces
+file: core/prolly/prolly.go
+find: if n, err = m.child(ctx, n, i); err != nil {\n\t\t\treturn nil, false, err
+replace: if n, err = m.child(ctx, n, i); err != nil {\n\t\t\treturn nil, false, nil
+pkg: ./core/prolly
+run: ^TestStoreErrorsSurfaceAtEveryPoint$
+
+id: prolly-iter-error-surfaces
+file: core/prolly/prolly.go
+find: if err := it.c.advance(it.ctx); err != nil {\n\t\treturn nil, nil, false, err
+replace: if err := it.c.advance(it.ctx); err != nil {\n\t\treturn nil, nil, false, nil
+pkg: ./core/prolly
+run: ^TestStoreErrorsSurfaceAtEveryPoint$
+
+id: prolly-flush-level-error-surfaces
+file: core/prolly/flush.go
+find: if edits, err = m.applyLevel(ctx, level, edits); err != nil {\n\t\t\treturn nil, err
+replace: if edits, err = m.applyLevel(ctx, level, edits); err != nil {\n\t\t\treturn m, nil
+pkg: ./core/prolly
+run: ^TestStoreErrorsSurfaceAtEveryPoint$
+
+id: prolly-diff-send-error-surfaces
+file: core/prolly/diff.go
+find: v, err := side.c.m.materialize(d.ctx, e.val)\n\t\tif err != nil {\n\t\t\treturn Change{}, false, err
+replace: v, err := side.c.m.materialize(d.ctx, e.val)\n\t\tif err != nil {\n\t\t\treturn Change{}, false, nil
+pkg: ./core/prolly
+run: ^TestStoreErrorsSurfaceAtEveryPoint$
+
+id: prolly-store-put-error-surfaces
+file: core/prolly/flush.go
+find: if _, err := m.s.Put(ctx, b); err != nil {
+replace: if _, err := m.s.Put(ctx, b); err != nil && false {
+pkg: ./core/prolly
+run: ^TestStoreErrorsSurfaceAtEveryPoint$
+
+id: prolly-diff-fetch-error-surfaces
+file: core/prolly/diff.go
+find: if err := c.fetch(ctx); err != nil {\n\t\t\treturn err
+replace: if err := c.fetch(ctx); err != nil && false {\n\t\t\treturn err
+pkg: ./core/prolly
+run: ^TestStoreErrorsSurfaceAtEveryPoint$
+
+id: stream-write-put-error-surfaces
+file: core/stream/stream.go
+find: h, err := w.Put(ctx, data)\n\t\tif err != nil {
+replace: h, err := w.Put(ctx, data)\n\t\tif err != nil && false {
+pkg: ./core/prolly
+run: ^TestStoreErrorsSurfaceAtEveryPoint$
+
+id: stream-emit-put-error-surfaces
+file: core/stream/stream.go
+find: h, err := b.w.Put(b.ctx, encodeIndex(lv, l.entries))\n\tif err != nil {
+replace: h, err := b.w.Put(b.ctx, encodeIndex(lv, l.entries))\n\tif err != nil && false {
+pkg: ./core/prolly
+run: ^TestStoreErrorsSurfaceAtEveryPoint$
+
+id: stream-read-error-surfaces
+file: core/stream/stream.go
+find: b, err := r.rd.Get(r.ctx, h)\n\t\tif err != nil {
+replace: b, err := r.rd.Get(r.ctx, h)\n\t\tif err != nil && false {
+pkg: ./core/prolly
+run: ^TestStoreErrorsSurfaceAtEveryPoint$
+
+id: prolly-config-inline-limit
+file: core/prolly/prolly.go
+find: if c.InlineLimit < 0 || c.InlineLimit > maxInlineLimit {
+replace: if (c.InlineLimit < 0 || c.InlineLimit > maxInlineLimit) && false {
+pkg: ./core/prolly
+run: ^TestConfigIsValidated$
+
+id: prolly-child-nonempty
+file: core/prolly/prolly.go
+find: case len(c.entries) == 0:
+replace: case len(c.entries) == 0 && false:
+pkg: ./core/prolly
+run: ^TestMoreForgedTreesAreCorrupt$
+
+id: prolly-decode-value-tags
+file: core/prolly/node.go
+find: case valInline:
+replace: case valInline, 0x02:
+pkg: ./core/prolly
+run: ^TestMoreForgedTreesAreCorrupt$
+
+id: prolly-long-values-compare-by-ref
+file: core/prolly/node.go
+find: if v.ref != nil {\n\t\treturn *v.ref == *o.ref
+replace: if v.ref != nil {\n\t\treturn true
+pkg: ./core/prolly
+run: ^TestDiffReadsLongValues$
+
+id: stream-negative-offset
+file: core/stream/stream.go
+find: if off < 0 {
+replace: if off < 0 && false {
+pkg: ./core/prolly
+run: ^TestStreamRefusesImpossibleRefsAndOffsets$
+
+id: stream-write-validates-nodes
+file: core/stream/stream.go
+find: rule, err := boundary.New(c.Nodes)\n\tif err != nil {
+replace: rule, err := boundary.New(c.Nodes)\n\tif err != nil && false {
+pkg: ./core/prolly
+run: ^TestStreamRefusesImpossibleRefsAndOffsets$
+
+id: stream-write-validates-cdc
+file: core/stream/stream.go
+find: cut, err := cdc.New(r, c.CDC)\n\tif err != nil {
+replace: cut, err := cdc.New(r, c.CDC)\n\tif err != nil && false {
+pkg: ./core/prolly
+run: ^TestStreamRefusesImpossibleRefsAndOffsets$
