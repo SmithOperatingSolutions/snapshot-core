@@ -478,7 +478,7 @@ func (s *Store) SwapRoot(ctx context.Context, expected blob.Version, next []byte
 		return blob.NoVersion, err
 	}
 	tmpName := tmp.Name()
-	defer os.Remove(tmpName) // no-op after the rename
+	defer os.Remove(tmpName)                  // no-op after the rename
 	_, werr := tmp.Write(encodeRoot(v, next)) // CreateTemp makes it 0600
 	if werr == nil {
 		werr = tmp.Sync()

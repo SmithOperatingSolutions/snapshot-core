@@ -16,11 +16,11 @@ func SyncDir(dir string) error {
 	if err != nil {
 		return err
 	}
-	if err := d.Sync(); err != nil {
-		_ = d.Close()
-		return err
+	err = d.Sync()
+	if cerr := d.Close(); err == nil {
+		err = cerr
 	}
-	return d.Close()
+	return err
 }
 
 // Lock takes an exclusive flock on path. The kernel drops it when the process
