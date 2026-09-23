@@ -2743,3 +2743,80 @@ find: m, err := reg.Resolve(ref.Model, ref.Root.Format)\n\tif err != nil {\n\t\t
 replace: m, err := reg.Resolve(ref.Model, ref.Root.Format)\n\tif err != nil && false {\n\t\treturn err\n\t}\n\tw, ok := m.(model.Walker)
 pkg: ./core/object
 run: ^TestWalkRefusesWhatItCannotWalk$
+
+id: vcs-walk-follows-heads
+file: core/vcs/walk.go
+find: case strings.HasPrefix(k, "heads/"):\n\t\t\tw.commits = append(w.commits, h)\n\t\t\treturn nil
+replace: case strings.HasPrefix(k, "heads/"):\n\t\t\treturn nil
+pkg: ./core/vcs
+run: ^TestAWalkNamesAllTheRepositoryHolds$
+
+id: vcs-walk-follows-tags
+file: core/vcs/walk.go
+find: case strings.HasPrefix(k, "tags/"):\n\t\t\treturn w.tag(h)
+replace: case strings.HasPrefix(k, "tags/"):\n\t\t\treturn nil
+pkg: ./core/vcs
+run: ^TestAWalkNamesAllTheRepositoryHolds$
+
+id: vcs-walk-follows-working-sets
+file: core/vcs/walk.go
+find: case strings.HasPrefix(k, "work/"):\n\t\t\treturn w.workingSet(h)
+replace: case strings.HasPrefix(k, "work/"):\n\t\t\treturn nil
+pkg: ./core/vcs
+run: ^TestAWalkNamesAllTheRepositoryHolds$
+
+id: vcs-walk-follows-the-merge
+file: core/vcs/walk.go
+find: w.commits = append(w.commits, ws.Merge.Base, ws.Merge.Theirs)
+replace: w.commits = append(w.commits, ws.Merge.Base)
+pkg: ./core/vcs
+run: ^TestAWalkNamesAllTheRepositoryHolds$
+
+id: vcs-walk-follows-conflicts
+file: core/vcs/walk.go
+find: if err := object.WalkRef(w.ctx, w.rd, w.o.Registry, side, w.visit); err != nil {
+replace: if err := error(nil); side.Model == 0 && err != nil {
+pkg: ./core/vcs
+run: ^TestAWalkNamesAllTheRepositoryHolds$
+
+id: vcs-walk-follows-parents
+file: core/vcs/walk.go
+find: w.commits = append(w.commits, c.Parents...)
+replace: w.commits = append(w.commits, c.Parents[:0]...)
+pkg: ./core/vcs
+run: ^TestAWalkNamesAllTheRepositoryHolds$
+
+id: vcs-walk-refuses-unknown-refs
+file: core/vcs/walk.go
+find: return corrupt("a ref %q the version graph does not write", key)
+replace: return nil
+pkg: ./core/vcs
+run: ^TestWalkRefusesWhatItCannotName$
+
+id: vcs-walk-ref-length-checked
+file: core/vcs/walk.go
+find: if len(val) != hash.Size {
+replace: if len(val) != hash.Size && false {
+pkg: ./core/vcs
+run: ^TestWalkRefusesWhatItCannotName$
+
+id: vcs-walk-one-role-per-chunk
+file: core/vcs/walk.go
+find: if k != kind {
+replace: if k != kind && false {
+pkg: ./core/vcs
+run: ^TestWalkRefusesWhatItCannotName$
+
+id: vcs-tag-kind-byte
+file: core/vcs/encode.go
+find: if r.U8() != kindTag {
+replace: if r.U8() != kindTag && false {
+pkg: ./core/vcs
+run: ^TestForgedTagsAreCorrupt$
+
+id: vcs-tag-utf8
+file: core/vcs/encode.go
+find: case !utf8.ValidString(t.Tagger) || !utf8.ValidString(t.Message):
+replace: case (!utf8.ValidString(t.Tagger) || !utf8.ValidString(t.Message)) && false:
+pkg: ./core/vcs
+run: ^TestForgedTagsAreCorrupt$

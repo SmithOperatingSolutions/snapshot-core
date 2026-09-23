@@ -1,7 +1,6 @@
 package vcs
 
 import (
-	"errors"
 	"fmt"
 	"time"
 	"unicode/utf8"
@@ -96,7 +95,22 @@ func (t Tag) encode() []byte {
 
 // decodeTag parses a tag chunk (chunk.ErrCorrupt when malformed).
 func decodeTag(b []byte) (Tag, error) {
-	return Tag{}, errors.New("vcs: decodeTag is not written yet")
+	r := wire.NewReader(b)
+	var t Tag
+	if r.U8() != kindTag {
+		return Tag{}, corrupt("tag header")
+	}
+	copy(t.Target[:], r.Fixed(hash.Size))
+	t.Time = toTime(int64(r.U64()))
+	t.Tagger = string(r.LenBytes(auth.MaxIDLen))
+	t.Message = string(r.LenBytes(MaxMessageLen))
+	switch {
+	case r.Done() != nil:
+		return Tag{}, corrupt("tag: %v", r.Done())
+	case !utf8.ValidString(t.Tagger) || !utf8.ValidString(t.Message):
+		return Tag{}, corrupt("a tag's tagger or message is not UTF-8")
+	}
+	return t, nil
 }
 
 // Working set chunk: 0x05 · working [32] · staged [32] · merging u8 ·
