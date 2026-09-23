@@ -11,9 +11,11 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"runtime"
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -60,6 +62,7 @@ func Run(t *testing.T, newStore Factory, opts Options) {
 		concurrentSwappers(t, newStore(t), opts.Swappers, opts.Rounds)
 	})
 	t.Run("ConcurrentPutsOneWinner", func(t *testing.T) { concurrentPuts(t, newStore(t)) })
+	t.Run("RootReadsDuringSwapsAreWhole", func(t *testing.T) { rootReadsDuringSwapsAreWhole(t, newStore(t)) })
 }
 
 var ctx = context.Background()
@@ -609,5 +612,73 @@ func concurrentPuts(t *testing.T, s blob.BlobStore) {
 	}
 	if got := mustGet(t, s, "packs/contended"); !bytes.Equal(got, payload(fmt.Sprintf("racer-%d", wins[0]), 64<<10)) {
 		t.Fatal("the stored object is not the winner's bytes: two writers' bytes were mixed")
+	}
+}
+
+// A root read while swaps are in progress returns a whole root that some swap
+// wrote, never a torn one: Root takes no lock, so only an atomic replace keeps
+// its readers safe. Unlike PutIsAtomic this has to race (a swap's value is a
+// byte slice, with no reader to hold open halfway); large values and readers
+// in tight loops make a torn window, if there is one, near-certain to be hit.
+func rootReadsDuringSwapsAreWhole(t *testing.T, s blob.BlobStore) {
+	const swaps, readers, size = 50, 4, 256 << 10
+	values := make([][]byte, swaps)
+	written := make(map[string]bool, swaps)
+	for i := range values {
+		values[i] = payload(fmt.Sprintf("whole-root-%d", i), size)
+		written[string(values[i])] = true
+	}
+	v, err := s.SwapRoot(ctx, blob.NoVersion, values[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	var (
+		stop  = make(chan struct{})
+		wg    sync.WaitGroup
+		reads atomic.Int64
+		bad   = make(chan string, readers)
+	)
+	for r := 0; r < readers; r++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for {
+				select {
+				case <-stop:
+					return
+				default:
+				}
+				root, err := s.Root(ctx)
+				switch {
+				case err != nil:
+					bad <- fmt.Sprintf("Root during a swap failed: %v", err)
+					return
+				case !written[string(root.Value)]:
+					bad <- fmt.Sprintf("Root during a swap returned %d bytes that no swap wrote", len(root.Value))
+					return
+				}
+				reads.Add(1)
+			}
+		}()
+	}
+	// However fast the backend, the readers get in between every two swaps.
+	deadline := time.Now().Add(30 * time.Second)
+	for i := 1; i < swaps && err == nil; i++ {
+		v, err = s.SwapRoot(ctx, v, values[i])
+		for next := reads.Load() + 1; reads.Load() < next && len(bad) == 0 && time.Now().Before(deadline); {
+			runtime.Gosched()
+		}
+	}
+	close(stop)
+	wg.Wait()
+	close(bad)
+	if err != nil {
+		t.Fatalf("swapping: %v", err)
+	}
+	for msg := range bad {
+		t.Fatal(msg)
+	}
+	if n := reads.Load(); n < swaps {
+		t.Fatalf("only %d root reads overlapped %d swaps: the readers never raced the writer", n, swaps)
 	}
 }

@@ -346,8 +346,7 @@ file: core/blob/local/local.go
 find: if err := os.Rename(tmpName, filepath.Join(s.dir, rootName)); err != nil {
 replace: if err := os.WriteFile(filepath.Join(s.dir, rootName), encodeRoot(v, next), filePerm); err != nil {
 pkg: ./core/blob/local
-run: ^TestCrashDuringSwapRootLeavesOldOrNew$
-env: SNAPSHOT_CRASH_ITERATIONS=1000
+run: ^TestContract$/^RootReadsDuringSwapsAreWhole$
 
 id: local-list-dirs-sort-as-slash
 file: core/blob/local/local.go
