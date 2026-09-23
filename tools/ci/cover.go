@@ -84,3 +84,11 @@ func GateCoverage(cs []PackageCoverage) []CoverFailure {
 	}
 	return fs
 }
+
+// CoverageFromProfile computes per-package statement coverage from a merged
+// -coverpkg profile: a statement counts as covered if ANY test binary covered
+// it, so a package exercised only by another package's tests (core/dnx by its
+// compat suite, a contract suite by its backends) is measured as it is.
+func CoverageFromProfile(profile string) []PackageCoverage {
+	return nil // stub
+}

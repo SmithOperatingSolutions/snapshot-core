@@ -74,3 +74,33 @@ func TestGateFailsLowCoverageAndUntestedCorePackages(t *testing.T) {
 		t.Errorf("want exactly core/prolly and core/limits to fail, got %+v", fs)
 	}
 }
+
+// Two test binaries report the same blocks; a block covered by either counts.
+const profile = `mode: set
+github.com/SmithOperatingSolutions/snapshot-core/core/dnx/dnx.go:10.1,12.2 2 0
+github.com/SmithOperatingSolutions/snapshot-core/core/dnx/dnx.go:14.1,20.2 8 0
+github.com/SmithOperatingSolutions/snapshot-core/core/hash/hash.go:5.1,9.2 4 1
+github.com/SmithOperatingSolutions/snapshot-core/core/dnx/dnx.go:10.1,12.2 2 1
+github.com/SmithOperatingSolutions/snapshot-core/core/dnx/dnx.go:14.1,20.2 8 1
+github.com/SmithOperatingSolutions/snapshot-core/core/hash/hash.go:5.1,9.2 4 0
+github.com/SmithOperatingSolutions/snapshot-core/core/hash/hash.go:11.1,13.2 6 0
+`
+
+func TestCoverageFromProfileMergesBlocksAcrossTestBinaries(t *testing.T) {
+	got := map[string]float64{}
+	for _, c := range CoverageFromProfile(profile) {
+		got[c.Pkg] = c.Percent
+	}
+	// core/dnx: both blocks covered by the second binary -> 10/10.
+	// core/hash: 4 of 10 statements covered (the 6-statement block never) -> 40%.
+	want := map[string]float64{"core/dnx": 100, "core/hash": 40}
+	if len(got) != len(want) {
+		t.Fatalf("got packages %v, want %v", got, want)
+	}
+	for pkg, w := range want {
+		if got[pkg] != w {
+			t.Errorf("%s: %.1f%%, want %.1f%% — a block covered by any test binary is covered, "+
+				"and each block counts once however many binaries report it", pkg, got[pkg], w)
+		}
+	}
+}
