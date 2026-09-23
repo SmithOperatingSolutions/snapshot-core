@@ -22,6 +22,8 @@ wins where they disagree.
 - A test for behavior that already exists is a backfill: add its mutant to
   `tools/mutate/mutants.txt` and put `Red-Check: mutants <id>` in the body.
 - `mise run redcheck` must pass for the branch before calling work done.
+- Keep `docs/PROGRESS.md` current: update it at every milestone boundary and
+  whenever a spec checklist item turns green (name the test that proves it).
 
 ## Commands
 
