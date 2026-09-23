@@ -824,3 +824,17 @@ find: zstd.WithDecoderMaxMemory(MaxChunkSize)
 replace: zstd.WithDecoderMaxMemory(1<<40)
 pkg: ./core/pack
 run: ^TestDecompressionIsBoundedInMemory$
+
+id: dedup-object-must-hash-to-its-name
+file: core/dedup/dedup.go
+find: if name != "index/"+hex.EncodeToString(sum[:]) {
+replace: if name != "index/"+hex.EncodeToString(sum[:]) && false {
+pkg: ./core/dedup
+run: ^TestIndexObjectsRefuseTamperingAndStrangers$
+
+id: dedup-first-location-wins
+file: core/dedup/dedup.go
+find: if _, dup := x.chunks[e.Hash]; dup {
+replace: if _, dup := x.chunks[e.Hash]; dup && false {
+pkg: ./core/dedup
+run: ^TestDuplicateChunksKeepTheirFirstLocation$
