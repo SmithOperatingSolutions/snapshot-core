@@ -385,16 +385,16 @@ pkg: ./core/blob/local
 run: ^TestCreateRefusesANonEmptyDirectory$
 
 id: local-dirs-owner-only
-file: core/blob/local/local.go
-find: dirPerm     = 0o700
-replace: dirPerm     = 0o755
+file: core/blob/internal/fsutil/fsutil.go
+find: DirPerm  = 0o700
+replace: DirPerm  = 0o755
 pkg: ./core/blob/local
 run: ^TestNothingIsWiderThanOwnerOnly$
 
 id: local-files-owner-only
-file: core/blob/local/local.go
-find: filePerm    = 0o600
-replace: filePerm    = 0o644
+file: core/blob/internal/fsutil/fsutil.go
+find: FilePerm = 0o600
+replace: FilePerm = 0o644
 pkg: ./core/blob/local
 run: ^TestNothingIsWiderThanOwnerOnly$
 

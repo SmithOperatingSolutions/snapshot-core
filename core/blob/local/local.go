@@ -35,6 +35,7 @@ import (
 	"time"
 
 	"github.com/SmithOperatingSolutions/snapshot-core/core/blob"
+	"github.com/SmithOperatingSolutions/snapshot-core/core/blob/internal/fsutil"
 	"github.com/SmithOperatingSolutions/snapshot-core/core/internal/wire"
 )
 
@@ -79,8 +80,8 @@ const (
 	rootName    = "root"
 	lockName    = "root.lock"
 	fileSuffix  = "~"
-	dirPerm     = 0o700
-	filePerm    = 0o600
+	dirPerm     = fsutil.DirPerm
+	filePerm    = fsutil.FilePerm
 	staleTemp   = time.Hour
 )
 
@@ -127,7 +128,7 @@ func Create(dir string, opts Options) (*Store, error) {
 	if err := writeFileSync(filepath.Join(dir, markerName), w.Bytes()); err != nil {
 		return nil, err
 	}
-	if err := syncDir(dir); err != nil {
+	if err := fsutil.SyncDir(dir); err != nil {
 		return nil, err
 	}
 	return &Store{dir: dir, id: hex.EncodeToString(id[:])}, nil
@@ -236,7 +237,7 @@ func (s *Store) Put(ctx context.Context, name string, r io.Reader, size int64) e
 		}
 		return err
 	}
-	return syncDir(filepath.Dir(final))
+	return fsutil.SyncDir(filepath.Dir(final))
 }
 
 // ensureDir creates an object directory and makes every new entry on the way
@@ -257,7 +258,7 @@ func (s *Store) ensureDir(dir string) error {
 		if err := os.Mkdir(missing[i], dirPerm); err != nil && !errors.Is(err, fs.ErrExist) {
 			return err
 		}
-		if err := syncDir(filepath.Dir(missing[i])); err != nil {
+		if err := fsutil.SyncDir(filepath.Dir(missing[i])); err != nil {
 			return err
 		}
 	}
@@ -405,7 +406,7 @@ func (s *Store) Delete(ctx context.Context, name string) error {
 		}
 		return err
 	}
-	return syncDir(filepath.Dir(p))
+	return fsutil.SyncDir(filepath.Dir(p))
 }
 
 // Root file: magic "SCRF" | version (len-prefixed) | value (len-prefixed) |
@@ -460,7 +461,7 @@ func (s *Store) SwapRoot(ctx context.Context, expected blob.Version, next []byte
 	if err := blob.CheckRootValue(next); err != nil {
 		return blob.NoVersion, err
 	}
-	unlock, err := lockFile(filepath.Join(s.dir, lockName))
+	unlock, err := fsutil.Lock(filepath.Join(s.dir, lockName))
 	if err != nil {
 		return blob.NoVersion, err
 	}
@@ -498,7 +499,7 @@ func (s *Store) SwapRoot(ctx context.Context, expected blob.Version, next []byte
 	if err := os.Rename(tmpName, filepath.Join(s.dir, rootName)); err != nil {
 		return blob.NoVersion, err
 	}
-	if err := syncDir(s.dir); err != nil {
+	if err := fsutil.SyncDir(s.dir); err != nil {
 		return blob.NoVersion, err
 	}
 	return v, nil
