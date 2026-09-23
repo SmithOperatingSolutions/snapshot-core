@@ -355,3 +355,106 @@ func TestDetailAsksTheOwningModel(t *testing.T) {
 		t.Fatalf("models were asked %d diffs, want 1", len(*diffs))
 	}
 }
+
+// A namespace needs a model registry to say what its objects are, and a map
+// geometry the core can use: without either, New and Open refuse.
+func TestANamespaceNeedsARegistryAndAUsableGeometry(t *testing.T) {
+	s := newStore()
+	reg, _ := registry(t, 1)
+	good := newNamespace(t, s, reg)
+	if _, err := object.New(ctx, s, prolly.DefaultConfig(), nil); err == nil {
+		t.Error("New without a model registry succeeded")
+	}
+	if _, err := object.Open(ctx, s, prolly.DefaultConfig(), nil, good.Root()); err == nil {
+		t.Error("Open without a model registry succeeded")
+	}
+	unusable := prolly.DefaultConfig()
+	unusable.InlineLimit = -1
+	if _, err := object.New(ctx, s, unusable, reg); err == nil {
+		t.Error("New with an inline limit of -1 succeeded")
+	}
+	if _, err := object.Open(ctx, s, unusable, reg, good.Root()); err == nil {
+		t.Error("Open with an inline limit of -1 succeeded")
+	}
+}
+
+// forged writes a namespace map straight into prolly, past the editor's
+// checks, and opens it.
+func forged(t *testing.T, s chunk.ReadWriter, reg *model.Registry, kv ...string) *object.Namespace {
+	t.Helper()
+	m, err := prolly.Empty(ctx, s, prolly.DefaultConfig())
+	must(t, err)
+	e := m.Editor()
+	for i := 0; i < len(kv); i += 2 {
+		must(t, e.Put([]byte(kv[i]), []byte(kv[i+1])))
+	}
+	m, err = e.Flush(ctx)
+	must(t, err)
+	n, err := object.Open(ctx, s, prolly.DefaultConfig(), reg, m.Root())
+	must(t, err)
+	return n
+}
+
+// A namespace is read like any other stored data: a value that is not an
+// object reference is ErrCorrupt to Get and to a diff on either side, and a
+// stored path outside the grammar is ErrCorrupt to a diff.
+func TestForgedNamespacesAreCorrupt(t *testing.T) {
+	s := newStore()
+	reg, _ := registry(t, 1)
+	good := string(ref(1, "x").Encode())
+	short := good[:len(good)-1]
+	withGood := forged(t, s, reg, "x", good)
+	withShort := forged(t, s, reg, "x", short)
+	if _, _, _, err := withShort.Get(ctx, "x"); !errors.Is(err, chunk.ErrCorrupt) {
+		t.Errorf("Get of a 45-byte reference = %v, want ErrCorrupt", err)
+	}
+	for _, c := range []struct {
+		name     string
+		from, to *object.Namespace
+	}{
+		{"to a 45-byte reference", withGood, withShort},
+		{"from a 45-byte reference", withShort, withGood},
+		{"to a stored a/../b", withGood, forged(t, s, reg, "x", good, "a/../b", good)},
+	} {
+		d, err := object.Diff(ctx, c.from, c.to)
+		must(t, err)
+		if _, _, err := d.Next(); !errors.Is(err, chunk.ErrCorrupt) {
+			t.Errorf("a diff %s = %v, want ErrCorrupt", c.name, err)
+		}
+	}
+	if _, _, _, err := withGood.Get(ctx, "x"); err != nil {
+		t.Fatalf("positive control: Get of a forged but good reference: %v", err)
+	}
+}
+
+// formatTwo is a fake model whose format is 2.
+type formatTwo struct{ fake }
+
+func (formatTwo) FormatVersion() uint16 { return 2 }
+
+// Detail asks a model only about roots of the format it declares: a change
+// from a format the registry does not know is ErrUnknownModel, and the
+// model is not asked.
+func TestDetailNeverHandsAModelAnUnknownFormat(t *testing.T) {
+	s := newStore()
+	diffs := &[][2]model.Root{}
+	v2, err := model.NewRegistry(formatTwo{fake{id: 5, diffs: diffs}})
+	must(t, err)
+	v1, err := model.NewRegistry(fake{id: 5, diffs: diffs})
+	must(t, err)
+	old := object.Ref{Model: 5, Root: model.Root{Hash: hash.Sum([]byte("old")), Size: 3, Format: 2}}
+	e := newNamespace(t, s, v2).Editor()
+	must(t, e.Put("doc", old))
+	from, err := object.Open(ctx, s, prolly.DefaultConfig(), v1, flush(t, e).Root())
+	must(t, err)
+	e = newNamespace(t, s, v1).Editor()
+	must(t, e.Put("doc", ref(5, "new")))
+	to := flush(t, e)
+	d, changes := diff(t, from, to)
+	if len(changes) != 1 || changes[0].From != old {
+		t.Fatalf("fixture: the diff is %+v, want one change from %+v", changes, old)
+	}
+	if _, err := d.Detail(ctx, changes[0]); !errors.Is(err, model.ErrUnknownModel) || len(*diffs) != 0 {
+		t.Fatalf("Detail from a format-2 root with only format 1 registered = %v, the model asked %d times; want ErrUnknownModel, never asked", err, len(*diffs))
+	}
+}
