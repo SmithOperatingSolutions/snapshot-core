@@ -2953,3 +2953,10 @@ find: if !named[info.Name] && now.Sub(info.ModTime) >= grace {
 replace: if now.Sub(info.ModTime) >= grace {
 pkg: ./core/gc
 run: ^TestGCKeepsWhatTheRefsReachAndDeletesTheRest$
+
+id: gc-deletes-what-expired
+file: core/gc/gc.go
+find: for _, name := range append(out.Expired, stale...) {
+replace: for _, name := range stale {
+pkg: ./core/gc
+run: ^TestOrphanAgesAreTheBackendsClock$

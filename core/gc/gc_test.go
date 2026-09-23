@@ -61,9 +61,9 @@ func (mute) Merge(context.Context, model.Root, model.Root, model.Root, chunk.Rea
 	return model.MergeResult{}, errors.New("unused")
 }
 
-// world is a repository on a packstore over one raw blob store, and a clock
-// that runs with real time (the blob store stamps real times) plus a jump
-// the test sets.
+// world is a repository on a packstore over one raw blob store. GC's clock
+// runs with real time plus a jump the test sets; the backend stamps objects
+// by a clock of its own, the same plus a skew.
 type world struct {
 	t     *testing.T
 	blobs blob.BlobStore
@@ -71,12 +71,55 @@ type world struct {
 	reg   *model.Registry
 	s     *packstore.Store
 	r     *vcs.Repo
-	jump  time.Duration
+	jump  time.Duration // GC's clock, ahead of real time
+	skew  time.Duration // the backend's clock, ahead of GC's
+}
+
+// clocked is a blob store that stamps each object by the backend's clock.
+type clocked struct {
+	blob.BlobStore
+	now    func() time.Time
+	mu     sync.Mutex
+	stamps map[string]time.Time
+}
+
+func (c *clocked) Put(ctx context.Context, name string, r io.Reader, size int64) error {
+	err := c.BlobStore.Put(ctx, name, r, size)
+	if err == nil {
+		c.mu.Lock()
+		c.stamps[name] = c.now()
+		c.mu.Unlock()
+	}
+	return err
+}
+
+func (c *clocked) stamped(i blob.Info) blob.Info {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if t, ok := c.stamps[i.Name]; ok {
+		i.ModTime = t
+	}
+	return i
+}
+
+func (c *clocked) Stat(ctx context.Context, name string) (blob.Info, error) {
+	i, err := c.BlobStore.Stat(ctx, name)
+	return c.stamped(i), err
+}
+
+func (c *clocked) List(ctx context.Context, prefix, after string, limit int) ([]blob.Info, error) {
+	is, err := c.BlobStore.List(ctx, prefix, after, limit)
+	for k := range is {
+		is[k] = c.stamped(is[k])
+	}
+	return is, err
 }
 
 func newWorld(t *testing.T) *world {
 	t.Helper()
-	w := &world{t: t, blobs: mem.New()}
+	w := &world{t: t}
+	w.blobs = &clocked{BlobStore: mem.New(), stamps: map[string]time.Time{},
+		now: func() time.Time { return time.Now().Add(w.jump + w.skew) }}
 	var err error
 	if w.keys, err = seal.NewKeyring(); err != nil {
 		t.Fatal(err)
@@ -239,6 +282,53 @@ func count(t *testing.T, bs blob.BlobStore, prefix string) int {
 		t.Fatal(err)
 	}
 	return len(infos)
+}
+
+// Orphan ages are the backend's to tell (DESIGN §9): its clock stamps the
+// objects, so GC reads the backend's time too, and measures ages by it. A
+// backend ten days behind GC's clock does not make a writer's upload of a
+// moment ago look old; and when GC's clock runs a grace window ahead of a
+// backend's that stood still, expired packs still go (their expiry is GC's
+// own reckoning) while an object new by the backend's clock stays.
+func TestOrphanAgesAreTheBackendsClock(t *testing.T) {
+	w := newWorld(t)
+	w.skew = -10 * 24 * time.Hour
+	fresh := "packs/cd/cd" + strings.Repeat("0", 62)
+	if err := w.blobs.Put(ctx, fresh, strings.NewReader("just uploaded"), 13); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := w.gc(); err != nil {
+		t.Fatal(err)
+	}
+	if n := count(t, w.blobs, "packs/cd/"); n != 1 {
+		t.Fatal("GC deleted an upload of a moment ago because the backend's clock is behind its own")
+	}
+
+	w = newWorld(t)
+	w.put(vcs.MainBranch, "a", w.note(7, "a draft"))
+	w.put(vcs.MainBranch, "a", w.note(7, "kept"))
+	w.commit(vcs.MainBranch, "kept")
+	if first, err := w.gc(); err != nil || first.Condemned == 0 {
+		t.Fatalf("fixture: the first run condemned %d packs (%v), want some", first.Condemned, err)
+	}
+	if err := w.blobs.Put(ctx, fresh, strings.NewReader("new by the backend"), 18); err != nil {
+		t.Fatal(err)
+	}
+	packs := count(t, w.blobs, "packs/")
+	w.jump, w.skew = grace+time.Minute, -(grace + time.Minute) // GC's clock ahead, the backend's standing still
+	second, err := w.gc()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n := count(t, w.blobs, "packs/"); n >= packs {
+		t.Fatalf("with GC's clock a grace window on, %d packs remain of %d: the expired ones were left for an orphan scan the backend's clock cannot pass", n, packs)
+	}
+	if n := count(t, w.blobs, "packs/cd/"); n != 1 {
+		t.Fatalf("an object new by the backend's clock was deleted (deleted %v)", second.Deleted)
+	}
+	if got := w.readable(); !got["kept"] {
+		t.Fatal("after GC the kept note does not read")
+	}
 }
 
 // The spec's GC property on one history (DESIGN §9): GC keeps everything
