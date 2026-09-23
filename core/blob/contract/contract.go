@@ -33,6 +33,12 @@ type Options struct {
 	Swappers int
 	// Rounds is how many racing rounds to run (default 5).
 	Rounds int
+	// ObjectsOnly is a store that holds objects and no root (an S3 store on
+	// a provider without conditional writes, blob/split's objects side):
+	// Root and SwapRoot are blob.ErrNoRoot, and put-if-absent is best effort,
+	// so racing puts of one name need no single winner; every name a
+	// repository writes is unique.
+	ObjectsOnly bool
 }
 
 // Run runs the whole contract.
@@ -54,6 +60,10 @@ func Run(t *testing.T, newStore Factory, opts Options) {
 	t.Run("ListPaging", func(t *testing.T) { listPaging(t, newStore(t)) })
 	t.Run("ListLimits", func(t *testing.T) { listLimits(t, newStore(t)) })
 	t.Run("Delete", func(t *testing.T) { deleteObject(t, newStore(t)) })
+	if opts.ObjectsOnly {
+		t.Run("RootIsElsewhere", func(t *testing.T) { rootIsElsewhere(t, newStore(t)) })
+		return
+	}
 	t.Run("RootLifecycle", func(t *testing.T) { rootLifecycle(t, newStore(t)) })
 	t.Run("StaleSwapRefused", func(t *testing.T) { staleSwapRefused(t, newStore(t)) })
 	t.Run("VersionsNeverRepeat", func(t *testing.T) { versionsNeverRepeat(t, newStore(t)) })
@@ -66,6 +76,17 @@ func Run(t *testing.T, newStore Factory, opts Options) {
 }
 
 var ctx = context.Background()
+
+// rootIsElsewhere: an objects-only store refuses the root either way, and
+// says so as blob.ErrNoRoot.
+func rootIsElsewhere(t *testing.T, s blob.BlobStore) {
+	if _, err := s.Root(ctx); !errors.Is(err, blob.ErrNoRoot) {
+		t.Fatalf("Root on an objects-only store = %v, want ErrNoRoot", err)
+	}
+	if _, err := s.SwapRoot(ctx, blob.NoVersion, []byte("a root")); !errors.Is(err, blob.ErrNoRoot) {
+		t.Fatalf("SwapRoot on an objects-only store = %v, want ErrNoRoot", err)
+	}
+}
 
 func payload(seed string, n int) []byte {
 	out := make([]byte, 0, n+32)
