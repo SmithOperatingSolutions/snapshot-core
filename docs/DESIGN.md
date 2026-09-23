@@ -176,11 +176,25 @@ can refuse them) and a fuzz target.
   backend by one range read (the index object carries each pack's salt, so no
   header fetch). A hash the index does not know triggers one manifest refresh.
   Every path re-hashes what it returns.
-- Scale limit (v1): the whole index lives in memory, measured at 117 bytes
-  per chunk to open a repository and a peak of 371 per live chunk to
-  collect one (the collector's own index, the packs' entries, the mark;
-  `TestSlowMemoryPerChunkOn1MChunks`, #6), and the manifest lists every
-  index object until GC compacts them (§9).
+- **Memory does not grow with the repository** (#6). A store indexes the
+  published chunks in memory up to `Options.IndexInMemory` (512 Ki chunks,
+  about 60 MiB, by default) and past that spills the whole published index
+  to a *table* in `Options.IndexDir` (the system's temporary directory by
+  default): `dedup.Builder` sorts records a run at a time, spills each run
+  and merges them into a file of fixed-width records in hash order with one
+  sample key per block of 256; `dedup.Table` keeps one sample in 256 in
+  memory (a key per 65,536 chunks) and answers a lookup with two range
+  reads, the sample block then the record block. The packs in service are
+  added before the condemned and repacked ones, so a chunk two packs hold
+  resolves to the one staying; the session's own packs, and what other
+  writers publish until the bound is passed again, stay in memory. GC
+  moving gcGen rebuilds the table; Close removes it. Index objects are
+  written in batches of at most 8 MiB (estimated), since an object is
+  decoded whole. Measured on a million 64-byte chunks with 64 Ki in memory
+  (`TestSlowMemoryPerChunkOn1MChunks`, the slow tier): opening costs 16 KiB
+  where it cost 117 MiB in memory, and a collection peaks at 76 MiB where it
+  peaked at 371 (§9).
+- The manifest lists every index object until GC compacts them (§9).
 
 *(The prolly tree, the version graph and merge are §7–8; GC is §9.)*
 
@@ -588,6 +602,21 @@ the round that reprieves it. The round moves gcGen, so every store
 rebuilds its index, adding the packs still in service before the
 condemned and repacked ones, and finds the live chunks in the new packs
 at once; a writer never deduplicates against a repacked pack.
+
+**Memory** (#6). A round holds a record per pack and none per chunk: Begin
+indexes every listed pack's chunks in a `dedup` table under
+`Options.IndexDir` (the packs in service first, the condemned and repacked
+after, in a second pass over the objects listing them), and the mark is a
+table too, built as the walk visits chunks; the walk remembers up to
+`gc.Options.MarkNodes` nodes (1 Mi by default) to skip when reached again,
+and past that walks a shared subtree again, at a cost in time and never in
+chunks. Apply joins the two tables in one pass over both, in hash order,
+counting each pack's live chunks and frame bytes (a chunk two packs hold
+counts for the first, the one in service if either is), decides each pack
+on the counts, checks a candidate's frames against the mark as it streams
+the pack's bytes from one GET, and rewrites the index objects by streaming
+the old ones through, one object's packs in memory at a time. GC's reader
+runs without a chunk cache, since the walk reads each chunk once.
 
 **Proof.** `TestGCSafetyProperty` drives random histories the way a host
 following the contract does, with GC between the steps as the clock moves

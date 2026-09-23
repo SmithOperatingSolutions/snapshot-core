@@ -310,12 +310,15 @@ Beyond the list: merging what a branch already holds changes nothing (`TestMergi
 | the split store's tests | Two fixtures held only when the scheduler cooperated (a writer catching the first of three swaps; a copy landing before Close), and a string order check read "three" before "two" | The writer is held inside its first copy before the next swaps; numbered roots |
 | the GC property's convergence bound (#1) | Repacking left the store over twice its live bytes for one grace window more than it should: a condemned pack found live again and mostly dead was reprieved in one round and repacked only in the next; and a pack whose every chunk is live looked mostly dead by its overhead, so tiny root packs were rewritten for nothing | A reprieved pack is repacked in the same round; a pack with no dead frame is never a candidate |
 | the ordering mutants (#1, #6) | Two mutants on "packs in service first" were killed by a test whose pack order was a coin flip: index objects sort packs by hash, so the repacked pack came first one run in two | `TestPacksInServiceComeFirstInTheIndex` draws the fixture until the repacked pack sorts first, and both mutants anchor on it |
+| the memory measurement (#6) | A session's packs went into one index object whatever their number, so a session of about 1.5 million chunks could not publish (`dedup.MaxObjectSize`), and every store decoded that object whole | Index objects are written in batches of at most 8 MiB estimated (`TestALargeSessionPublishesSeveralIndexObjects`) |
+| the memory measurement (#6) | With the index and the mark on disk a collection still peaked at 185 bytes a chunk: GC's reader kept a 64 MiB chunk cache the walk never read twice from, and a candidate pack was read whole to repack it | The reader runs without a cache; a candidate's frames stream from one GET |
 | (redcheck on this branch) | Build-tagged tests unjudged; `TestMain` judged; pairs not matched by scope; contract changes invisible; environment-bound callers refused; no `main` in a new clone; a tagged backfill's mutants built without its tag; fuzz targets not counted as tests | Tool fixed each time, with a red test |
 
 ### Batch 2 (in progress)
 
 - [x] #8 The root apart from the objects: `TestObjectsOnlyRunsWhereConditionalWritesAreIgnored`, `TestObjectsOnlyPutIsAHeadThenAPut`, `TestTheMirrorIsReplacedInPlace`; the split store's contract and modes (`TestContractOverASplitStore`, `TestWaitMirrorsEachSwapBeforeReturning`, `TestBackgroundMirrorsTheNewestRootAndCloseFlushes`, `TestBackgroundCopiesEachSwap`, `TestBackgroundReportsAndRetriesAFailedCopy`, `TestPeriodicMirrorsOnItsClock`, `TestOffKeepsNoCopy`, `TestRecoverSeedsAnEmptyRootStoreFromTheCopy`); `TestTheRootsCopyPassesThroughTheCache`; two `Init`s racing (`TestAnotherInitCannotTakeOverARepository`, `TestInitsRacingDoNotOverwriteEachOther`, `TestAStoppedInitFinishedTwiceAtOnceIsFinishedOnce`, `TestOpenTakesTheConfigThatAuthenticatesTheRoot`); end to end on an endpoint ignoring conditional writes, recovered from the copy, `TestARepositoryRunsOnAnEndpointWithoutConditionalWrites`.
 - [x] #1 Reclaiming space in mixed packs: a round repacks kept packs that are mostly dead, emptiest first within a byte budget, records them under a kind of their own and expires them a grace window on (`TestARoundRepacksAPackThatIsMostlyDead`, `TestAPackAboveTheThresholdIsKeptWhole`, `TestRepackingSpendsItsBudgetOnTheEmptiestPacksFirst`, `TestAfterARepackWritersFindTheNewPacks`, `TestRepackingCopiesAChunkTwoPacksShareOnce`, `TestRepackingRefusesACorruptPack`); the GC property converges to at most twice the live bytes (`TestGCSafetyProperty`).
+- [x] #6 The index in memory: a `dedup` table on disk (`TestATableAnswersEveryRecordItWasBuiltFrom`, `TestTheFirstRecordOfAKeyWins`, `TestATableHoldsAlmostNothingInMemory`, `TestATableThatDoesNotDecodeIsRefused`, `FuzzOpenTable`); a store spills its index past a bound (`TestAStoreSpillsItsIndexToDisk`, `TestASpilledIndexIsRebuiltWhenGCMovesIt`, `TestASpilledIndexNeedsItsDirectory`, `TestContractOverASpilledIndex`, `TestPacksInServiceComeFirstInTheIndex`); GC marks and indexes on disk (`TestGCNeedsItsWorkDirectory`); on a million chunks with 64 Ki in memory, opening costs 16 KiB and collecting peaks at 76 MiB, both bounded whatever the size (`TestSlowMemoryPerChunkOn1MChunks`).
 - [ ] #4 The real provider, nightly: the job and its two tests are in; the secrets are the admin's, and the item closes on the first green night. The MinIO tier runs the e2e package on every push meanwhile.
 
 ## Next
@@ -351,7 +354,7 @@ them, each tracked as an issue:
    `TestWritesAreAuthorizedPerPath`; GC keeps the starting namespaces,
    `TestAWalkNamesAllTheRepositoryHolds`, and collects an abandoned merge,
    `TestAnAbandonedMergeIsCollected`).
-6. **The index in memory** (#6): measured on a million chunks
-   (`TestSlowMemoryPerChunkOn1MChunks`, the slow tier): 117 bytes per
-   chunk to open a repository, a peak of 371 per live chunk to collect one.
-   A bound independent of the repository's size is the work.
+6. ✅ **The index in memory** (#6): the index past a bound, the mark and
+   the round's own index are tables on disk; a million chunks with 64 Ki
+   in memory open in 16 KiB and collect in a 76 MiB peak, against 117 MiB
+   and 371 MiB before (`TestSlowMemoryPerChunkOn1MChunks`).

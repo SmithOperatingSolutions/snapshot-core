@@ -80,16 +80,26 @@ func RepackedNames(ctx context.Context, o Options) ([]string, error) {
 	return out, nil
 }
 
-// PackOrder lists the packs the store's manifest indexes, in the order a
-// store loads them.
+// PackOrder lists the packs the store's manifest indexes, in the order its
+// index objects list them.
 func PackOrder(ctx context.Context, o Options) ([]string, error) {
-	r, err := Begin(ctx, o)
+	r, err := o.Blobs.Root(ctx)
+	if err != nil {
+		return nil, err
+	}
+	m, err := openManifest(r.Value, o.Keys, o.Repo)
 	if err != nil {
 		return nil, err
 	}
 	var out []string
-	for _, p := range r.packs {
-		out = append(out, p.Name)
+	for _, sum := range m.indexes {
+		infos, err := loadIndex(ctx, o, sum)
+		if err != nil {
+			return nil, err
+		}
+		for _, p := range infos {
+			out = append(out, p.Name)
+		}
 	}
 	return out, nil
 }

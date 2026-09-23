@@ -3728,15 +3728,15 @@ run: ^TestTheRootsCopyPassesThroughTheCache$
 
 id: repack-only-a-pack-with-a-dead-frame
 file: core/chunk/packstore/gc.go
-find: dead && share < policy.MaxLive {
-replace: (dead || true) && share < policy.MaxLive {
+find: liveCount[i] < p.entries && share < policy.MaxLive {
+replace: share < policy.MaxLive {
 pkg: ./core/chunk/packstore
 run: ^TestRepackingSpendsItsBudgetOnTheEmptiestPacksFirst$
 
 id: repack-honors-the-threshold
 file: core/chunk/packstore/gc.go
-find: dead && share < policy.MaxLive {
-replace: dead && share <= 1 {
+find: liveCount[i] < p.entries && share < policy.MaxLive {
+replace: liveCount[i] < p.entries && share <= 1 {
 pkg: ./core/chunk/packstore
 run: ^TestAPackAboveTheThresholdIsKeptWhole$
 
@@ -3763,15 +3763,15 @@ run: ^TestRepackingSpendsItsBudgetOnTheEmptiestPacksFirst$
 
 id: repack-never-reprieves-a-repacked-pack
 file: core/chunk/packstore/gc.go
-find: if c, ok := repacked[p.Name]; ok {
-replace: if c, ok := repacked[p.Name]; ok && false {
+find: if c, ok := repacked[p.name]; ok {
+replace: if c, ok := repacked[p.name]; ok && false {
 pkg: ./core/chunk/packstore
 run: ^TestARoundRepacksAPackThatIsMostlyDead$
 
 id: repack-expires-a-repacked-pack-after-grace
 file: core/chunk/packstore/gc.go
-find: if expired(c) {\n\t\t\t\tout.Expired = append(out.Expired, p.Name)
-replace: if false {\n\t\t\t\tout.Expired = append(out.Expired, p.Name)
+find: if expired(c) {\n\t\t\t\tout.Expired = append(out.Expired, p.name)
+replace: if false {\n\t\t\t\tout.Expired = append(out.Expired, p.name)
 pkg: ./core/chunk/packstore
 run: ^TestARoundRepacksAPackThatIsMostlyDead$
 
@@ -3784,17 +3784,10 @@ run: ^TestARoundRepacksAPackThatIsMostlyDead$
 
 id: repack-copies-a-shared-chunk-once
 file: core/chunk/packstore/gc.go
-find: if !live(e.Hash) || moved[e.Hash] {
-replace: if !live(e.Hash) {
+find: if moved[e.Hash] {\n\t\t\t\tcontinue\n\t\t\t}
+replace: if false {\n\t\t\t\tcontinue\n\t\t\t}
 pkg: ./core/chunk/packstore
 run: ^TestRepackingCopiesAChunkTwoPacksShareOnce$
-
-id: repack-checks-the-packs-length
-file: core/chunk/packstore/gc.go
-find: if int64(len(b)) != c.Size {
-replace: if false {
-pkg: ./core/chunk/packstore
-run: ^TestRepackingRefusesACorruptPack$
 
 id: packstore-a-repacked-pack-is-condemned-to-writers
 file: core/chunk/packstore/packstore.go
@@ -3949,3 +3942,38 @@ find: if cond[info.Name] {\n\t\t\t\tlater = append(later, info)
 replace: if false {\n\t\t\t\tlater = append(later, info)
 pkg: ./core/chunk/packstore
 run: ^TestPacksInServiceComeFirstInTheIndex$
+
+id: gc-mark-spills-every-chunk
+file: core/gc/gc.go
+find: if err := b.Add(h, nil); err != nil {\n\t\t\t\treturn false, err\n\t\t\t}\n\t\t\tif leaf {
+replace: if leaf {\n\t\t\t\treturn false, nil\n\t\t\t}\n\t\t\tif err := b.Add(h, nil); err != nil {\n\t\t\t\treturn false, err\n\t\t\t}\n\t\t\tif leaf {
+pkg: ./core/gc
+run: ^TestGCKeepsWhatTheRefsReachAndDeletesTheRest$
+
+id: gc-mark-goes-into-a-node-first-seen-as-a-leaf
+file: core/gc/gc.go
+find: if leaf {\n\t\t\t\treturn false, nil\n\t\t\t}\n\t\t\tif _, ok := seen[h]; ok {
+replace: if leaf {\n\t\t\t\tseen[h] = struct{}{}\n\t\t\t\treturn false, nil\n\t\t\t}\n\t\t\tif _, ok := seen[h]; ok {
+pkg: ./core/gc
+run: ^TestGCIsNotSteeredByAFileThatIsANode$
+
+id: round-join-counts-a-match
+file: core/chunk/packstore/gc.go
+find: for ok && h.Compare(l) < 0 {
+replace: for ok && h.Compare(l) <= 0 {
+pkg: ./core/chunk/packstore
+run: ^TestAReachedPackIsReprieved$
+
+id: round-join-counts-the-frame-bytes
+file: core/chunk/packstore/gc.go
+find: frames[pi] += int64(binary.LittleEndian.Uint32(v[8:]))
+replace: frames[pi] += 0
+pkg: ./core/chunk/packstore
+run: ^TestAPackAboveTheThresholdIsKeptWhole$
+
+id: repack-checks-the-packs-length
+file: core/chunk/packstore/gc.go
+find: if b.at+n != b.size {
+replace: if false {
+pkg: ./core/chunk/packstore
+run: ^TestRepackingRefusesACorruptPack$

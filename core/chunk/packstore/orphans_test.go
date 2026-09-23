@@ -77,7 +77,7 @@ func newNames(before, after []string) []string {
 
 // orphanRound is a GC round handed candidates, as GC hands it what it
 // listed older than the grace window (an hour here).
-func orphanRound(t *testing.T, bs blob.BlobStore, kr *seal.Keyring, live func(hash.Hash) bool, now time.Time, candidates []string) packstore.Outcome {
+func orphanRound(t *testing.T, bs blob.BlobStore, kr *seal.Keyring, live packstore.Live, now time.Time, candidates []string) packstore.Outcome {
 	t.Helper()
 	r, err := packstore.Begin(ctx, packstore.Options{Blobs: bs, Keys: kr, Repo: repo})
 	if err != nil {

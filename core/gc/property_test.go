@@ -11,6 +11,7 @@ import (
 
 	"github.com/SmithOperatingSolutions/snapshot-core/core/blob"
 	"github.com/SmithOperatingSolutions/snapshot-core/core/gc"
+	"github.com/SmithOperatingSolutions/snapshot-core/core/hash"
 	"github.com/SmithOperatingSolutions/snapshot-core/core/object"
 	"github.com/SmithOperatingSolutions/snapshot-core/core/prolly"
 	"github.com/SmithOperatingSolutions/snapshot-core/core/vcs"
@@ -412,17 +413,22 @@ func (h *history) converged(rt *rapid.T) {
 	if err != nil {
 		rt.Fatal(err)
 	}
-	live, err := gc.Mark(ctx, s, gc.Options{Blobs: w.blobs, Keys: w.keys, Repo: repo, Config: prolly.DefaultConfig(), Registry: w.reg}, root)
+	live, closeLive, err := gc.Mark(ctx, s, gc.Options{Blobs: w.blobs, Keys: w.keys, Repo: repo, Config: prolly.DefaultConfig(), Registry: w.reg}, root)
 	if err != nil {
 		rt.Fatal(err)
 	}
+	defer func() { _ = closeLive() }()
 	var liveBytes int64
-	for hh := range live {
+	err = live.Each(func(hh hash.Hash) error {
 		_, _, n, ok := s.Location(hh)
 		if !ok {
-			rt.Fatalf("live chunk %s is not located", hh.Short())
+			return fmt.Errorf("live chunk %s is not located", hh.Short())
 		}
 		liveBytes += n
+		return nil
+	})
+	if err != nil {
+		rt.Fatal(err)
 	}
 	var packBytes, packs int64
 	after := ""

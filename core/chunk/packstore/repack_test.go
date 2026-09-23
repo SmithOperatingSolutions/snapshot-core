@@ -35,7 +35,7 @@ func packed(t *testing.T, s *packstore.Store, root hash.Hash, chunks ...[]byte) 
 }
 
 // repackRound is a GC round with a repacking policy.
-func repackRound(t *testing.T, bs blob.BlobStore, kr *seal.Keyring, live func(hash.Hash) bool, now time.Time, p packstore.Repack) packstore.Outcome {
+func repackRound(t *testing.T, bs blob.BlobStore, kr *seal.Keyring, live packstore.Live, now time.Time, p packstore.Repack) packstore.Outcome {
 	t.Helper()
 	r, err := packstore.Begin(ctx, packstore.Options{Blobs: bs, Keys: kr, Repo: repo})
 	if err != nil {
@@ -244,18 +244,22 @@ func TestAfterARepackWritersFindTheNewPacks(t *testing.T) {
 }
 
 // Two writers can store the same chunk, each in a pack of its own. When
-// both packs are repacked in one round the chunk is copied once, and reads
-// back.
+// both packs are repacked in one round (each has live chunks of its own
+// too) the shared chunk is copied once, and reads back.
 func TestRepackingCopiesAChunkTwoPacksShareOnce(t *testing.T) {
 	bs, kr := mem.New(), keyring(t)
 	a, b := open(t, bs, kr), open(t, bs, kr)
-	shared := payload("shared", 1<<10)
+	shared, own := payload("shared", 1<<10), payload("b's own", 1<<10)
 	hs := packed(t, a, hash.Hash{}, []byte("the root"), shared, payload("dead a", 3<<10))
-	if _, err := b.Put(ctx, shared); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := b.Put(ctx, payload("dead b", 3<<10)); err != nil {
-		t.Fatal(err)
+	var ownHash hash.Hash
+	for _, c := range [][]byte{shared, own, payload("dead b", 3<<10)} {
+		h, err := b.Put(ctx, c)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if bytes.Equal(c, own) {
+			ownHash = h
+		}
 	}
 	if _, err := b.Root(ctx); err != nil { // b learns of a's publish, its own pack already holding the chunk
 		t.Fatal(err)
@@ -266,13 +270,15 @@ func TestRepackingCopiesAChunkTwoPacksShareOnce(t *testing.T) {
 	if n := len(objects(t, bs, "packs/")); n != 2 {
 		t.Fatalf("fixture: %d packs, want one per writer", n)
 	}
-	out := repackRound(t, bs, kr, liveSet(hs[0], hs[1]), t0, packstore.Repack{})
+	out := repackRound(t, bs, kr, liveSet(hs[0], hs[1], ownHash), t0, packstore.Repack{})
 	if out.Repacked != 2 {
 		t.Fatalf("the round repacked %d packs, want both, which share a live chunk", out.Repacked)
 	}
 	fresh := open(t, bs, kr)
-	if got, err := fresh.Get(ctx, hs[1]); err != nil || !bytes.Equal(got, shared) {
-		t.Fatalf("the shared chunk reads as %d bytes, %v", len(got), err)
+	for name, want := range map[string][]byte{"shared": shared, "b's own": own} {
+		if got, err := fresh.Get(ctx, hash.Sum(want)); err != nil || !bytes.Equal(got, want) {
+			t.Fatalf("the %s chunk reads as %d bytes, %v", name, len(got), err)
+		}
 	}
 }
 

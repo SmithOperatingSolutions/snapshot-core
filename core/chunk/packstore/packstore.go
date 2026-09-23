@@ -794,27 +794,25 @@ func (s *Store) writeSessionIndex(ctx context.Context) error {
 	if len(session) == 0 {
 		return nil
 	}
-	name, blobBytes, err := dedup.EncodeObject(s.o.Keys, s.o.Repo, session)
-	if err != nil {
+	// In objects of at most maxIndexObject each: an object is decoded
+	// whole by every store that opens it.
+	w := &indexWriter{ctx: ctx, o: s.o}
+	for _, p := range session {
+		if err := w.add(p); err != nil {
+			return err
+		}
+	}
+	if _, err := w.finish(); err != nil {
 		return err
-	}
-	if err := s.o.Blobs.Put(ctx, name, bytes.NewReader(blobBytes), int64(len(blobBytes))); err != nil && !errors.Is(err, blob.ErrExists) {
-		return fmt.Errorf("packstore: writing index object: %w", err)
-	}
-	sum, err := indexSum(name)
-	if err != nil {
-		return err
-	}
-	names := make([]string, len(session))
-	for i, p := range session {
-		names[i] = p.Name
 	}
 	s.mu.Lock()
 	s.session = s.session[len(session):]
-	s.sessionIdx = append(s.sessionIdx, sum)
-	s.loaded[sum] = true
-	s.inIndex[sum] = names
-	s.uploaded[name] = s.o.Clock()
+	for _, obj := range w.written {
+		s.sessionIdx = append(s.sessionIdx, obj.sum)
+		s.loaded[obj.sum] = true
+		s.inIndex[obj.sum] = obj.packs
+		s.uploaded[indexName(obj.sum)] = s.o.Clock()
+	}
 	s.mu.Unlock()
 	return nil
 }
