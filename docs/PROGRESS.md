@@ -360,3 +360,9 @@ them, each tracked as an issue:
    in memory open in 16 KiB and collect in a 31 MiB peak, against 117 MiB
    and 371 MiB before, and two million in 20 KiB and 34 MiB
    (`TestSlowMemoryPerChunkOn1MChunks`).
+7. **The write path is single-threaded** (#10): measured on a laptop
+   over `blob/local`, 113 MB/s writing random data, 187 compressible,
+   188 re-snapshotting a deduplicated file, 0.5–1.2 GB/s reading, 80 ms
+   a commit. First a slow-tier test that reports the figures nightly,
+   then hashing, compressing and sealing chunks on N workers with the
+   memory in flight bounded.
