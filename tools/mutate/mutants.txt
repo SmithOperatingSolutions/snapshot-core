@@ -1840,3 +1840,108 @@ find: err = z.both(co, ct); err == nil && len(z.res.Conflicts) > o.MaxConflicts 
 replace: err = z.both(co, ct); err == nil && len(z.res.Conflicts) > o.MaxConflicts && false {
 pkg: ./core/merge
 run: ^TestTooManyConflictsAbort$
+
+id: vcs-open-needs-a-repository
+file: core/vcs/vcs.go
+find: if root.IsZero() {\n\t\treturn nil, ErrNoRepo
+replace: if root.IsZero() && false {\n\t\treturn nil, ErrNoRepo
+pkg: ./core/vcs
+run: ^TestANewRepoHasMainAtAnEmptyInitialCommit$
+
+id: vcs-stale-working-set-conflicts
+file: core/vcs/vcs.go
+find: if work != prev.Hash {
+replace: if work != prev.Hash && false {
+pkg: ./core/vcs
+run: ^TestAStaleWorkingSetUpdateIsAConflict$
+
+id: vcs-conflicts-block-commits
+file: core/vcs/vcs.go
+find: } else if n > 0 {
+replace: } else if n > 0 && false {
+pkg: ./core/vcs
+run: ^TestConflictsBlockTheCommitUntilResolved$
+
+id: vcs-merge-commit-has-two-parents
+file: core/vcs/vcs.go
+find: c.Parents = append(c.Parents, theirs.Hash)
+replace: _ = theirs.Hash
+pkg: ./core/vcs
+run: ^TestConflictsBlockTheCommitUntilResolved$
+
+id: vcs-author-is-the-principal
+file: core/vcs/vcs.go
+find: Time: r.o.Clock().UTC(), Author: p.ID, Message: message}
+replace: Time: r.o.Clock().UTC(), Author: "someone", Message: message}
+pkg: ./core/vcs
+run: ^TestTheAuthorIsThePrincipal$
+
+id: vcs-branch-names-checked
+file: core/vcs/vcs.go
+find: return validName(branch)\n}
+replace: return nil\n}
+pkg: ./core/vcs
+run: ^TestInvalidBranchNamesAreRejected$
+
+id: vcs-names-refuse-dotdot
+file: core/vcs/names.go
+find: strings.Contains(n, "..") || strings.Contains(n, "//")
+replace: strings.Contains(n, "//")
+pkg: ./core/vcs
+run: ^TestInvalidBranchNamesAreRejected$
+
+id: vcs-names-refuse-lock
+file: core/vcs/names.go
+find: ||\n\t\tstrings.HasSuffix(n, "/") || strings.HasSuffix(n, ".lock")
+replace: ||\n\t\tstrings.HasSuffix(n, "/")
+pkg: ./core/vcs
+run: ^TestInvalidBranchNamesAreRejected$
+
+id: vcs-checked-out-branch-refused
+file: core/vcs/vcs.go
+find: if inUse {
+replace: if inUse && false {
+pkg: ./core/vcs
+run: ^TestDeletingACheckedOutBranchIsRefused$
+
+id: vcs-log-limit-capped
+file: core/vcs/vcs.go
+find: if limit < 1 || limit > MaxLog {
+replace: if limit < 1 {
+pkg: ./core/vcs
+run: ^TestLogIsBoundedAndHighestFirst$
+
+id: vcs-log-highest-first
+file: core/vcs/vcs.go
+find: return h[i].Height > h[j].Height
+replace: return h[i].Height < h[j].Height
+pkg: ./core/vcs
+run: ^(TestLogIsBoundedAndHighestFirst|TestMergeBase)$
+
+id: vcs-merge-base-needs-both-sides
+file: core/vcs/vcs.go
+find: if f == fromA|fromB {
+replace: if f != 0 {
+pkg: ./core/vcs
+run: ^TestMergeBase$
+
+id: vcs-every-call-authorized
+file: core/vcs/vcs.go
+find: return auth.Check(ctx, r.o.Authorizer, p, a, resource)
+replace: return nil
+pkg: ./core/vcs
+run: ^TestEveryCallIsAuthorized$
+
+id: vcs-branch-exists
+file: core/vcs/vcs.go
+find: } else if ok {\n\t\t\treturn fmt.Errorf("%w: %s", ErrBranchExists, name)
+replace: } else if ok && false {\n\t\t\treturn fmt.Errorf("%w: %s", ErrBranchExists, name)
+pkg: ./core/vcs
+run: ^TestInvalidBranchNamesAreRejected$
+
+id: vcs-tag-exists
+file: core/vcs/vcs.go
+find: } else if ok {\n\t\t\treturn fmt.Errorf("%w: %s", ErrTagExists, name)
+replace: } else if ok && false {\n\t\t\treturn fmt.Errorf("%w: %s", ErrTagExists, name)
+pkg: ./core/vcs
+run: ^TestTagsNameCommits$

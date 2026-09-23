@@ -7,9 +7,14 @@
 package vcs
 
 import (
+	"bytes"
+	"container/heap"
 	"context"
 	"errors"
+	"fmt"
+	"sync"
 	"time"
+	"unicode/utf8"
 
 	"github.com/SmithOperatingSolutions/snapshot-core/core/auth"
 	"github.com/SmithOperatingSolutions/snapshot-core/core/chunk"
@@ -25,6 +30,7 @@ const (
 	MainBranch    = "main"
 	MaxLog        = 10_000
 	MaxMessageLen = 64 << 10
+	maxAttempts   = 1000 // root swaps lost to other writers before giving up
 )
 
 // Errors.
@@ -61,12 +67,6 @@ type Commit struct {
 	Message   string
 }
 
-// Encode is the DESIGN §8 commit chunk.
-func (c Commit) Encode() []byte { return nil }
-
-// DecodeCommit parses a commit chunk (chunk.ErrCorrupt when malformed).
-func DecodeCommit(b []byte) (Commit, error) { return Commit{}, nil }
-
 // Tag is one tag.
 type Tag struct {
 	Hash    hash.Hash
@@ -91,98 +91,716 @@ type WorkingSet struct {
 }
 
 // Repo is a repository over a chunk store.
-type Repo struct{}
+type Repo struct {
+	s chunk.Store
+	o Options
+
+	mu         sync.Mutex
+	checkedOut map[string]int
+}
+
+func newRepo(s chunk.Store, o Options) (*Repo, error) {
+	if o.Registry == nil {
+		return nil, errors.New("vcs: a repository needs a model registry")
+	}
+	if o.Clock == nil {
+		o.Clock = time.Now
+	}
+	return &Repo{s: s, o: o, checkedOut: map[string]int{}}, nil
+}
+
+func headKey(b string) []byte { return []byte("heads/" + b) }
+func workKey(b string) []byte { return []byte("work/" + b) }
+func tagKey(t string) []byte  { return []byte("tags/" + t) }
 
 // Init creates a repository with branch main at an empty initial commit.
 func Init(ctx context.Context, s chunk.Store, p auth.Principal, o Options) (*Repo, error) {
-	return &Repo{}, nil
+	r, err := newRepo(s, o)
+	if err != nil {
+		return nil, err
+	}
+	if err := auth.Check(ctx, o.Authorizer, p, auth.Admin, "repo"); err != nil {
+		return nil, err
+	}
+	if root, err := s.Root(ctx); err != nil {
+		return nil, err
+	} else if !root.IsZero() {
+		return nil, ErrExists
+	}
+	ns, err := object.New(ctx, s, o.Config, o.Registry)
+	if err != nil {
+		return nil, err
+	}
+	c := Commit{Namespace: ns.Root(), Time: r.o.Clock().UTC(), Author: p.ID, Message: "Initialize the repository"}
+	commit, err := s.Put(ctx, c.Encode())
+	if err != nil {
+		return nil, err
+	}
+	ws, err := s.Put(ctx, WorkingSet{Working: ns.Root(), Staged: ns.Root()}.encode())
+	if err != nil {
+		return nil, err
+	}
+	refs, err := prolly.Empty(ctx, s, o.Config)
+	if err != nil {
+		return nil, err
+	}
+	e := refs.Editor()
+	if err := e.Put(headKey(MainBranch), commit[:]); err != nil {
+		return nil, err
+	}
+	if err := e.Put(workKey(MainBranch), ws[:]); err != nil {
+		return nil, err
+	}
+	if refs, err = e.Flush(ctx); err != nil {
+		return nil, err
+	}
+	if err := s.CompareAndSetRoot(ctx, hash.Hash{}, refs.Root()); err != nil {
+		if errors.Is(err, chunk.ErrRootConflict) {
+			return nil, ErrExists
+		}
+		return nil, err
+	}
+	return r, nil
 }
 
 // Open opens the repository in s.
-func Open(ctx context.Context, s chunk.Store, o Options) (*Repo, error) { return &Repo{}, nil }
+func Open(ctx context.Context, s chunk.Store, o Options) (*Repo, error) {
+	r, err := newRepo(s, o)
+	if err != nil {
+		return nil, err
+	}
+	if _, err := r.refs(ctx); err != nil {
+		return nil, err
+	}
+	return r, nil
+}
+
+// refs opens the refs map at the store's current root.
+func (r *Repo) refs(ctx context.Context) (*prolly.Map, error) {
+	root, err := r.s.Root(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if root.IsZero() {
+		return nil, ErrNoRepo
+	}
+	return prolly.Open(ctx, r.s, r.o.Config, root)
+}
+
+func ref(ctx context.Context, m *prolly.Map, key []byte) (hash.Hash, bool, error) {
+	v, ok, err := m.Get(ctx, key)
+	if err != nil || !ok {
+		return hash.Hash{}, false, err
+	}
+	if len(v) != hash.Size {
+		return hash.Hash{}, false, corrupt("ref %s holds %d bytes", key, len(v))
+	}
+	return hash.Hash(v), true, nil
+}
+
+// update applies fn to the refs map and swaps the root, re-reading and
+// re-applying whenever another writer swapped first. fn's own errors end it.
+func (r *Repo) update(ctx context.Context, fn func(m *prolly.Map, e *prolly.Editor) error) error {
+	for attempt := 0; attempt < maxAttempts; attempt++ {
+		m, err := r.refs(ctx)
+		if err != nil {
+			return err
+		}
+		e := m.Editor()
+		if err := fn(m, e); err != nil {
+			return err
+		}
+		next, err := e.Flush(ctx)
+		if err != nil {
+			return err
+		}
+		err = r.s.CompareAndSetRoot(ctx, m.Root(), next.Root())
+		if !errors.Is(err, chunk.ErrRootConflict) {
+			return err
+		}
+	}
+	return fmt.Errorf("vcs: the refs changed under %d attempts in a row", maxAttempts)
+}
 
 // Namespace opens a namespace of this repository.
 func (r *Repo) Namespace(ctx context.Context, root hash.Hash) (*object.Namespace, error) {
-	return nil, errors.New("vcs: not yet")
+	return object.Open(ctx, r.s, r.o.Config, r.o.Registry, root)
+}
+
+func (r *Repo) check(ctx context.Context, p auth.Principal, a auth.Action, resource string) error {
+	return auth.Check(ctx, r.o.Authorizer, p, a, resource)
+}
+
+func (r *Repo) branchCheck(ctx context.Context, p auth.Principal, a auth.Action, branch string) error {
+	if err := r.check(ctx, p, a, "branch:"+branch); err != nil {
+		return err
+	}
+	return validName(branch)
+}
+
+func (r *Repo) readCommit(ctx context.Context, h hash.Hash) (Commit, error) {
+	b, err := r.s.Get(ctx, h)
+	if err != nil {
+		return Commit{}, err
+	}
+	c, err := DecodeCommit(b)
+	if err != nil {
+		return Commit{}, err
+	}
+	c.Hash = h
+	return c, nil
+}
+
+func (r *Repo) readWorkingSet(ctx context.Context, h hash.Hash) (WorkingSet, error) {
+	b, err := r.s.Get(ctx, h)
+	if err != nil {
+		return WorkingSet{}, err
+	}
+	ws, err := decodeWorkingSet(b)
+	if err != nil {
+		return WorkingSet{}, err
+	}
+	ws.Hash = h
+	return ws, nil
+}
+
+// branchRefs reads a branch's head and working set hashes from m.
+func branchRefs(ctx context.Context, m *prolly.Map, branch string) (head, work hash.Hash, err error) {
+	head, ok, err := ref(ctx, m, headKey(branch))
+	if err != nil {
+		return head, work, err
+	}
+	if !ok {
+		return head, work, fmt.Errorf("%w: %s", ErrBranchNotFound, branch)
+	}
+	work, ok, err = ref(ctx, m, workKey(branch))
+	if err == nil && !ok {
+		err = corrupt("branch %s has no working set", branch)
+	}
+	return head, work, err
 }
 
 // Head returns the commit a branch names.
 func (r *Repo) Head(ctx context.Context, p auth.Principal, branch string) (Commit, error) {
-	return Commit{}, nil
+	if err := r.branchCheck(ctx, p, auth.Read, branch); err != nil {
+		return Commit{}, err
+	}
+	m, err := r.refs(ctx)
+	if err != nil {
+		return Commit{}, err
+	}
+	head, _, err := branchRefs(ctx, m, branch)
+	if err != nil {
+		return Commit{}, err
+	}
+	return r.readCommit(ctx, head)
 }
 
 // Branches lists the branches.
-func (r *Repo) Branches(ctx context.Context, p auth.Principal) ([]string, error) { return nil, nil }
+func (r *Repo) Branches(ctx context.Context, p auth.Principal) ([]string, error) {
+	if err := r.check(ctx, p, auth.Read, "repo"); err != nil {
+		return nil, err
+	}
+	m, err := r.refs(ctx)
+	if err != nil {
+		return nil, err
+	}
+	it, err := m.IterRange(ctx, []byte("heads/"), []byte("heads0")) // '0' follows '/'
+	if err != nil {
+		return nil, err
+	}
+	var out []string
+	for {
+		k, _, ok, err := it.Next()
+		if err != nil || !ok {
+			return out, err
+		}
+		out = append(out, string(bytes.TrimPrefix(k, []byte("heads/"))))
+	}
+}
 
 // ReadCommit returns a commit.
 func (r *Repo) ReadCommit(ctx context.Context, p auth.Principal, h hash.Hash) (Commit, error) {
-	return Commit{}, nil
+	if err := r.check(ctx, p, auth.Read, "repo"); err != nil {
+		return Commit{}, err
+	}
+	return r.readCommit(ctx, h)
 }
 
 // WorkingSet returns a branch's working set.
 func (r *Repo) WorkingSet(ctx context.Context, p auth.Principal, branch string) (WorkingSet, error) {
-	return WorkingSet{}, nil
+	if err := r.branchCheck(ctx, p, auth.Read, branch); err != nil {
+		return WorkingSet{}, err
+	}
+	m, err := r.refs(ctx)
+	if err != nil {
+		return WorkingSet{}, err
+	}
+	_, work, err := branchRefs(ctx, m, branch)
+	if err != nil {
+		return WorkingSet{}, err
+	}
+	return r.readWorkingSet(ctx, work)
 }
 
 // UpdateWorkingSet replaces a branch's working set with next if it is still
 // prev (ErrConflict otherwise), and returns next as stored.
 func (r *Repo) UpdateWorkingSet(ctx context.Context, p auth.Principal, branch string, prev, next WorkingSet) (WorkingSet, error) {
-	return WorkingSet{}, nil
+	if err := r.branchCheck(ctx, p, auth.Write, branch); err != nil {
+		return WorkingSet{}, err
+	}
+	have, err := r.s.Has(ctx, []hash.Hash{next.Working, next.Staged})
+	if err != nil {
+		return WorkingSet{}, err
+	}
+	if !have[next.Working] || !have[next.Staged] {
+		return WorkingSet{}, fmt.Errorf("vcs: a working set must name stored namespaces")
+	}
+	h, err := r.s.Put(ctx, next.encode())
+	if err != nil {
+		return WorkingSet{}, err
+	}
+	err = r.update(ctx, func(m *prolly.Map, e *prolly.Editor) error {
+		_, work, err := branchRefs(ctx, m, branch)
+		if err != nil {
+			return err
+		}
+		if work != prev.Hash {
+			return fmt.Errorf("%w: branch %s", ErrConflict, branch)
+		}
+		return e.Put(workKey(branch), h[:])
+	})
+	if err != nil {
+		return WorkingSet{}, err
+	}
+	next.Hash = h
+	return next, nil
+}
+
+func (r *Repo) conflictCount(ctx context.Context, ws WorkingSet) (uint64, error) {
+	if ws.Merge == nil {
+		return 0, nil
+	}
+	m, err := prolly.Open(ctx, r.s, r.o.Config, ws.Merge.Conflicts)
+	if err != nil {
+		return 0, err
+	}
+	return m.Count(), nil
 }
 
 // CommitWorkingSet commits what is staged on a branch, onto its head as it
 // is when the commit lands; a merge in progress adds its second parent.
 func (r *Repo) CommitWorkingSet(ctx context.Context, p auth.Principal, branch, message string) (Commit, error) {
-	return Commit{}, nil
+	if err := r.branchCheck(ctx, p, auth.Write, branch); err != nil {
+		return Commit{}, err
+	}
+	if len(message) > MaxMessageLen || !utf8.ValidString(message) {
+		return Commit{}, fmt.Errorf("vcs: a commit message must be UTF-8 of at most %d bytes", MaxMessageLen)
+	}
+	var out Commit
+	err := r.update(ctx, func(m *prolly.Map, e *prolly.Editor) error {
+		headHash, work, err := branchRefs(ctx, m, branch)
+		if err != nil {
+			return err
+		}
+		ws, err := r.readWorkingSet(ctx, work)
+		if err != nil {
+			return err
+		}
+		if n, err := r.conflictCount(ctx, ws); err != nil {
+			return err
+		} else if n > 0 {
+			return fmt.Errorf("%w: %d on %s", ErrUnresolvedConflicts, n, branch)
+		}
+		head, err := r.readCommit(ctx, headHash)
+		if err != nil {
+			return err
+		}
+		c := Commit{Parents: []hash.Hash{head.Hash}, Namespace: ws.Staged, Height: head.Height + 1,
+			Time: r.o.Clock().UTC(), Author: p.ID, Message: message}
+		if ws.Merge != nil {
+			theirs, err := r.readCommit(ctx, ws.Merge.Theirs)
+			if err != nil {
+				return err
+			}
+			c.Parents = append(c.Parents, theirs.Hash)
+			c.Height = max(head.Height, theirs.Height) + 1
+		}
+		if c.Hash, err = r.s.Put(ctx, c.Encode()); err != nil {
+			return err
+		}
+		nextWS, err := r.s.Put(ctx, WorkingSet{Working: ws.Working, Staged: ws.Staged}.encode())
+		if err != nil {
+			return err
+		}
+		out = c
+		if err := e.Put(headKey(branch), c.Hash[:]); err != nil {
+			return err
+		}
+		return e.Put(workKey(branch), nextWS[:])
+	})
+	return out, err
 }
 
 // CreateBranch names a new branch at a commit.
 func (r *Repo) CreateBranch(ctx context.Context, p auth.Principal, name string, at hash.Hash) error {
-	return nil
+	if err := r.branchCheck(ctx, p, auth.Manage, name); err != nil {
+		return err
+	}
+	c, err := r.readCommit(ctx, at)
+	if err != nil {
+		return err
+	}
+	ws, err := r.s.Put(ctx, WorkingSet{Working: c.Namespace, Staged: c.Namespace}.encode())
+	if err != nil {
+		return err
+	}
+	return r.update(ctx, func(m *prolly.Map, e *prolly.Editor) error {
+		if _, ok, err := ref(ctx, m, headKey(name)); err != nil {
+			return err
+		} else if ok {
+			return fmt.Errorf("%w: %s", ErrBranchExists, name)
+		}
+		if err := e.Put(headKey(name), at[:]); err != nil {
+			return err
+		}
+		return e.Put(workKey(name), ws[:])
+	})
 }
 
 // DeleteBranch removes a branch no session has checked out.
-func (r *Repo) DeleteBranch(ctx context.Context, p auth.Principal, name string) error { return nil }
+func (r *Repo) DeleteBranch(ctx context.Context, p auth.Principal, name string) error {
+	if err := r.branchCheck(ctx, p, auth.Manage, name); err != nil {
+		return err
+	}
+	r.mu.Lock()
+	inUse := r.checkedOut[name] > 0
+	r.mu.Unlock()
+	if inUse {
+		return fmt.Errorf("%w: %s", ErrBranchInUse, name)
+	}
+	return r.update(ctx, func(m *prolly.Map, e *prolly.Editor) error {
+		if _, _, err := branchRefs(ctx, m, name); err != nil {
+			return err
+		}
+		if err := e.Delete(headKey(name)); err != nil {
+			return err
+		}
+		return e.Delete(workKey(name))
+	})
+}
 
 // Session is a branch checked out by one session, in this process.
-type Session struct{}
+type Session struct {
+	r      *Repo
+	branch string
+	once   sync.Once
+}
 
 // Checkout marks a branch as checked out until the session closes.
 func (r *Repo) Checkout(ctx context.Context, p auth.Principal, branch string) (*Session, error) {
-	return &Session{}, nil
+	if _, err := r.Head(ctx, p, branch); err != nil {
+		return nil, err
+	}
+	r.mu.Lock()
+	r.checkedOut[branch]++
+	r.mu.Unlock()
+	return &Session{r: r, branch: branch}, nil
 }
 
 // Close ends a session.
-func (s *Session) Close() {}
+func (s *Session) Close() {
+	s.once.Do(func() {
+		s.r.mu.Lock()
+		defer s.r.mu.Unlock()
+		if s.r.checkedOut[s.branch]--; s.r.checkedOut[s.branch] <= 0 {
+			delete(s.r.checkedOut, s.branch)
+		}
+	})
+}
 
 // CreateTag names a commit.
 func (r *Repo) CreateTag(ctx context.Context, p auth.Principal, name string, target hash.Hash, message string) (Tag, error) {
-	return Tag{}, nil
+	if err := r.check(ctx, p, auth.Manage, "tag:"+name); err != nil {
+		return Tag{}, err
+	}
+	if err := validName(name); err != nil {
+		return Tag{}, err
+	}
+	if len(message) > MaxMessageLen || !utf8.ValidString(message) {
+		return Tag{}, fmt.Errorf("vcs: a tag message must be UTF-8 of at most %d bytes", MaxMessageLen)
+	}
+	if _, err := r.readCommit(ctx, target); err != nil {
+		return Tag{}, err
+	}
+	t := Tag{Target: target, Time: r.o.Clock().UTC(), Tagger: p.ID, Message: message}
+	h, err := r.s.Put(ctx, t.encode())
+	if err != nil {
+		return Tag{}, err
+	}
+	t.Hash = h
+	err = r.update(ctx, func(m *prolly.Map, e *prolly.Editor) error {
+		if _, ok, err := ref(ctx, m, tagKey(name)); err != nil {
+			return err
+		} else if ok {
+			return fmt.Errorf("%w: %s", ErrTagExists, name)
+		}
+		return e.Put(tagKey(name), h[:])
+	})
+	return t, err
+}
+
+// byHeight is a max-heap of commits by height, lower hash first on a tie.
+type byHeight []Commit
+
+func (h byHeight) Len() int { return len(h) }
+func (h byHeight) Less(i, j int) bool {
+	if h[i].Height != h[j].Height {
+		return h[i].Height > h[j].Height
+	}
+	return h[i].Hash.Compare(h[j].Hash) < 0
+}
+func (h byHeight) Swap(i, j int) { h[i], h[j] = h[j], h[i] }
+func (h *byHeight) Push(x any)   { *h = append(*h, x.(Commit)) }
+func (h *byHeight) Pop() any {
+	old := *h
+	c := old[len(old)-1]
+	*h = old[:len(old)-1]
+	return c
 }
 
 // Log returns up to limit commits reachable from from, highest first.
 func (r *Repo) Log(ctx context.Context, p auth.Principal, from hash.Hash, limit int) ([]Commit, error) {
-	return nil, nil
+	if err := r.check(ctx, p, auth.Read, "repo"); err != nil {
+		return nil, err
+	}
+	if limit < 1 || limit > MaxLog {
+		return nil, fmt.Errorf("%w: %d", ErrInvalidLimit, limit)
+	}
+	start, err := r.readCommit(ctx, from)
+	if err != nil {
+		return nil, err
+	}
+	q, seen := &byHeight{start}, map[hash.Hash]bool{from: true}
+	var out []Commit
+	for q.Len() > 0 && len(out) < limit {
+		c := heap.Pop(q).(Commit)
+		out = append(out, c)
+		for _, ph := range c.Parents {
+			if seen[ph] {
+				continue
+			}
+			seen[ph] = true
+			pc, err := r.readCommit(ctx, ph)
+			if err != nil {
+				return nil, err
+			}
+			heap.Push(q, pc)
+		}
+	}
+	return out, nil
 }
 
 // MergeBase returns the best common ancestor of two commits.
 func (r *Repo) MergeBase(ctx context.Context, p auth.Principal, a, b hash.Hash) (hash.Hash, error) {
-	return hash.Hash{}, nil
+	if err := r.check(ctx, p, auth.Read, "repo"); err != nil {
+		return hash.Hash{}, err
+	}
+	return r.mergeBase(ctx, a, b)
+}
+
+// mergeBase walks both histories highest first. A commit's descendants are
+// all higher than it, so when it is popped every path to it from a and b has
+// been seen: the first commit reachable from both is the highest common
+// ancestor (the lower hash on a tie), a best merge base.
+func (r *Repo) mergeBase(ctx context.Context, a, b hash.Hash) (hash.Hash, error) {
+	const fromA, fromB = 1, 2
+	flags := map[hash.Hash]int{}
+	q := &byHeight{}
+	for _, s := range []struct {
+		h hash.Hash
+		f int
+	}{{a, fromA}, {b, fromB}} {
+		if flags[s.h] == 0 {
+			c, err := r.readCommit(ctx, s.h)
+			if err != nil {
+				return hash.Hash{}, err
+			}
+			heap.Push(q, c)
+		}
+		flags[s.h] |= s.f
+	}
+	done := map[hash.Hash]bool{}
+	for q.Len() > 0 {
+		c := heap.Pop(q).(Commit)
+		if done[c.Hash] {
+			continue
+		}
+		done[c.Hash] = true
+		f := flags[c.Hash]
+		if f == fromA|fromB {
+			return c.Hash, nil
+		}
+		for _, ph := range c.Parents {
+			if flags[ph] == 0 {
+				pc, err := r.readCommit(ctx, ph)
+				if err != nil {
+					return hash.Hash{}, err
+				}
+				heap.Push(q, pc)
+			}
+			flags[ph] |= f
+		}
+	}
+	return hash.Hash{}, fmt.Errorf("vcs: %s and %s share no history", a.Short(), b.Short())
 }
 
 // Merge merges a commit into a branch's working set, recording conflicts
 // there; a failed merge leaves the working set as it was.
 func (r *Repo) Merge(ctx context.Context, p auth.Principal, branch string, theirs hash.Hash) (merge.Result, error) {
-	return merge.Result{}, nil
+	if err := r.branchCheck(ctx, p, auth.Write, branch); err != nil {
+		return merge.Result{}, err
+	}
+	m, err := r.refs(ctx)
+	if err != nil {
+		return merge.Result{}, err
+	}
+	headHash, work, err := branchRefs(ctx, m, branch)
+	if err != nil {
+		return merge.Result{}, err
+	}
+	ws, err := r.readWorkingSet(ctx, work)
+	if err != nil {
+		return merge.Result{}, err
+	}
+	if ws.Merge != nil {
+		return merge.Result{}, fmt.Errorf("vcs: a merge is already in progress on %s", branch)
+	}
+	baseHash, err := r.mergeBase(ctx, headHash, theirs)
+	if err != nil {
+		return merge.Result{}, err
+	}
+	var ns [3]*object.Namespace
+	for i, h := range []hash.Hash{baseHash, theirs} {
+		c, err := r.readCommit(ctx, h)
+		if err != nil {
+			return merge.Result{}, err
+		}
+		if ns[i*2], err = r.Namespace(ctx, c.Namespace); err != nil {
+			return merge.Result{}, err
+		}
+	}
+	if ns[1], err = r.Namespace(ctx, ws.Working); err != nil {
+		return merge.Result{}, err
+	}
+	res, err := merge.Merge(ctx, r.o.Registry, ns[0], ns[1], ns[2], r.s, merge.Options{MaxConflicts: r.o.MaxConflicts})
+	if err != nil {
+		return merge.Result{}, err
+	}
+	conflicts, err := prolly.Empty(ctx, r.s, r.o.Config)
+	if err != nil {
+		return merge.Result{}, err
+	}
+	ce := conflicts.Editor()
+	for _, c := range res.Conflicts {
+		if err := ce.Put([]byte(c.Path), encodeConflict(c)); err != nil {
+			return merge.Result{}, err
+		}
+	}
+	if conflicts, err = ce.Flush(ctx); err != nil {
+		return merge.Result{}, err
+	}
+	next := WorkingSet{Working: res.Merged.Root(), Staged: res.Merged.Root(),
+		Merge: &MergeState{Base: baseHash, Theirs: theirs, Conflicts: conflicts.Root()}}
+	if _, err := r.UpdateWorkingSet(ctx, p, branch, ws, next); err != nil {
+		return merge.Result{}, err
+	}
+	return res, nil
 }
 
 // Conflicts lists a branch's unresolved merge conflicts.
 func (r *Repo) Conflicts(ctx context.Context, p auth.Principal, branch string) ([]merge.Conflict, error) {
-	return nil, nil
+	ws, err := r.WorkingSet(ctx, p, branch)
+	if err != nil || ws.Merge == nil {
+		return nil, err
+	}
+	m, err := prolly.Open(ctx, r.s, r.o.Config, ws.Merge.Conflicts)
+	if err != nil {
+		return nil, err
+	}
+	it, err := m.IterRange(ctx, nil, nil)
+	if err != nil {
+		return nil, err
+	}
+	var out []merge.Conflict
+	for {
+		k, v, ok, err := it.Next()
+		if err != nil || !ok {
+			return out, err
+		}
+		c, err := decodeConflict(string(k), v)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, c)
+	}
 }
 
 // ResolveConflict settles a conflicting path (nil deletes it) in the working
 // and staged namespaces, and drops its conflict.
 func (r *Repo) ResolveConflict(ctx context.Context, p auth.Principal, branch, path string, to *object.Ref) error {
-	return nil
+	if err := r.branchCheck(ctx, p, auth.Write, branch); err != nil {
+		return err
+	}
+	for attempt := 0; attempt < maxAttempts; attempt++ {
+		ws, err := r.WorkingSet(ctx, p, branch)
+		if err != nil {
+			return err
+		}
+		if ws.Merge == nil {
+			return fmt.Errorf("vcs: no merge is in progress on %s", branch)
+		}
+		cm, err := prolly.Open(ctx, r.s, r.o.Config, ws.Merge.Conflicts)
+		if err != nil {
+			return err
+		}
+		if _, ok, err := cm.Get(ctx, []byte(path)); err != nil {
+			return err
+		} else if !ok {
+			return fmt.Errorf("vcs: no conflict at %s on %s", path, branch)
+		}
+		next := ws
+		next.Merge = &MergeState{Base: ws.Merge.Base, Theirs: ws.Merge.Theirs}
+		for _, dst := range []*hash.Hash{&next.Working, &next.Staged} {
+			n, err := r.Namespace(ctx, *dst)
+			if err != nil {
+				return err
+			}
+			e := n.Editor()
+			if to == nil {
+				err = e.Delete(path)
+			} else {
+				err = e.Put(path, *to)
+			}
+			if err != nil {
+				return err
+			}
+			if n, err = e.Flush(ctx); err != nil {
+				return err
+			}
+			*dst = n.Root()
+		}
+		ce := cm.Editor()
+		if err := ce.Delete([]byte(path)); err != nil {
+			return err
+		}
+		if cm, err = ce.Flush(ctx); err != nil {
+			return err
+		}
+		next.Merge.Conflicts = cm.Root()
+		if _, err = r.UpdateWorkingSet(ctx, p, branch, ws, next); !errors.Is(err, ErrConflict) {
+			return err
+		}
+	}
+	return fmt.Errorf("vcs: the working set of %s kept changing", branch)
 }
