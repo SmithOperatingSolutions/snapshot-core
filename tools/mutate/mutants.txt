@@ -2862,3 +2862,10 @@ find: if errors.Is(err, blob.ErrRootConflict) {\n\t\t\treturn Outcome{}, ErrMove
 replace: if errors.Is(err, blob.ErrRootConflict) && false {\n\t\t\treturn Outcome{}, ErrMoved
 pkg: ./core/chunk/packstore
 run: ^TestARoundLosesToAWriterThatPublished$
+
+id: packstore-round-refuses-a-rootless-live-set
+file: core/chunk/packstore/gc.go
+find: if !live(r.man.root) {
+replace: if !live(r.man.root) && false {
+pkg: ./core/chunk/packstore
+run: ^TestARoundRefusesALiveSetWithoutTheRoot$

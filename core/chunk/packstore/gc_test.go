@@ -203,3 +203,20 @@ func TestARoundLosesToAWriterThatPublished(t *testing.T) {
 		t.Fatalf("a round begun after the writer condemned %d packs, want the 2 its root does not reach", out.Condemned)
 	}
 }
+
+// Marking always reaches the root, so a live set without it is a marking
+// bug: Apply refuses it and decides nothing, rather than condemn the root.
+func TestARoundRefusesALiveSetWithoutTheRoot(t *testing.T) {
+	bs, kr := mem.New(), keyring(t)
+	hs := published(t, open(t, bs, kr), "a, the root", "b")
+	r, err := packstore.Begin(ctx, packstore.Options{Blobs: bs, Keys: kr, Repo: repo})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := r.Apply(ctx, liveSet(hs[1]), t0, 0); err == nil {
+		t.Fatal("Apply with a live set that leaves out the root succeeded")
+	}
+	if out := round(t, bs, kr, liveSet(hs...), t0.Add(time.Hour)); out.Condemned != 0 || len(out.Expired) != 0 {
+		t.Fatalf("after the refused round: condemned %d, expired %v; the refused round decided something", out.Condemned, out.Expired)
+	}
+}
