@@ -313,6 +313,7 @@ Beyond the list: merging what a branch already holds changes nothing (`TestMergi
 ### Batch 2 (in progress)
 
 - [x] #8 The root apart from the objects: `TestObjectsOnlyRunsWhereConditionalWritesAreIgnored`, `TestObjectsOnlyPutIsAHeadThenAPut`, `TestTheMirrorIsReplacedInPlace`; the split store's contract and modes (`TestContractOverASplitStore`, `TestWaitMirrorsEachSwapBeforeReturning`, `TestBackgroundMirrorsTheNewestRootAndCloseFlushes`, `TestBackgroundCopiesEachSwap`, `TestBackgroundReportsAndRetriesAFailedCopy`, `TestPeriodicMirrorsOnItsClock`, `TestOffKeepsNoCopy`, `TestRecoverSeedsAnEmptyRootStoreFromTheCopy`); `TestTheRootsCopyPassesThroughTheCache`; two `Init`s racing (`TestAnotherInitCannotTakeOverARepository`, `TestInitsRacingDoNotOverwriteEachOther`, `TestAStoppedInitFinishedTwiceAtOnceIsFinishedOnce`, `TestOpenTakesTheConfigThatAuthenticatesTheRoot`); end to end on an endpoint ignoring conditional writes, recovered from the copy, `TestARepositoryRunsOnAnEndpointWithoutConditionalWrites`.
+- [ ] #4 The real provider, nightly: the job and its two tests are in; the secrets are the admin's, and the item closes on the first green night. The MinIO tier runs the e2e package on every push meanwhile.
 
 ## Next
 
@@ -334,9 +335,11 @@ them, each tracked as an issue:
    `TestReadingAPromisedChunkThatIsGoneLosesTheSession`; end to end,
    `TestAWriterCannotPublishAPackGCDeletedAsAnOrphan`; slow writers in
    `TestGCSafetyProperty`).
-4. **Real S3 in the nightly run** (#4): the test is written
-   (`TestContractAgainstRealS3`); a nightly job to run it, and the
-   credentials it needs as CI secrets, are not there yet.
+4. **Real S3 in the nightly run** (#4): the nightly job is written
+   (`real-provider`: `TestContractAgainstRealS3` objects only and
+   `TestARepositoryRunsOnTheRealProvider`, on Backblaze B2 or iDrive e2 with
+   the root on the runner's disk); it fails until an admin adds the
+   `SNAPSHOT_S3_*` secrets, then the item closes on its first green night.
 5. ✅ **Abandoning a merge** (#5): `AbortMerge` puts back the working and
    staged namespaces the merge started from
    (`TestAnAbandonedMergeLeavesTheBranchAsItWas`,
