@@ -213,7 +213,7 @@ func TestForgedManifestsAreRefused(t *testing.T) {
 		"duplicate index object":   forge(func(p *plainParts) { p.indexes[1] = p.indexes[0] }),
 		"too many condemned":       forge(func(p *plainParts) { p.nCondemned = maxCondemned + 1 }),
 		"condemned kind 0":         forge(func(p *plainParts) { p.condemned[0].kind = 0 }),
-		"condemned kind 5":         forge(func(p *plainParts) { p.condemned[1].kind = 5 }),
+		"condemned kind 6":         forge(func(p *plainParts) { p.condemned[1].kind = 6 }),
 		"truncated condemned":      forge(func(p *plainParts) { p.trim = 1 }),
 		"a byte past the end":      forge(func(p *plainParts) { p.tail = []byte{0} }),
 	} {
