@@ -242,3 +242,30 @@ func TestValidateChecksTheCount(t *testing.T) {
 		t.Fatal("a tree whose root claims one entry too many validates")
 	}
 }
+
+// A tree map holding a path outside the grammar (written past this package,
+// straight into prolly) is refused when read and when merged from.
+func TestPathsAreCheckedOnReadAndMerge(t *testing.T) {
+	s := memstore.New()
+	base := write(t, s, map[string]tree.Entry{"ok": file("ok")})
+	m, err := prolly.Empty(ctx, s, cfg())
+	if err != nil {
+		t.Fatal(err)
+	}
+	e := m.Editor()
+	for _, k := range []string{"ok", "a/../b"} {
+		if err := e.Put([]byte(k), file(k).Encode()); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if m, err = e.Flush(ctx); err != nil {
+		t.Fatal(err)
+	}
+	bad := model.Root{Hash: m.Root(), Size: m.Count(), Format: tree.Format}
+	if _, err := tree.Read(ctx, s, cfg(), bad); !errors.Is(err, chunk.ErrCorrupt) {
+		t.Errorf("Read of a tree holding a/../b = %v, want ErrCorrupt", err)
+	}
+	if _, err := (tree.Model{Config: cfg()}).Merge(ctx, base, base, bad, s); !errors.Is(err, chunk.ErrCorrupt) {
+		t.Errorf("merging in a tree holding a/../b = %v, want ErrCorrupt", err)
+	}
+}

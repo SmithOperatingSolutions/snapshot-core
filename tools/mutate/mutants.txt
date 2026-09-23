@@ -1777,3 +1777,10 @@ find: if e.Content.Format == 0 {
 replace: if e.Content.Format == 0 && false {
 pkg: ./model/tree
 run: ^TestAnEntryIsTheDocumented55Bytes$
+
+id: tree-paths-checked
+file: model/tree/tree.go
+find: if err := object.ValidPath(string(key)); err != nil {
+replace: if err := object.ValidPath(string(key)); err != nil && false {
+pkg: ./model/tree
+run: ^TestPathsAreCheckedOnReadAndMerge$
