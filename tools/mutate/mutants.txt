@@ -614,3 +614,73 @@ find: unlock, err := fsutil.Lock(filepath.Join(s.dir, lockName))\n\tif err != ni
 replace: unlock, err := fsutil.Lock(filepath.Join(s.dir, lockName))\n\tif err != nil {\n\t\tunlock = func() {}\n\t}
 pkg: ./core/blob/local
 run: ^TestSwapRootRefusesWithoutItsLock$
+
+id: s3-probe-checks-if-none-match
+file: core/blob/s3/s3.go
+find: if _, err := s.put(ctx, key, body, size, "*", ""); statusOf(err) != http.StatusPreconditionFailed {
+replace: if _, err := s.put(ctx, key, body, size, "*", ""); statusOf(err) != http.StatusPreconditionFailed && false {
+pkg: ./core/blob/s3
+run: ^TestProbeRefusesEndpointsThatIgnoreConditionalWrites$
+
+id: s3-probe-checks-if-match
+file: core/blob/s3/s3.go
+find: statusOf(err) != http.StatusPreconditionFailed {\n\t\treturn fmt.Errorf("%w: a PUT with a wrong If-Match ETag
+replace: statusOf(err) != http.StatusPreconditionFailed && false {\n\t\treturn fmt.Errorf("%w: a PUT with a wrong If-Match ETag
+pkg: ./core/blob/s3
+run: ^TestProbeRefusesEndpointsThatIgnoreConditionalWrites$
+
+id: s3-put-if-absent
+file: core/blob/s3/s3.go
+find: _, err := s.put(ctx, s.objectKey(name), body, size, "*", "")
+replace: _, err := s.put(ctx, s.objectKey(name), body, size, "", "")
+pkg: ./core/blob/s3
+run: ^TestContractAgainstTheInProcessServer$/^PutExistingRefused$
+
+id: s3-swap-sends-if-match
+file: core/blob/s3/s3.go
+find: ifNoneMatch, ifMatch := "", string(expected)
+replace: ifNoneMatch, ifMatch := "", ""
+pkg: ./core/blob/s3
+run: ^TestContractAgainstTheInProcessServer$/^StaleSwapRefused$
+
+id: s3-swap-recognizes-own-write
+file: core/blob/s3/s3.go
+find: if rerr == nil && bytes.Equal(cur, body) {
+replace: if rerr == nil && bytes.Equal(cur, body) && false {
+pkg: ./core/blob/s3
+run: ^TestSwapRootRecognizesItsOwnWriteAfterALostResponse$
+
+id: s3-root-nonce-is-fresh
+file: core/blob/s3/s3.go
+find: nonce, err := random(nonceSize)
+replace: nonce, err := make([]byte, nonceSize), error(nil)
+pkg: ./core/blob/s3
+run: ^TestContractAgainstTheInProcessServer$/^VersionsNeverRepeat$
+
+id: s3-refuses-plain-http
+file: core/blob/s3/s3.go
+find: && !o.AllowHTTP {
+replace: && false {
+pkg: ./core/blob/s3
+run: ^TestPlainHTTPIsRefusedUnlessAllowed$
+
+id: s3-validates-prefix
+file: core/blob/s3/s3.go
+find: case o.Prefix != "" && (!strings.HasSuffix(o.Prefix, "/") || blob.ValidName(strings.TrimSuffix(o.Prefix, "/")) != nil):
+replace: case o.Prefix == "\x00":
+pkg: ./core/blob/s3
+run: ^TestOptionsAreValidated$
+
+id: s3-requests-sse-kms
+file: core/blob/s3/s3.go
+find: if s.sseKMS != "" {
+replace: if s.sseKMS != "" && false {
+pkg: ./core/blob/s3
+run: ^TestSSEKMSIsRequestedWhenConfigured$
+
+id: s3-short-root-is-corrupt
+file: core/blob/s3/s3.go
+find: if len(body) <= nonceSize || len(body) > nonceSize+blob.MaxRootSize {
+replace: if len(body) < 0 || len(body) > nonceSize+blob.MaxRootSize {
+pkg: ./core/blob/s3
+run: ^TestTruncatedRootObjectIsCorrupt$
