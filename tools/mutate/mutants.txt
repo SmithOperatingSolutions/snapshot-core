@@ -929,3 +929,38 @@ find: if len(data) > chunk.MaxChunkSize {
 replace: if len(data) > chunk.MaxChunkSize+1 {
 pkg: ./core/chunk/memstore
 run: ^TestContract$/^TooLarge$
+
+id: packstore-uploads-before-publishing
+file: core/chunk/packstore/packstore.go
+find: if err := s.upload(ctx, toUpload); err != nil {\n\t\treturn err\n\t}
+replace: _ = toUpload
+pkg: ./core/chunk/packstore
+run: ^TestPublishedChunksAreDurableBeforeTheRoot$
+
+id: packstore-root-must-be-stored
+file: core/chunk/packstore/packstore.go
+find: if next.IsZero() || !(s.index.Has(next) || (s.pending != nil && s.pending.Has(next))) {
+replace: if next.IsZero() {
+pkg: ./core/chunk/packstore
+run: ^TestContractOverEveryBackend$/^mem$/^RootMustBeStored$
+
+id: packstore-refreshes-on-a-miss
+file: core/chunk/packstore/packstore.go
+find: if attempt == 0 {\n\t\t\tif err := s.refresh(ctx); err != nil {\n\t\t\t\treturn dedup.Location{}
+replace: if attempt == 99 {\n\t\t\tif err := s.refresh(ctx); err != nil {\n\t\t\t\treturn dedup.Location{}
+pkg: ./core/chunk/packstore
+run: ^TestWritersOnOneBackendSeeEachOther$
+
+id: packstore-retries-manifest-conflicts
+file: core/chunk/packstore/packstore.go
+find: if !errors.Is(err, blob.ErrRootConflict) {\n\t\t\treturn err\n\t\t}\n\t\t// Someone else changed the manifest: refresh and re-apply.
+replace: return chunk.ErrRootConflict
+pkg: ./core/chunk/packstore
+run: ^TestManifestConflictsRetryThenGiveUp$
+
+id: packstore-bounded-swap-attempts
+file: core/chunk/packstore/packstore.go
+find: for attempt := 0; attempt < MaxSwapAttempts; attempt++ {
+replace: for attempt := 0; attempt < MaxSwapAttempts+5; attempt++ {
+pkg: ./core/chunk/packstore
+run: ^TestManifestConflictsRetryThenGiveUp$

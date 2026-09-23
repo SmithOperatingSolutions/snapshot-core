@@ -393,7 +393,9 @@ func TestMain(m *testing.M) {
 	os.Exit(m.Run())
 }
 
-func crashChunk(n int) []byte { return []byte(fmt.Sprintf("crash-chunk-%08d-%s", n, strings.Repeat("z", n%500))) }
+func crashChunk(n int) []byte {
+	return []byte(fmt.Sprintf("crash-chunk-%08d-%s", n, strings.Repeat("z", n%500)))
+}
 
 func crashChild(dir string) {
 	bs, err := local.Open(dir, local.Options{})
@@ -482,7 +484,9 @@ func TestCrashDuringCommitLeavesOldOrNew(t *testing.T) {
 			_ = cmd.Process.Kill()
 			t.Fatal("the crash child never started")
 		}
-		time.Sleep(time.Duration(rand.IntN(30000)) * time.Microsecond)
+		// A commit is several fsyncs (pack, shard directory, index object, root
+		// swap); the window must span a few, landing both inside and between them.
+		time.Sleep(time.Duration(rand.IntN(250000)) * time.Microsecond)
 		_ = cmd.Process.Kill()
 		for l := range lines {
 			record(l)
