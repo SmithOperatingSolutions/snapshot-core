@@ -9,16 +9,17 @@ import (
 )
 
 // Walk calls visit for every chunk the map at root is made of, the root
-// first: its nodes, each checked as a read checks it, and the chunks of its
-// long values' streams; visit says whether to go on into what a chunk
-// reaches. When value is not nil, each value of a leaf Walk goes into is
-// handed to it, long ones read whole, so a caller can walk what values name.
-func Walk(ctx context.Context, rd chunk.Reader, c Config, root hash.Hash, visit func(hash.Hash) (bool, error), value func(key, val []byte) error) error {
+// first: its nodes (never leaves; each read, when visit says to go on into
+// it, and checked as a read checks it) and the chunks of its long values'
+// streams, as stream.Walk names them. When value is not nil, each value of
+// a leaf Walk goes into is handed to it, long ones read whole, so a caller
+// can walk what values name.
+func Walk(ctx context.Context, rd chunk.Reader, c Config, root hash.Hash, visit func(h hash.Hash, leaf bool) (bool, error), value func(key, val []byte) error) error {
 	if _, err := c.rule(); err != nil {
 		return err
 	}
 	w := walker{ctx: ctx, rd: rd, limit: c.InlineLimit, visit: visit, value: value}
-	deeper, err := visit(root)
+	deeper, err := visit(root, false)
 	if err != nil || !deeper {
 		return err
 	}
@@ -36,7 +37,7 @@ type walker struct {
 	ctx   context.Context
 	rd    chunk.Reader
 	limit int
-	visit func(hash.Hash) (bool, error)
+	visit func(h hash.Hash, leaf bool) (bool, error)
 	value func(key, val []byte) error
 }
 
@@ -57,7 +58,7 @@ func (w *walker) node(n *node) error {
 			}
 			continue
 		}
-		deeper, err := w.visit(e.child)
+		deeper, err := w.visit(e.child, false)
 		if err != nil {
 			return err
 		}

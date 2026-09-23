@@ -191,7 +191,7 @@ func walkHoldsTheObject(t *testing.T, s Subject) {
 		r := s.Write(t, s.Generate(seed))
 		var order []hash.Hash
 		named := map[hash.Hash]bool{}
-		err := w.Walk(ctx, r, s.Store, func(h hash.Hash) (bool, error) {
+		err := w.Walk(ctx, r, s.Store, func(h hash.Hash, _ bool) (bool, error) {
 			order = append(order, h)
 			fresh := !named[h]
 			named[h] = true

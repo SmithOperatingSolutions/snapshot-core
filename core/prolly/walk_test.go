@@ -64,7 +64,7 @@ func (r *recording) forget() {
 func walkAll(rd chunk.Reader, c prolly.Config, root hash.Hash, values map[string][]byte) ([]hash.Hash, error) {
 	var order []hash.Hash
 	seen := map[hash.Hash]bool{}
-	visit := func(h hash.Hash) (bool, error) {
+	visit := func(h hash.Hash, _ bool) (bool, error) {
 		order = append(order, h)
 		first := !seen[h]
 		seen[h] = true
@@ -195,7 +195,7 @@ func TestWalkGoesNoFurtherThanVisitSays(t *testing.T) {
 	s.forget()
 	var shown []hash.Hash
 	handed := 0
-	err := prolly.Walk(ctx, s, c, m.Root(), func(h hash.Hash) (bool, error) { shown = append(shown, h); return false, nil },
+	err := prolly.Walk(ctx, s, c, m.Root(), func(h hash.Hash, _ bool) (bool, error) { shown = append(shown, h); return false, nil },
 		func([]byte, []byte) error { handed++; return nil })
 	if err != nil {
 		t.Fatal(err)
@@ -210,7 +210,7 @@ func TestWalkGoesNoFurtherThanVisitSays(t *testing.T) {
 	first := decodeNode(t, top)
 	values := map[string][]byte{}
 	seen := map[hash.Hash]bool{}
-	err = prolly.Walk(ctx, s, c, m.Root(), func(h hash.Hash) (bool, error) {
+	err = prolly.Walk(ctx, s, c, m.Root(), func(h hash.Hash, _ bool) (bool, error) {
 		if h == first.kids[0] {
 			return false, nil
 		}
@@ -231,7 +231,7 @@ func TestWalkGoesNoFurtherThanVisitSays(t *testing.T) {
 	}
 	stop := errors.New("stop here")
 	calls := 0
-	err = prolly.Walk(ctx, s, c, m.Root(), func(hash.Hash) (bool, error) {
+	err = prolly.Walk(ctx, s, c, m.Root(), func(hash.Hash, bool) (bool, error) {
 		if calls++; calls == 3 {
 			return false, stop
 		}
@@ -240,7 +240,7 @@ func TestWalkGoesNoFurtherThanVisitSays(t *testing.T) {
 	if !errors.Is(err, stop) || calls != 3 {
 		t.Fatalf("a visit error at the third chunk: Walk = %v after %d visits", err, calls)
 	}
-	err = prolly.Walk(ctx, s, c, m.Root(), func(hash.Hash) (bool, error) { return true, nil },
+	err = prolly.Walk(ctx, s, c, m.Root(), func(hash.Hash, bool) (bool, error) { return true, nil },
 		func([]byte, []byte) error { return stop })
 	if !errors.Is(err, stop) {
 		t.Fatalf("a value error: Walk = %v", err)

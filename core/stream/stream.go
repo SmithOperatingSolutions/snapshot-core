@@ -317,10 +317,11 @@ func (r *Reader) Read(p []byte) (int, error) {
 }
 
 // Walk calls visit for every chunk the stream at ref is made of, the root
-// first; visit says whether to go on into what that chunk reaches. Index
-// nodes are read and checked as a Reader checks them; data chunks are named,
-// never read, so walking a stream costs its index, not its bytes.
-func Walk(ctx context.Context, rd chunk.Reader, ref Ref, visit func(hash.Hash) (bool, error)) error {
+// first. Index nodes are read and checked as a Reader checks them, when
+// visit says to go on into them; data chunks are named as leaves (leaf
+// true, visit's answer unused) and never read, so walking a stream costs
+// its index, not its bytes.
+func Walk(ctx context.Context, rd chunk.Reader, ref Ref, visit func(h hash.Hash, leaf bool) (bool, error)) error {
 	if ref.Depth > maxDepth || ref.Size > math.MaxInt64 {
 		return corrupt("ref: depth %d, size %d", ref.Depth, ref.Size)
 	}
@@ -329,8 +330,8 @@ func Walk(ctx context.Context, rd chunk.Reader, ref Ref, visit func(hash.Hash) (
 
 // walk visits h, a chunk at depth (0: data) whose parent says it holds want
 // bytes, and what it reaches.
-func walk(ctx context.Context, rd chunk.Reader, h hash.Hash, depth int, want uint64, top bool, visit func(hash.Hash) (bool, error)) error {
-	deeper, err := visit(h)
+func walk(ctx context.Context, rd chunk.Reader, h hash.Hash, depth int, want uint64, top bool, visit func(h hash.Hash, leaf bool) (bool, error)) error {
+	deeper, err := visit(h, false)
 	if err != nil || !deeper || depth == 0 {
 		return err
 	}

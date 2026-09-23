@@ -178,7 +178,7 @@ func (m Model) Validate(ctx context.Context, root model.Root, r chunk.Reader) er
 
 // Walk implements model.Walker: a tree's map, and each entry's content,
 // which is a stream.
-func (m Model) Walk(ctx context.Context, root model.Root, r chunk.Reader, visit func(hash.Hash) (bool, error)) error {
+func (m Model) Walk(ctx context.Context, root model.Root, r chunk.Reader, visit func(h hash.Hash, leaf bool) (bool, error)) error {
 	if root.Format != Format {
 		return fmt.Errorf("%w: tree format %d", model.ErrUnknownModel, root.Format)
 	}

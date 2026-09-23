@@ -78,10 +78,14 @@ type Model interface {
 // repository holding an object whose model does not implement it, and
 // model/contract requires it.
 type Walker interface {
-	// Walk calls visit for every chunk the object reaches, root first; visit
-	// says whether to go on into what that chunk reaches (no, for one already
-	// marked, so history shared between commits is walked once).
-	Walk(ctx context.Context, root Root, r chunk.Reader, visit func(hash.Hash) (bool, error)) error
+	// Walk calls visit for every chunk the object reaches, root first. For a
+	// chunk that reaches others (leaf false), visit says whether to go on into
+	// it: no, for one already gone into, so history shared between commits
+	// is walked once. A leaf (true) is named and not gone into, and visit's
+	// answer is unused. The same bytes can be a leaf in one place and reach
+	// others in another (a file whose bytes equal a node's), so a marker must
+	// still go into a chunk it has so far seen only as a leaf.
+	Walk(ctx context.Context, root Root, r chunk.Reader, visit func(h hash.Hash, leaf bool) (bool, error)) error
 }
 
 // ErrUnknownModel is returned for an object whose model the registry lacks,

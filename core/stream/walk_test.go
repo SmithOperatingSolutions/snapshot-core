@@ -52,7 +52,7 @@ func (r *recording) Get(ctx context.Context, h hash.Hash) ([]byte, error) {
 func walkAll(s chunk.Reader, ref stream.Ref) ([]hash.Hash, error) {
 	var order []hash.Hash
 	seen := map[hash.Hash]bool{}
-	err := stream.Walk(ctx, s, ref, func(h hash.Hash) (bool, error) {
+	err := stream.Walk(ctx, s, ref, func(h hash.Hash, _ bool) (bool, error) {
 		order = append(order, h)
 		first := !seen[h]
 		seen[h] = true
@@ -115,7 +115,7 @@ func TestWalkGoesNoFurtherThanVisitSays(t *testing.T) {
 	}
 	s.gets.Store(0)
 	var shown []hash.Hash
-	if err := stream.Walk(ctx, s, ref, func(h hash.Hash) (bool, error) { shown = append(shown, h); return false, nil }); err != nil {
+	if err := stream.Walk(ctx, s, ref, func(h hash.Hash, _ bool) (bool, error) { shown = append(shown, h); return false, nil }); err != nil {
 		t.Fatal(err)
 	}
 	if len(shown) != 1 || s.gets.Load() != 0 {
@@ -140,7 +140,7 @@ func TestWalkGoesNoFurtherThanVisitSays(t *testing.T) {
 		under[h] = true
 	}
 	shown = shown[:0]
-	err = stream.Walk(ctx, s, ref, func(h hash.Hash) (bool, error) {
+	err = stream.Walk(ctx, s, ref, func(h hash.Hash, _ bool) (bool, error) {
 		shown = append(shown, h)
 		return h != es[0].child, nil
 	})
@@ -157,7 +157,7 @@ func TestWalkGoesNoFurtherThanVisitSays(t *testing.T) {
 	}
 	stop := errors.New("stop here")
 	calls := 0
-	err = stream.Walk(ctx, s, ref, func(hash.Hash) (bool, error) {
+	err = stream.Walk(ctx, s, ref, func(hash.Hash, bool) (bool, error) {
 		if calls++; calls == 3 {
 			return false, stop
 		}

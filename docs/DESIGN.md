@@ -401,12 +401,19 @@ bytes), so a model makes its objects collectable by implementing
 
 ```go
 type Walker interface {
-	// Walk calls visit for every chunk the object reaches, root first; visit
-	// says whether to go on into what that chunk reaches (no, for one already
-	// marked, so history shared between commits is walked once).
-	Walk(ctx context.Context, root Root, r chunk.Reader, visit func(hash.Hash) (bool, error)) error
+	// Walk calls visit for every chunk the object reaches, root first. For a
+	// chunk that reaches others (leaf false), visit says whether to go on into
+	// it: no, for one already gone into, so history shared between commits
+	// is walked once. A leaf (true) is named and not gone into.
+	Walk(ctx context.Context, root Root, r chunk.Reader, visit func(h hash.Hash, leaf bool) (bool, error)) error
 }
 ```
+
+The leaf flag is not a nicety. The same bytes can be a data chunk in one
+place and a node in another (a file whose bytes are a node's), and a marker
+that pruned on "seen" alone, meeting them first as data, would never go into
+the node, and GC would delete what it reaches. A writer could craft that on
+purpose. So the marker prunes only a node it has already gone into.
 
 `stream.Walk` (a stream's index nodes, and its data chunks, named but never
 read) and `prolly.Walk` (a map's nodes, the streams of its long values, and

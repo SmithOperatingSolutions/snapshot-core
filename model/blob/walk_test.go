@@ -46,7 +46,7 @@ func TestABlobWalksToEveryChunk(t *testing.T) {
 			t.Fatal(err)
 		}
 		named := map[hash.Hash]bool{}
-		err = w.Walk(ctx, r, s, func(h hash.Hash) (bool, error) {
+		err = w.Walk(ctx, r, s, func(h hash.Hash, _ bool) (bool, error) {
 			fresh := !named[h]
 			named[h] = true
 			return fresh, nil
@@ -69,7 +69,7 @@ func TestABlobWalksToEveryChunk(t *testing.T) {
 	}
 	other := last
 	other.Format = 2
-	err := w.Walk(ctx, other, memstore.New(), func(hash.Hash) (bool, error) { return true, nil })
+	err := w.Walk(ctx, other, memstore.New(), func(hash.Hash, bool) (bool, error) { return true, nil })
 	if !errors.Is(err, model.ErrUnknownModel) {
 		t.Fatalf("Walk of a format-2 blob = %v, want ErrUnknownModel", err)
 	}

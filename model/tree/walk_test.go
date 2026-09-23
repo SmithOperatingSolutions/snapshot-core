@@ -47,7 +47,7 @@ func noise(seed string, n int) []byte {
 
 func walkNamed(w model.Walker, r chunk.Reader, root model.Root) (map[hash.Hash]bool, error) {
 	named := map[hash.Hash]bool{}
-	err := w.Walk(ctx, root, r, func(h hash.Hash) (bool, error) {
+	err := w.Walk(ctx, root, r, func(h hash.Hash, _ bool) (bool, error) {
 		fresh := !named[h]
 		named[h] = true
 		return fresh, nil

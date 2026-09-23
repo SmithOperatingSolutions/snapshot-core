@@ -52,7 +52,7 @@ func Open(ctx context.Context, rd chunk.Reader, root model.Root) (*stream.Reader
 }
 
 // Walk implements model.Walker: a blob is its stream.
-func (Model) Walk(ctx context.Context, root model.Root, r chunk.Reader, visit func(hash.Hash) (bool, error)) error {
+func (Model) Walk(ctx context.Context, root model.Root, r chunk.Reader, visit func(h hash.Hash, leaf bool) (bool, error)) error {
 	if root.Format != Format {
 		return fmt.Errorf("%w: blob format %d", model.ErrUnknownModel, root.Format)
 	}
