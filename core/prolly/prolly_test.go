@@ -470,6 +470,29 @@ func TestFlushReadsOnlyAroundItsEdits(t *testing.T) {
 	}
 }
 
+// A flush that changes nothing (deleting a missing key, putting a value
+// back) returns the same map, reads only the paths to its edits, and makes
+// no write at all.
+func TestANoOpFlushWritesNothing(t *testing.T) {
+	s := newStore()
+	m := build(t, s, 20000, "a")
+	e := m.Editor()
+	must(t, e.Delete(append(key(5), 'x'))) // not in the map
+	must(t, e.Put(key(15000), val(15000, "a")))
+	s.gets.Store(0)
+	s.puts.Store(0)
+	got := flush(t, e)
+	if got.Root() != m.Root() || got.Count() != m.Count() {
+		t.Fatalf("a flush that changes nothing made root %s (count %d), want %s", got.Root(), got.Count(), m.Root())
+	}
+	if n := s.puts.Load(); n != 0 {
+		t.Fatalf("a flush that changes nothing wrote %d chunks, want none", n)
+	}
+	if reads, limit := s.gets.Load(), int64(3*(m.Height()+1)); reads > limit {
+		t.Fatalf("a flush that changes nothing read %d nodes, want at most %d", reads, limit)
+	}
+}
+
 // Deleting every entry leaves the empty map, with its documented root.
 func TestDeletingEverythingLeavesTheEmptyMap(t *testing.T) {
 	s := newStore()
