@@ -22,3 +22,17 @@ func TestAFailedCommandSaysWhy(t *testing.T) {
 		t.Fatalf("a failed command's error hides what it printed: %q", err)
 	}
 }
+
+// A command's output is what it wrote to stdout. docker run -d on a cold
+// runner prints its pull progress on stderr and the container's id on
+// stdout, and the next command takes the id: with the progress in front of
+// it, docker port answered "page not found".
+func TestACommandsOutputIsItsStdout(t *testing.T) {
+	out, err := output(context.Background(), nil, "sh", "-c", "echo 'Pulling from minio/minio' >&2; echo 0123abcd")
+	if err != nil {
+		t.Fatalf("a command that succeeded returned %v", err)
+	}
+	if out != "0123abcd\n" {
+		t.Fatalf("output = %q, want only what the command wrote to stdout, %q", out, "0123abcd\n")
+	}
+}
