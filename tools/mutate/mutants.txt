@@ -46,3 +46,10 @@ find: return ChunkID{Strong: id.StrongHash, FilterHint: id.WeakHash}
 replace: return ChunkID{Strong: [32]byte(append([]byte{1}, id.StrongHash[1:]...)), FilterHint: id.WeakHash}
 pkg: ./core/dnx/compat
 run: ^TestChunkIdentityIsSHA256OfExactBytes$
+
+id: dnx-open-requires-tag
+file: core/dnx/dnx.go
+find: if len(aad) == 0 {\n\t\treturn nil, ErrUntagged\n\t}\n\treturn a.mk.DecryptWithAAD(sealed, aad)
+replace: return a.mk.DecryptWithAAD(sealed, aad)
+pkg: ./core/dnx/compat
+run: ^TestAEADBindsTheDomainTag$

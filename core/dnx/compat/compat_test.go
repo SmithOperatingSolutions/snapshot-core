@@ -393,6 +393,25 @@ func TestAEADBindsTheDomainTag(t *testing.T) {
 	if _, err := a.Open(tampered, []byte("vdb/chunk/v1")); err == nil {
 		t.Error("a flipped ciphertext byte opened: no authentication")
 	}
+
+	// Opening a TAGGED ciphertext without a tag fails authentication anyway, so
+	// it cannot tell whether the untagged Open is refused. Ciphertext sealed
+	// with NO associated data — what disknexus's untagged Encrypt writes — can:
+	// it would decrypt, unless the adapter refuses the call.
+	block, err := aes.NewCipher(testKey())
+	if err != nil {
+		t.Fatal(err)
+	}
+	gcm, err := cipher.NewGCM(block)
+	if err != nil {
+		t.Fatal(err)
+	}
+	nonce := bytes.Repeat([]byte{7}, dnx.NonceSize)
+	untagged := gcm.Seal(bytes.Clone(nonce), nonce, []byte("legacy payload"), nil)
+	if _, err := a.Open(untagged, nil); !errors.Is(err, dnx.ErrUntagged) {
+		t.Errorf("an untagged ciphertext opened without a tag (err=%v): a value sealed in no context "+
+			"can be replayed into every context", err)
+	}
 }
 
 func TestAEADSealIsRandomizedAndKeySized(t *testing.T) {
