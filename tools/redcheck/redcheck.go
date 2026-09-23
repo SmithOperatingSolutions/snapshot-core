@@ -70,7 +70,7 @@ type Report struct {
 var (
 	testSubject = regexp.MustCompile(`^test(?:\(([^)]*)\))?!?:`)
 	featSubject = regexp.MustCompile(`^(?:feat|fix)(?:\(([^)]*)\))?!?:`)
-	testFunc    = regexp.MustCompile(`^Test([^a-z].*)?$`)
+	testFunc    = regexp.MustCompile(`^(Test|Fuzz)([^a-z].*)?$`) // a fuzz target's seeds run as a test
 	redTrailer  = regexp.MustCompile(`(?m)^Red-Check:\s*mutants\s+(.+)$`)
 	modulePath  = regexp.MustCompile(`(?m)^module\s+"?([^"\s]+)"?`)
 )
@@ -336,7 +336,7 @@ func testBodies(name, src string) (map[string]string, error) {
 	return fns, nil
 }
 
-// isTest reports whether fd is a top-level Test function; TestMain is the
+// isTest reports whether fd is a top-level Test or Fuzz function; TestMain is the
 // test binary's entry point, not a test.
 func isTest(fd *ast.FuncDecl) bool {
 	return fd.Recv == nil && testFunc.MatchString(fd.Name.Name) && fd.Name.Name != "TestMain"
@@ -476,7 +476,7 @@ func (c checker) checkTestCommit(commit string, mutants []string) ([]Violation, 
 	}
 	sort.Strings(dirs)
 	var vs []Violation
-	ran, skipped := 0, 0
+	ran, skipped, failed := 0, 0, 0
 	for _, dir := range dirs {
 		names := changed[dir]
 		fmt.Fprintf(c.o.Log, "redcheck: %.9s ./%s %v\n", commit, dir, names)
@@ -499,10 +499,17 @@ func (c checker) checkTestCommit(commit string, mutants []string) ([]Violation, 
 				continue
 			}
 			ran++
+			if r.action == "fail" {
+				failed++
+			}
 			if v, bad := judge(n, r, mutants != nil); bad {
 				vs = append(vs, v)
 			}
 		}
+	}
+	if mutants == nil && ran > 0 && failed == 0 && len(vs) == 0 {
+		// Only fuzz targets changed, and their seeds passed against the stub.
+		vs = append(vs, Violation{Reason: "changes only fuzz targets, and none failed, so nothing was seen to fail"})
 	}
 	if ran == 0 && skipped > 0 {
 		vs = append(vs, Violation{Reason: "every test that calls the changed contract skipped, so nothing was seen to fail"})
@@ -529,6 +536,10 @@ func judge(name string, r *testResult, backfill bool) (Violation, bool) {
 		return Violation{Test: name, Reason: "did not run"}, true
 	case backfill && r.action == "fail":
 		return Violation{Test: name, Reason: "backfilled test fails at its own commit — it must guard behavior that exists"}, true
+	case !backfill && r.action == "pass" && strings.HasPrefix(name, "Fuzz"):
+		// A fuzz target's seeds may pass against a stub that refuses
+		// everything; the red is the commit's tests' to show.
+		return Violation{}, false
 	case !backfill && r.action == "pass":
 		return Violation{Test: name, Reason: "passed without the change — it is not testing it"}, true
 	}

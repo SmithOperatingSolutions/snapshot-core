@@ -12,6 +12,13 @@ replace: if prev, ok := beforeFns[name]; !ok || (prev != body && false) {
 pkg: ./tools/redcheck
 run: ^TestChangedTestIsJudged$
 
+id: redcheck-judges-fuzz-targets
+file: tools/redcheck/redcheck.go
+find: testFunc    = regexp.MustCompile(`^(Test|Fuzz)([^a-z].*)?$`)
+replace: testFunc    = regexp.MustCompile(`^Test([^a-z].*)?$`)
+pkg: ./tools/redcheck
+run: ^TestAFuzzTargetIsJudgedLikeATest$
+
 id: dnx-seal-requires-tag
 file: core/dnx/dnx.go
 find: if len(aad) == 0 {\n\t\treturn nil, ErrUntagged\n\t}\n\treturn a.mk.EncryptWithAAD(plaintext, aad)
