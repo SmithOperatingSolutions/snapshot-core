@@ -244,13 +244,13 @@ func (s *Store) Get(ctx context.Context, name string, off, n int64) (io.ReadClos
 	}
 	head, err := io.ReadAll(io.LimitReader(rc, maxEntry+1))
 	if err != nil {
-		rc.Close()
+		_ = rc.Close()
 		return nil, err
 	}
 	if len(head) > maxEntry {
 		return readCloser{Reader: io.MultiReader(bytes.NewReader(head), rc), c: rc}, nil // too big to cache
 	}
-	rc.Close()
+	_ = rc.Close()
 	s.store(key, name, head)
 	return io.NopCloser(bytes.NewReader(head)), nil
 }

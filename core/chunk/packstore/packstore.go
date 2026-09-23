@@ -336,7 +336,7 @@ func (s *Store) Get(ctx context.Context, h hash.Hash) ([]byte, error) {
 			return nil, err
 		}
 		frame, err = io.ReadAll(rc)
-		rc.Close()
+		_ = rc.Close()
 		if err != nil {
 			return nil, err
 		}
@@ -412,7 +412,7 @@ func (s *Store) CompareAndSetRoot(ctx context.Context, expected, next hash.Hash)
 		s.mu.Unlock()
 		return chunk.ErrClosed
 	}
-	if next.IsZero() || !(s.index.Has(next) || (s.pending != nil && s.pending.Has(next))) {
+	if next.IsZero() || (!s.index.Has(next) && (s.pending == nil || !s.pending.Has(next))) {
 		s.mu.Unlock()
 		return fmt.Errorf("%w: %s", chunk.ErrRootMissing, next.Short())
 	}
@@ -552,7 +552,7 @@ func mergeIndexes(have, add [][32]byte) [][32]byte {
 
 func (s *Store) sleep(ctx context.Context, attempt int) error {
 	d := s.o.backoff << min(attempt, 5)
-	d = d/2 + time.Duration(rand.Int64N(int64(d)+1))
+	d = d/2 + time.Duration(rand.Int64N(int64(d)+1)) //nolint:gosec // G404: backoff jitter, not a secret
 	select {
 	case <-ctx.Done():
 		return ctx.Err()

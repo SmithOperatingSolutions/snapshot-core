@@ -314,7 +314,7 @@ func concurrent(t *testing.T, sub Subject) {
 				}
 				got, err := sub.Store.Get(ctx, h)
 				if err != nil || !bytes.Equal(got, b) {
-					errs <- fmt.Errorf("goroutine %d read back %d bytes (%v)", g, len(got), err)
+					errs <- fmt.Errorf("goroutine %d read back %d bytes (%w)", g, len(got), err)
 					return
 				}
 			}

@@ -258,7 +258,7 @@ func TestManifestConflictsRetryThenGiveUp(t *testing.T) {
 	if n := cb.swaps.Load(); n != 4 {
 		t.Fatalf("the CAS made %d swap attempts, want 4 (3 conflicts, then success)", n)
 	}
-	before, err := cb.BlobStore.Root(ctx)
+	before, err := cb.Root(ctx)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -271,7 +271,7 @@ func TestManifestConflictsRetryThenGiveUp(t *testing.T) {
 	if n := cb.swaps.Load(); n != packstore.MaxSwapAttempts {
 		t.Fatalf("the CAS made %d swap attempts, want exactly %d", n, packstore.MaxSwapAttempts)
 	}
-	after, _ := cb.BlobStore.Root(ctx)
+	after, _ := cb.Root(ctx)
 	if !bytes.Equal(after.Value, before.Value) || after.Version != before.Version {
 		t.Fatal("a CAS that gave up changed the manifest")
 	}
@@ -515,7 +515,8 @@ func TestCrashDuringCommitLeavesOldOrNew(t *testing.T) {
 			ok[hash.Sum(crashChunk(tried))] = tried
 		}
 		n, good := ok[r]
-		if !good && !(last < 0 && done < next && r.IsZero()) {
+		neverCommitted := last < 0 && done < next && r.IsZero()
+		if !good && !neverCommitted {
 			t.Fatalf("iteration %d: after kill -9 the root is %s, neither the last committed nor the one in flight", i, r.Short())
 		}
 		if good {

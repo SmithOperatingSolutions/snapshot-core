@@ -939,7 +939,7 @@ run: ^TestPublishedChunksAreDurableBeforeTheRoot$
 
 id: packstore-root-must-be-stored
 file: core/chunk/packstore/packstore.go
-find: if next.IsZero() || !(s.index.Has(next) || (s.pending != nil && s.pending.Has(next))) {
+find: if next.IsZero() || (!s.index.Has(next) && (s.pending == nil || !s.pending.Has(next))) {
 replace: if next.IsZero() {
 pkg: ./core/chunk/packstore
 run: ^TestContractOverEveryBackend$/^mem$/^RootMustBeStored$

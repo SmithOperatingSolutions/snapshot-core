@@ -42,7 +42,7 @@ func TestHostileFramesAreRefused(t *testing.T) {
 		t.Errorf("a decompression bomb opened (err=%v): one frame could exhaust memory", err)
 	}
 
-	honest := []byte(bytes.Repeat([]byte("abc"), 1000))
+	honest := bytes.Repeat([]byte("abc"), 1000)
 	hh := hash.Sum(honest)
 	sealed, err := keys.chunk.Seal(hh[:], enc.EncodeAll(honest, nil))
 	if err != nil {

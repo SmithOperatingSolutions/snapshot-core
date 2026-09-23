@@ -113,7 +113,7 @@ func NewCodec() (*Codec, error) {
 	// that expands further is a decompression bomb, not a chunk.
 	dec, err := zstd.NewReader(nil, zstd.WithDecoderMaxMemory(MaxChunkSize), zstd.WithDecoderConcurrency(0))
 	if err != nil {
-		enc.Close()
+		_ = enc.Close()
 		return nil, err
 	}
 	return &Codec{enc: enc, dec: dec}, nil
@@ -250,7 +250,8 @@ func (w *Writer) Finish() (Built, error) {
 		return Built{}, err
 	}
 	indexOffset := len(w.buf)
-	b := append(w.buf, sealed...)
+	b := make([]byte, 0, len(w.buf)+len(sealed)+TrailerSize)
+	b = append(append(b, w.buf...), sealed...)
 	b = binary.LittleEndian.AppendUint64(b, uint64(indexOffset))
 	b = binary.LittleEndian.AppendUint32(b, uint32(len(sealed)))
 	b = append(b, trailerMagic...)
@@ -294,7 +295,7 @@ func decodeIndex(b []byte, indexOffset uint64) ([]Entry, error) {
 		off, stored, raw := r.Uvarint(), r.Uvarint(), r.Uvarint()
 		e.Codec = r.U8()
 		if r.Err() != nil {
-			return nil, fmt.Errorf("%w: index entry %d: %v", ErrCorrupt, i, r.Err())
+			return nil, fmt.Errorf("%w: index entry %d: %w", ErrCorrupt, i, r.Err())
 		}
 		switch {
 		case stored < sealOverhead || off+stored > indexOffset:
@@ -314,7 +315,7 @@ func decodeIndex(b []byte, indexOffset uint64) ([]Entry, error) {
 		entries = append(entries, e)
 	}
 	if err := r.Done(); err != nil {
-		return nil, fmt.Errorf("%w: index: %v", ErrCorrupt, err)
+		return nil, fmt.Errorf("%w: index: %w", ErrCorrupt, err)
 	}
 	// Walking frames in offset order from the end of the header refuses both
 	// overlapping frames and a frame reaching back into the header.
