@@ -1111,3 +1111,17 @@ find: if !de.Type().IsRegular() || strings.HasPrefix(de.Name(), ".") {
 replace: if strings.HasPrefix(de.Name(), ".") {
 pkg: ./core/blob/cache
 run: ^TestRestartKeepsOnlyWholeEntries$
+
+id: cache-big-reads-pass-through
+file: core/blob/cache/cache.go
+find: if int64(len(head)) > s.entryLimit {
+replace: if int64(len(head)) > s.entryLimit && false {
+pkg: ./core/blob/cache
+run: ^TestReadsPastTheEntryLimitPassThrough$
+
+id: cache-oversize-does-not-flush
+file: core/blob/cache/cache.go
+find: if int64(len(b)) > s.max {
+replace: if int64(len(b)) > s.max && false {
+pkg: ./core/blob/cache
+run: ^TestAnObjectBiggerThanTheCacheDoesNotFlushIt$

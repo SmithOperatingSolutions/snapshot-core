@@ -316,3 +316,59 @@ func TestRestartKeepsOnlyWholeEntries(t *testing.T) {
 		t.Error("the whole entries were not reused after the restart")
 	}
 }
+
+// A read past the entry limit streams through whole and is not kept: the
+// cache never buffers an unbounded object. Positive control: a read at the
+// limit is kept.
+func TestReadsPastTheEntryLimitPassThrough(t *testing.T) {
+	inner := &counting{BlobStore: mem.New()}
+	c, _ := newCache(t, inner, 64<<20)
+	cache.SetEntryLimit(c, 1000)
+	data := payload("big", 5000)
+	if err := c.Put(ctx, "packs/ff/big", bytes.NewReader(data), int64(len(data))); err != nil {
+		t.Fatal(err)
+	}
+	read(t, c, "packs/ff/big", 0, 1000)
+	read(t, c, "packs/ff/big", 0, 1000)
+	if n := inner.gets.Load(); n != 1 {
+		t.Fatalf("positive control: two reads at the entry limit reached the backend %d times, want 1", n)
+	}
+	kept := c.Used()
+	for i := 0; i < 2; i++ {
+		if got := read(t, c, "packs/ff/big", 0, -1); !bytes.Equal(got, data) {
+			t.Fatalf("a read past the entry limit returned %d bytes, want the whole %d", len(got), len(data))
+		}
+	}
+	if n := inner.gets.Load(); n != 3 {
+		t.Errorf("reads past the entry limit reached the backend %d times in all, want 3: one was served from the cache", n)
+	}
+	if c.Used() != kept {
+		t.Errorf("a read past the entry limit was kept: the cache grew from %d to %d bytes", kept, c.Used())
+	}
+}
+
+// An object bigger than the whole cache is not kept, and does not flush the
+// entries already there on its way through.
+func TestAnObjectBiggerThanTheCacheDoesNotFlushIt(t *testing.T) {
+	inner := &counting{BlobStore: mem.New()}
+	c, _ := newCache(t, inner, 2000)
+	small, big := payload("small", 500), payload("big", 3000)
+	for name, d := range map[string][]byte{"packs/gg/small": small, "packs/gg/big": big} {
+		if err := c.Put(ctx, name, bytes.NewReader(d), int64(len(d))); err != nil {
+			t.Fatal(err)
+		}
+	}
+	read(t, c, "packs/gg/small", 0, -1)
+	if got := read(t, c, "packs/gg/big", 0, -1); !bytes.Equal(got, big) {
+		t.Fatal("an object bigger than the cache read back wrong")
+	}
+	before := inner.gets.Load()
+	read(t, c, "packs/gg/small", 0, -1)
+	if inner.gets.Load() != before {
+		t.Error("reading an object bigger than the cache evicted what the cache held")
+	}
+	read(t, c, "packs/gg/big", 0, -1)
+	if inner.gets.Load() != before+1 {
+		t.Error("an object bigger than the whole cache was served from it")
+	}
+}
