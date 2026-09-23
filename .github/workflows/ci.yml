@@ -65,7 +65,7 @@ jobs:
     name: red-check
     if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 60 # every test: commit of the PR, built and run in its own worktree
     steps:
       - uses: actions/checkout@v4
         with: { fetch-depth: 0 }
