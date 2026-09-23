@@ -1455,3 +1455,17 @@ find: if from.root == to.root {
 replace: if from.root == to.root && false {
 pkg: ./core/prolly
 run: ^TestDiffReturnsExactlyTheChangesAndReadsLittle$
+
+id: prolly-flush-resyncs
+file: core/prolly/flush.go
+find: if len(ch.pending) == 0 {\n\t\t\t\tbreak // resynced
+replace: if len(ch.pending) == 0 && false {\n\t\t\t\tbreak // resynced
+pkg: ./core/prolly
+run: ^TestFlushReadsOnlyAroundItsEdits$
+
+id: prolly-flush-all-deleted-is-empty
+file: core/prolly/flush.go
+find: case len(ch.nodes) == 0: // everything was deleted
+replace: case len(ch.nodes) == 0 && false: // everything was deleted
+pkg: ./core/prolly
+run: ^TestDeletingEverythingLeavesTheEmptyMap$

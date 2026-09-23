@@ -27,10 +27,10 @@ type tb interface {
 	Fatalf(format string, args ...any)
 }
 
-// counting is a memstore that counts reads and the chunks writes add.
+// counting is a memstore that counts reads, writes, and the chunks writes add.
 type counting struct {
 	*memstore.Store
-	gets, added atomic.Int64
+	gets, puts, added atomic.Int64
 }
 
 func newStore() *counting { return &counting{Store: memstore.New()} }
@@ -41,6 +41,7 @@ func (c *counting) Get(ctx context.Context, h hash.Hash) ([]byte, error) {
 }
 
 func (c *counting) Put(ctx context.Context, data []byte) (hash.Hash, error) {
+	c.puts.Add(1)
 	h := hash.Sum(data)
 	if have, err := c.Has(ctx, []hash.Hash{h}); err == nil && !have[h] {
 		c.added.Add(1)
@@ -452,5 +453,36 @@ func TestDefaultConfigIsTheRepoGeometry(t *testing.T) {
 	c := prolly.DefaultConfig()
 	if c.Nodes != boundary.DefaultGeometry() || c.Stream != stream.DefaultConfig() {
 		t.Fatalf("DefaultConfig = %+v", c)
+	}
+}
+
+// Flush re-chunks only around its edits and stops where the old and new
+// trees agree again: one edit reads a few nodes per level, not the map.
+func TestFlushReadsOnlyAroundItsEdits(t *testing.T) {
+	s := newStore()
+	m := build(t, s, 20000, "a")
+	e := m.Editor()
+	must(t, e.Put(key(10), val(10, "b")))
+	s.gets.Store(0)
+	flush(t, e)
+	if reads, limit := s.gets.Load(), int64(3*(m.Height()+1)); reads > limit {
+		t.Fatalf("flushing one edit into 20,000 entries read %d nodes, want at most %d", reads, limit)
+	}
+}
+
+// Deleting every entry leaves the empty map, with its documented root.
+func TestDeletingEverythingLeavesTheEmptyMap(t *testing.T) {
+	s := newStore()
+	m := build(t, s, 5000, "a")
+	e := m.Editor()
+	for i := 0; i < 5000; i++ {
+		must(t, e.Delete(key(i)))
+	}
+	got := flush(t, e)
+	if want := empty(t, s, prolly.DefaultConfig()); got.Root() != want.Root() || got.Count() != 0 || got.Height() != 0 {
+		t.Fatalf("deleting every entry left root %s (count %d, height %d), want the empty map %s", got.Root(), got.Count(), got.Height(), want.Root())
+	}
+	if _, ok := get(t, got, key(1)); ok {
+		t.Fatal("a deleted key is still there")
 	}
 }
