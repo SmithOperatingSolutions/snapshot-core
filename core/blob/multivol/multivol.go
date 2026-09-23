@@ -179,21 +179,33 @@ type mapEntry struct{ id, path string }
 // Volume map: magic "SCMV" | version u16 | count u16 | count x (id [16] |
 // path len-prefixed) | SHA-256 of everything before it.
 func (s *Store) writeMap() error {
+	entries := make([]mapEntry, len(s.vols))
+	for i, v := range s.vols {
+		entries[i] = mapEntry{id: v.id, path: v.path}
+	}
+	b, err := encodeMap(entries)
+	if err != nil {
+		return err
+	}
+	return fsutil.WriteFileAtomic(filepath.Join(s.primary, mapName), b)
+}
+
+func encodeMap(entries []mapEntry) ([]byte, error) {
 	var w wire.Writer
 	w.Raw([]byte(mapMagic))
 	w.U16(mapV1)
-	w.U16(uint16(len(s.vols)))
-	for _, v := range s.vols {
-		id, err := hex.DecodeString(v.id)
+	w.U16(uint16(len(entries)))
+	for _, e := range entries {
+		id, err := hex.DecodeString(e.id)
 		if err != nil || len(id) != 16 {
-			return fmt.Errorf("multivol: volume id %q", v.id)
+			return nil, fmt.Errorf("multivol: volume id %q", e.id)
 		}
 		w.Raw(id)
-		w.LenBytes([]byte(v.path))
+		w.LenBytes([]byte(e.path))
 	}
 	sum := sha256.Sum256(w.Bytes())
 	w.Raw(sum[:])
-	return fsutil.WriteFileAtomic(filepath.Join(s.primary, mapName), w.Bytes())
+	return w.Bytes(), nil
 }
 
 func decodeMap(b []byte) ([]mapEntry, error) {
