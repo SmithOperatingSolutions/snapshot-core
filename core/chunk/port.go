@@ -62,5 +62,7 @@ type Store interface {
 	// are durable. A stale expected is ErrRootConflict, and nothing changes.
 	CompareAndSetRoot(ctx context.Context, expected, next hash.Hash) error
 	Stats(ctx context.Context) (Stats, error)
+	// Close releases the store. Afterwards every other method returns
+	// ErrClosed, and Close again returns nil.
 	Close() error
 }

@@ -3,7 +3,8 @@
 // Engine Spec's L0 tests verbatim in intent: identical bytes back, unknown is
 // ErrNotFound, one copy of the same bytes, a flipped byte is ErrCorrupt, a
 // stale CAS changes nothing, 100 racing CASes have one winner, a root must
-// name a stored chunk, 1 MiB + 1 is ErrTooLarge.
+// name a stored chunk, 1 MiB + 1 is ErrTooLarge. And the port's own rule: a
+// closed store refuses every call with ErrClosed.
 package contract
 
 import (
@@ -61,6 +62,7 @@ func Run(t *testing.T, newSubject Factory, opts Options) {
 	t.Run("RacingCASOneWinnerPerRound", func(t *testing.T) { racingCAS(t, newSubject(t), opts) })
 	t.Run("ReopenKeepsRootAndChunks", func(t *testing.T) { reopen(t, newSubject(t)) })
 	t.Run("ConcurrentPutsAndGets", func(t *testing.T) { concurrent(t, newSubject(t)) })
+	t.Run("ClosedRefusesEveryCall", func(t *testing.T) { closedRefuses(t, newSubject(t)) })
 }
 
 func payload(seed string, n int) []byte {
@@ -324,5 +326,33 @@ func concurrent(t *testing.T, sub Subject) {
 	close(errs)
 	for err := range errs {
 		t.Fatal(err)
+	}
+}
+
+// A closed store must not keep answering: a caller holding it past Close has
+// a lifecycle bug, and the store's resources (codec, backend) are released.
+func closedRefuses(t *testing.T, sub Subject) {
+	s := sub.Store
+	h := put(t, s, []byte("stored before Close"))
+	if err := s.CompareAndSetRoot(ctx, hash.Hash{}, h); err != nil {
+		t.Fatal(err) // positive control: every call below works on an open store
+	}
+	if err := s.Close(); err != nil {
+		t.Fatalf("Close = %v", err)
+	}
+	if err := s.Close(); err != nil {
+		t.Fatalf("a second Close = %v, want nil", err)
+	}
+	var errs [6]error
+	_, errs[0] = s.Put(ctx, []byte("after Close"))
+	_, errs[1] = s.Get(ctx, h)
+	_, errs[2] = s.Has(ctx, []hash.Hash{h})
+	_, errs[3] = s.Root(ctx)
+	errs[4] = s.CompareAndSetRoot(ctx, h, h)
+	_, errs[5] = s.Stats(ctx)
+	for i, name := range []string{"Put", "Get", "Has", "Root", "CompareAndSetRoot", "Stats"} {
+		if !errors.Is(errs[i], chunk.ErrClosed) {
+			t.Errorf("%s on a closed store = %v, want ErrClosed", name, errs[i])
+		}
 	}
 }
