@@ -37,6 +37,13 @@ type host struct {
 
 func open(t *testing.T, dir string, keys *seal.Keyring, create bool) *host {
 	t.Helper()
+	return openWith(t, dir, keys, create, repo.Geometry{})
+}
+
+// openWith is open, creating the repository with geometry g (the zero
+// Geometry: the default).
+func openWith(t *testing.T, dir string, keys *seal.Keyring, create bool, g repo.Geometry) *host {
+	t.Helper()
 	store, err := func() (*local.Store, error) {
 		if create {
 			return local.Create(dir, local.Options{})
@@ -51,7 +58,7 @@ func open(t *testing.T, dir string, keys *seal.Keyring, create bool) *host {
 		t.Fatal(err)
 	}
 	h := &host{t: t, o: repo.Options{Blobs: store, Keys: keys, Registry: reg, Authorizer: auth.AllowAll{},
-		Clock: func() time.Time { return time.Date(2026, 9, 23, 12, 0, 0, 0, time.UTC) }}}
+		Clock: func() time.Time { return time.Date(2026, 9, 23, 12, 0, 0, 0, time.UTC) }, Geometry: g}}
 	if create {
 		h.r, err = repo.Init(ctx, me, h.o)
 	} else {

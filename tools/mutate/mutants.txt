@@ -3030,3 +3030,17 @@ find: c, err := readConfig(ctx, o)\n\tif err != nil {\n\t\treturn gc.Report{}, e
 replace: c, err := readConfig(ctx, o)\n\tif err != nil && false {\n\t\treturn gc.Report{}, err
 pkg: ./core/repo
 run: ^TestAnAdminCollectsTheRepositoryOnTheRawStore$
+
+id: e2e-gc-tree-names-file-contents
+file: model/tree/tree.go
+find: Depth: e.Content.Depth}, visit)
+replace: Depth: e.Content.Depth}, func(hash.Hash, bool) (bool, error) { return false, nil })
+pkg: ./e2e
+run: ^TestAFoldersHistoryComesThroughGC$
+
+id: e2e-gc-tree-names-file-data
+file: model/tree/tree.go
+find: Depth: e.Content.Depth}, visit)
+replace: Depth: 0}, visit)
+pkg: ./e2e
+run: ^TestAFoldersHistoryComesThroughGC$
