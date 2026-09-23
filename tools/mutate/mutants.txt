@@ -1334,3 +1334,17 @@ find: if r.Err() != nil || e.size == 0 || carry != 0 {
 replace: if r.Err() != nil || carry != 0 {
 pkg: ./core/stream
 run: ^TestForgeriesThatWouldReadCleanly$
+
+id: mutate-timeout-applied
+file: tools/internal/mutation/mutation.go
+find: "test", "-count=1", "-timeout", o.Timeout.String(), "-run", m.Run, m.Pkg
+replace: "test", "-count=1", "-run", m.Run, m.Pkg
+pkg: ./tools/internal/mutation
+run: ^TestAHangingMutantIsKilledAtTheTimeout$
+
+id: mutate-timeout-named
+file: tools/internal/mutation/mutation.go
+find: case errors.As(err, &exitErr) && strings.Contains(out, "panic: test timed out"):
+replace: case errors.As(err, &exitErr) && strings.Contains(out, "panic: test timed out") && false:
+pkg: ./tools/internal/mutation
+run: ^TestAHangingMutantIsKilledAtTheTimeout$

@@ -176,8 +176,13 @@ type Options struct {
 	Root    string        // repository root to copy
 	GoCmd   string        // defaults to "go"
 	Log     io.Writer     // progress; nil discards
-	Timeout time.Duration // per mutant test run
+	Timeout time.Duration // per mutant test run; 0: DefaultTimeout
 }
+
+// DefaultTimeout bounds one mutant's test run: a mutant that makes a test
+// hang is killed here, not after go test's ten minutes. The slowest real
+// run, the crash harness at 1,000 kills, takes seconds.
+const DefaultTimeout = 3 * time.Minute
 
 // Run applies each mutant in a throwaway copy of Root and reports outcomes.
 func Run(ctx context.Context, o Options, ms []Mutant) ([]Outcome, error) {
@@ -186,6 +191,9 @@ func Run(ctx context.Context, o Options, ms []Mutant) ([]Outcome, error) {
 	}
 	if o.Log == nil {
 		o.Log = io.Discard
+	}
+	if o.Timeout == 0 {
+		o.Timeout = DefaultTimeout
 	}
 	work, err := os.MkdirTemp("", "mutate-*")
 	if err != nil {
@@ -226,7 +234,7 @@ func runOne(ctx context.Context, o Options, work string, m Mutant) Outcome {
 	if out, err := goCmd(ctx, o, work, "test", "-count=1", "-run", "^$", m.Pkg); err != nil {
 		return Outcome{Mutant: m, Status: Invalid, Detail: "does not compile: " + firstLines(out, 3)}
 	}
-	out, err := goCmdEnv(ctx, o, work, m.Env, "test", "-count=1", "-run", m.Run, m.Pkg)
+	out, err := goCmdEnv(ctx, o, work, m.Env, "test", "-count=1", "-timeout", o.Timeout.String(), "-run", m.Run, m.Pkg)
 	if strings.Contains(out, "no tests to run") {
 		return Outcome{Mutant: m, Status: Invalid, Detail: fmt.Sprintf("-run %q matches no test in %s", m.Run, m.Pkg)}
 	}
@@ -234,6 +242,8 @@ func runOne(ctx context.Context, o Options, work string, m Mutant) Outcome {
 	switch {
 	case err == nil:
 		return Outcome{Mutant: m, Status: Survived, Detail: fmt.Sprintf("%s stayed green under the mutant", m.Run)}
+	case errors.As(err, &exitErr) && strings.Contains(out, "panic: test timed out"):
+		return Outcome{Mutant: m, Status: Killed, Detail: fmt.Sprintf("timed out after %v: a hang counts as a kill", o.Timeout)}
 	case errors.As(err, &exitErr):
 		return Outcome{Mutant: m, Status: Killed, Detail: firstFailure(out)}
 	default:
