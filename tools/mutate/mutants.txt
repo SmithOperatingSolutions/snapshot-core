@@ -2995,3 +2995,24 @@ find: if errors.Is(err, chunk.ErrStale) { // GC fenced the write: the host re-re
 replace: if errors.Is(err, chunk.ErrStale) && false { // GC fenced the write: the host re-reads
 pkg: ./core/vcs
 run: ^TestAWriteFencedByGCIsAConflict$
+
+id: gcprop-walk-follows-parents
+file: core/vcs/walk.go
+find: w.commits = append(w.commits, c.Parents...)
+replace: w.commits = append(w.commits, c.Parents[:0]...)
+pkg: ./core/gc
+run: ^TestGCSafetyProperty$
+
+id: gcprop-walk-follows-working-sets
+file: core/vcs/walk.go
+find: case strings.HasPrefix(k, "work/"):\n\t\t\treturn w.workingSet(h)
+replace: case strings.HasPrefix(k, "work/"):\n\t\t\treturn nil
+pkg: ./core/gc
+run: ^TestGCSafetyProperty$
+
+id: gcprop-namespaces-reach-objects
+file: core/object/object.go
+find: if err := WalkRef(ctx, rd, reg, ref, visit); err != nil {
+replace: if err := WalkRef(ctx, rd, reg, ref, func(hash.Hash, bool) (bool, error) { return false, nil }); err != nil {
+pkg: ./core/gc
+run: ^TestGCSafetyProperty$

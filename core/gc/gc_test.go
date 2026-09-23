@@ -41,8 +41,10 @@ func (note) Validate(context.Context, model.Root, chunk.Reader) error { return n
 func (note) Diff(context.Context, model.Root, model.Root, chunk.Reader) (model.DiffIter, error) {
 	return nil, errors.New("unused")
 }
+
+// Merge implements model.Model: two changes to one note never combine.
 func (note) Merge(context.Context, model.Root, model.Root, model.Root, chunk.ReadWriter) (model.MergeResult, error) {
-	return model.MergeResult{}, errors.New("unused")
+	return model.MergeResult{Conflicts: []model.Conflict{{Location: []byte("all"), Reason: "notes do not merge"}}}, nil
 }
 func (note) Walk(_ context.Context, root model.Root, _ chunk.Reader, visit func(hash.Hash, bool) (bool, error)) error {
 	_, err := visit(root.Hash, true)
@@ -65,7 +67,8 @@ func (mute) Merge(context.Context, model.Root, model.Root, model.Root, chunk.Rea
 // runs with real time plus a jump the test sets; the backend stamps objects
 // by a clock of its own, the same plus a skew.
 type world struct {
-	t     *testing.T
+	t     tb
+	shut  []func()
 	blobs blob.BlobStore
 	keys  *seal.Keyring
 	reg   *model.Registry
@@ -115,7 +118,22 @@ func (c *clocked) List(ctx context.Context, prefix, after string, limit int) ([]
 	return is, err
 }
 
+// tb is what the world needs of a test: *testing.T and *rapid.T both have it.
+type tb interface {
+	Helper()
+	Fatal(args ...any)
+	Fatalf(format string, args ...any)
+}
+
 func newWorld(t *testing.T) *world {
+	t.Helper()
+	w := worldFor(t)
+	t.Cleanup(w.close)
+	return w
+}
+
+// worldFor makes a world whose stores close when close is called.
+func worldFor(t tb) *world {
 	t.Helper()
 	w := &world{t: t}
 	w.blobs = &clocked{BlobStore: mem.New(), stamps: map[string]time.Time{},
@@ -134,6 +152,13 @@ func newWorld(t *testing.T) *world {
 	return w
 }
 
+func (w *world) close() {
+	for _, f := range w.shut {
+		f()
+	}
+	w.shut = nil
+}
+
 // store opens a packstore with packs small enough that a repository spans
 // many of them.
 func (w *world) store() *packstore.Store {
@@ -142,7 +167,7 @@ func (w *world) store() *packstore.Store {
 	if err != nil {
 		w.t.Fatal(err)
 	}
-	w.t.Cleanup(func() { _ = s.Close() })
+	w.shut = append(w.shut, func() { _ = s.Close() })
 	return s
 }
 
@@ -209,7 +234,7 @@ func (w *world) readable() map[string]bool {
 	if err != nil {
 		w.t.Fatalf("after GC the repository does not open: %v", err)
 	}
-	none, err := object.New(ctx, packstoreScratch(w.t), prolly.DefaultConfig(), w.reg)
+	none, err := object.New(ctx, w.scratch(), prolly.DefaultConfig(), w.reg)
 	if err != nil {
 		w.t.Fatal(err)
 	}
@@ -255,24 +280,15 @@ func (w *world) readable() map[string]bool {
 	return contents
 }
 
-// packstoreScratch is a throwaway store for the empty namespace diffs start from.
-func packstoreScratch(t *testing.T) chunk.ReadWriter {
-	t.Helper()
-	s, err := packstore.Open(ctx, packstore.Options{Blobs: mem.New(), Keys: mustKeys(t), Repo: repo})
+// scratch is a throwaway store for the empty namespace diffs start from.
+func (w *world) scratch() chunk.ReadWriter {
+	w.t.Helper()
+	s, err := packstore.Open(ctx, packstore.Options{Blobs: mem.New(), Keys: w.keys, Repo: repo})
 	if err != nil {
-		t.Fatal(err)
+		w.t.Fatal(err)
 	}
-	t.Cleanup(func() { _ = s.Close() })
+	w.shut = append(w.shut, func() { _ = s.Close() })
 	return s
-}
-
-func mustKeys(t *testing.T) *seal.Keyring {
-	t.Helper()
-	k, err := seal.NewKeyring()
-	if err != nil {
-		t.Fatal(err)
-	}
-	return k
 }
 
 // exists looks an object up by name: a prefix can be shared by a real pack,
