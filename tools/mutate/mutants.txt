@@ -978,3 +978,17 @@ find: return verified(h, bytes.Clone(data))
 replace: return bytes.Clone(data), nil
 pkg: ./core/chunk/packstore
 run: ^TestCachedReadsAreVerified$
+
+id: packstore-keeps-failed-uploads
+file: core/chunk/packstore/packstore.go
+find: s.unuploaded = append(s.unuploaded, b)
+replace: _ = b
+pkg: ./core/chunk/packstore
+run: ^TestFailedUploadStaysReadableAndIsRetried$
+
+id: packstore-serves-inflight-packs
+file: core/chunk/packstore/packstore.go
+find: local := s.inflight[loc.Pack.Name]
+replace: local := []byte(nil)
+pkg: ./core/chunk/packstore
+run: ^TestFailedUploadStaysReadableAndIsRetried$
