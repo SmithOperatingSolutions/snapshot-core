@@ -164,7 +164,11 @@ that rises with the node's size:
   417,031,985,092,321`. `(s/λ)⁴` is the cumulative hazard of a Weibull
   distribution with shape 4 and scale λ, whose mean is the target, and `T` is
   the entry's share of it: nodes cluster around 4 KiB, about 1 in 6,000 would
-  end before 512 B, and reaching 16 KiB has probability around 10⁻⁷⁵.
+  end before 512 B, and reaching 16 KiB has probability around 10⁻⁷⁵. `T`
+  reaches 2³² once one entry carries a whole unit of hazard (`4·s³·e ≳ λ⁴`
+  for an `e`-byte entry at size `s`): past 16 KiB for 20-byte entries, near
+  8 KiB for 200-byte ones. Such forced ends are rare (a node survives to
+  8 KiB about once in 18,000) and still a function of content alone.
 - **Window** is 4 bytes of a 32-byte digest, big-endian: bytes `[4L, 4L+4)` at
   level `L < 8`, and at `L ≥ 8` the same window of `SHA-256(digest ‖ byte(L/8))`.
   Prolly uses `sha256(key)` (the leaf key, or at internal levels the child's

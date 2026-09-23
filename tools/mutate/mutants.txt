@@ -1271,3 +1271,31 @@ find: if seen[dir+"\x00"+name] {\n\t\t\treturn // changed in its own right beats
 replace: if seen[dir+"\x00"+name] && false {\n\t\t\treturn // changed in its own right beats calling a contract
 pkg: ./tools/redcheck
 run: ^TestAWrittenTestThatCallsTheContractIsJudgedStrictly$
+
+id: boundary-hard-minimum
+file: core/boundary/boundary.go
+find: case s.size < s.rule.g.Min:
+replace: case s.size < s.rule.g.Min && false:
+pkg: ./core/boundary
+run: ^TestHardMinimumAndMaximum$
+
+id: boundary-hard-maximum
+file: core/boundary/boundary.go
+find: if after >= r.g.Max {
+replace: if after >= r.g.Max && false {
+pkg: ./core/boundary
+run: ^TestHardMinimumAndMaximum$
+
+id: boundary-two-entries-per-internal-node
+file: core/boundary/boundary.go
+find: case s.level >= 1 && s.n < 2:
+replace: case s.level >= 1 && s.n < 1:
+pkg: ./core/boundary
+run: ^TestInternalNodesTakeTwoEntries$
+
+id: boundary-fresh-window-per-level
+file: core/boundary/boundary.go
+find: return binary.BigEndian.Uint32(digest[4*(level%8):])
+replace: return binary.BigEndian.Uint32(digest[:])
+pkg: ./core/boundary
+run: ^TestWindowsAreFreshPerLevel$
