@@ -92,17 +92,38 @@ func heap() uint64 {
 	return m.HeapAlloc
 }
 
-// #6: the memory a repository of a million chunks costs to open (the chunk
-// index) and to collect (the index again, plus the mark), under a bound of
-// 64 Ki chunks in memory: under 16 MiB to open and under 96 MiB at the
-// collection's peak, which a million chunks at the old 117 and 371 bytes
-// each would be far over. docs/DESIGN.md §6 states the figures, and this
-// is where they come from.
+// #6: the memory a repository costs to open (the chunk index) and to
+// collect (the index again, plus the mark) does not grow with it. Under a
+// bound of 64 Ki chunks in memory, a million chunks open in under 16 MiB
+// and collect in a peak under 96 MiB (which a million at the old 117 and
+// 371 bytes each would be far over), and two million peak no higher than a
+// quarter over that: whatever grows per chunk is on disk. docs/DESIGN.md §6
+// states the figures, and this is where they come from.
 func TestSlowMemoryPerChunkOn1MChunks(t *testing.T) {
-	const n = 1_000_000
-	const perGroup = 1000
 	const inMemory = 1 << 16
 	const openBound, collectBound = 16 << 20, 96 << 20
+	open1, peak1 := measureMemory(t, 1_000_000, inMemory)
+	if open1 > openBound {
+		t.Fatalf("opening a repository of a million chunks with %d indexed in memory costs %d bytes, want under %d: the index past the bound belongs on disk", inMemory, open1, openBound)
+	}
+	if peak1 > collectBound {
+		t.Fatalf("collecting a repository of a million chunks peaks at %d bytes, want under %d: the mark and the round's index belong on disk", peak1, collectBound)
+	}
+	open2, peak2 := measureMemory(t, 2_000_000, inMemory)
+	if open2 > openBound {
+		t.Fatalf("opening a repository of two million chunks costs %d bytes, want under %d", open2, openBound)
+	}
+	if peak2 > peak1+peak1/4 {
+		t.Fatalf("collecting two million chunks peaks at %d bytes against %d for one million: the collection's memory grows with the repository", peak2, peak1)
+	}
+}
+
+// measureMemory writes a repository of n chunks and returns what a fresh
+// store costs to open and the live heap's peak over a collection, both
+// over the heap holding the repository itself, in bytes.
+func measureMemory(t *testing.T, n int, inMemory int) (open, peak uint64) {
+	t.Helper()
+	const perGroup = 1000
 	dir := t.TempDir()
 	bs := mem.New()
 	keys, err := seal.NewKeyring()
@@ -124,7 +145,7 @@ func TestSlowMemoryPerChunkOn1MChunks(t *testing.T) {
 		t.Fatal(err)
 	}
 	start := time.Now()
-	rng := rand.New(rand.NewPCG(6, 6))
+	rng := rand.New(rand.NewPCG(uint64(n), 6))
 	leaf := make([]byte, 64)
 	fill := func(b []byte) {
 		for i := 0; i+8 <= len(b); i += 8 {
@@ -172,7 +193,7 @@ func TestSlowMemoryPerChunkOn1MChunks(t *testing.T) {
 	if _, err := r.UpdateWorkingSet(ctx, alice, vcs.MainBranch, ws, next); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := r.CommitWorkingSet(ctx, alice, vcs.MainBranch, "a million chunks"); err != nil {
+	if _, err := r.CommitWorkingSet(ctx, alice, vcs.MainBranch, "many chunks"); err != nil {
 		t.Fatal(err)
 	}
 	if err := s.Close(); err != nil {
@@ -185,18 +206,15 @@ func TestSlowMemoryPerChunkOn1MChunks(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	openCost := heap() - base
-	t.Logf("open: %d bytes, %.0f per chunk", openCost, float64(openCost)/n)
-	if openCost > openBound {
-		t.Fatalf("opening a repository of %d chunks with %d indexed in memory costs %d bytes, want under %d: the index past the bound belongs on disk", n, inMemory, openCost, openBound)
-	}
+	open = heap() - base
+	t.Logf("open: %d bytes", open)
 	if err := opened.Close(); err != nil {
 		t.Fatal(err)
 	}
 	opened = nil
 	base = heap()
 
-	var peak atomic.Uint64
+	var high atomic.Uint64
 	stop := make(chan struct{})
 	done := make(chan struct{})
 	go func() {
@@ -210,8 +228,8 @@ func TestSlowMemoryPerChunkOn1MChunks(t *testing.T) {
 			}
 			runtime.GC() // the live heap, not the garbage between cycles
 			runtime.ReadMemStats(&m)
-			if m.HeapAlloc > peak.Load() {
-				peak.Store(m.HeapAlloc)
+			if m.HeapAlloc > high.Load() {
+				high.Store(m.HeapAlloc)
 			}
 		}
 	}()
@@ -226,11 +244,8 @@ func TestSlowMemoryPerChunkOn1MChunks(t *testing.T) {
 	if rep.Live < n {
 		t.Fatalf("GC marked %d chunks live, want at least the %d leaves", rep.Live, n)
 	}
-	gcCost := peak.Load() - base
-	t.Logf("collect: %d live in %v, peak %d bytes, %.0f per chunk", rep.Live, time.Since(start).Round(time.Millisecond), gcCost, float64(gcCost)/n)
-	if gcCost > collectBound {
-		t.Fatalf("collecting a repository of %d chunks peaks at %d bytes, want under %d: the mark and the round's index belong on disk", n, gcCost, collectBound)
-	}
+	peak = high.Load() - base
+	t.Logf("collect: %d live in %v, peak %d bytes", rep.Live, time.Since(start).Round(time.Millisecond), peak)
 	entries, err := os.ReadDir(dir)
 	if err != nil {
 		t.Fatal(err)
@@ -238,4 +253,5 @@ func TestSlowMemoryPerChunkOn1MChunks(t *testing.T) {
 	if len(entries) != 0 {
 		t.Fatalf("after the collection the work directory holds %d files, want none", len(entries))
 	}
+	return open, peak
 }
