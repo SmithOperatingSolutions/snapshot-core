@@ -19,6 +19,7 @@ import (
 	"github.com/SmithOperatingSolutions/snapshot-core/core/cdc"
 	"github.com/SmithOperatingSolutions/snapshot-core/core/chunk"
 	"github.com/SmithOperatingSolutions/snapshot-core/core/chunk/packstore"
+	"github.com/SmithOperatingSolutions/snapshot-core/core/gc"
 	"github.com/SmithOperatingSolutions/snapshot-core/core/internal/wire"
 	"github.com/SmithOperatingSolutions/snapshot-core/core/model"
 	"github.com/SmithOperatingSolutions/snapshot-core/core/pack"
@@ -306,3 +307,11 @@ func (g Geometry) Prolly() prolly.Config {
 
 // Stream is the stream geometry objects are written with.
 func (g Geometry) Stream() stream.Config { return stream.Config{CDC: g.CDC, Nodes: g.Nodes} }
+
+// GC collects the repository in o.Blobs (docs/DESIGN.md §9). It is the one
+// operation that deletes, so o.Blobs must be the raw store (the GC role),
+// not the NoDelete one a repository runs on; it needs admin, and a model
+// registry whose every model walks.
+func GC(ctx context.Context, p auth.Principal, o Options, grace time.Duration) (gc.Report, error) {
+	return gc.Report{}, errors.New("repo: GC is not written yet")
+}

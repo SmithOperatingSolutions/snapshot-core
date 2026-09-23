@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"testing/iotest"
@@ -656,5 +657,136 @@ func TestEveryStoreFailureIsSurvivable(t *testing.T) {
 	}
 	if failures == 0 {
 		t.Fatal("fixture: Init and Open made no blob store calls")
+	}
+}
+
+// garbage leaves packs nothing reaches: each branch made and deleted
+// publishes a working set and refs nodes in a pack of its own.
+func garbage(t *testing.T, r *repo.Repo, n int) {
+	t.Helper()
+	head, err := r.Head(ctx, alice, vcs.MainBranch)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := range n {
+		name := fmt.Sprintf("tmp%d", i)
+		if err := r.CreateBranch(ctx, alice, name, head.Hash); err != nil {
+			t.Fatal(err)
+		}
+		if err := r.DeleteBranch(ctx, alice, name); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+func packs(t *testing.T, bs blob.BlobStore) int {
+	t.Helper()
+	infos, err := bs.List(ctx, "packs/", "", blob.MaxListPage)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return len(infos)
+}
+
+// stamped is a blob store whose objects are stamped by the test's clock, as
+// a backend's own clock would move with the time the test lets pass.
+type stamped struct {
+	blob.BlobStore
+	now    func() time.Time
+	mu     sync.Mutex
+	stamps map[string]time.Time
+}
+
+func (s *stamped) Put(ctx context.Context, name string, r io.Reader, size int64) error {
+	err := s.BlobStore.Put(ctx, name, r, size)
+	if err == nil {
+		s.mu.Lock()
+		s.stamps[name] = s.now()
+		s.mu.Unlock()
+	}
+	return err
+}
+
+func (s *stamped) restamp(infos []blob.Info) []blob.Info {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for i := range infos {
+		if t, ok := s.stamps[infos[i].Name]; ok {
+			infos[i].ModTime = t
+		}
+	}
+	return infos
+}
+
+func (s *stamped) Stat(ctx context.Context, name string) (blob.Info, error) {
+	i, err := s.BlobStore.Stat(ctx, name)
+	return s.restamp([]blob.Info{i})[0], err
+}
+
+func (s *stamped) List(ctx context.Context, prefix, after string, limit int) ([]blob.Info, error) {
+	infos, err := s.BlobStore.List(ctx, prefix, after, limit)
+	return s.restamp(infos), err
+}
+
+// A repository is collected through repo.GC (DESIGN §9): with admin, on
+// the raw store, GC condemns and, a grace window later, deletes the packs
+// nothing reaches, and the repository still opens with main where it was.
+// Without admin (a nil authorizer denies too) it is ErrDenied; on a
+// NoDelete store it condemns but cannot delete (ErrDeleteForbidden), and
+// the next run on the raw store deletes what it could not; on a store
+// holding no repository it is ErrNoRepo.
+func TestAnAdminCollectsTheRepositoryOnTheRawStore(t *testing.T) {
+	var jump time.Duration
+	now := func() time.Time { return time.Now().Add(jump) }
+	blobs := &stamped{BlobStore: mem.New(), now: now, stamps: map[string]time.Time{}}
+	o := options(t, blobs, keyring(t))
+	o.Clock = now
+	r := initRepo(t, o)
+	head, err := r.Head(ctx, alice, vcs.MainBranch)
+	if err != nil {
+		t.Fatal(err)
+	}
+	garbage(t, r, 3)
+	if err := r.Close(); err != nil {
+		t.Fatal(err)
+	}
+	before := packs(t, blobs)
+
+	for name, az := range map[string]auth.Authorizer{"DenyAll": auth.DenyAll{}, "nil": nil} {
+		denied := o
+		denied.Authorizer = az
+		if _, err := repo.GC(ctx, alice, denied, time.Hour); !errors.Is(err, auth.ErrDenied) {
+			t.Fatalf("GC with %s = %v, want ErrDenied", name, err)
+		}
+	}
+	if _, err := repo.GC(ctx, alice, options(t, mem.New(), o.Keys), time.Hour); !errors.Is(err, repo.ErrNoRepo) {
+		t.Fatalf("GC of an empty store = %v, want ErrNoRepo", err)
+	}
+	first, err := repo.GC(ctx, alice, o, time.Hour)
+	if err != nil || first.Condemned == 0 || len(first.Deleted) != 0 {
+		t.Fatalf("the first GC condemned %d, deleted %v (%v); want some condemned, nothing deleted", first.Condemned, first.Deleted, err)
+	}
+	jump = time.Hour + time.Minute
+	guarded := o
+	guarded.Blobs = blob.NoDelete(blobs)
+	if _, err := repo.GC(ctx, alice, guarded, time.Hour); !errors.Is(err, blob.ErrDeleteForbidden) {
+		t.Fatalf("GC on a NoDelete store = %v, want ErrDeleteForbidden", err)
+	}
+	if n := packs(t, blobs); n != before {
+		t.Fatalf("GC on a NoDelete store left %d packs of %d", n, before)
+	}
+	if _, err := repo.GC(ctx, alice, o, time.Hour); err != nil {
+		t.Fatal(err)
+	}
+	if n := packs(t, blobs); n >= before {
+		t.Fatalf("GC on the raw store a grace window on left %d packs of %d", n, before)
+	}
+	re, err := repo.Open(ctx, o)
+	if err != nil {
+		t.Fatalf("after GC the repository does not open: %v", err)
+	}
+	defer re.Close()
+	if got, err := re.Head(ctx, alice, vcs.MainBranch); err != nil || got.Hash != head.Hash {
+		t.Fatalf("after GC main is %v (%v), want %v", got.Hash, err, head.Hash)
 	}
 }
