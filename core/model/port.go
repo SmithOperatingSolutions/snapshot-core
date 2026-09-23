@@ -73,6 +73,17 @@ type Model interface {
 	Merge(ctx context.Context, base, ours, theirs Root, rw chunk.ReadWriter) (MergeResult, error)
 }
 
+// Walker is a model whose objects GC can collect (docs/DESIGN.md §9). It is
+// beside the frozen Model interface, not in it; GC refuses to collect a
+// repository holding an object whose model does not implement it, and
+// model/contract requires it.
+type Walker interface {
+	// Walk calls visit for every chunk the object reaches, root first; visit
+	// says whether to go on into what that chunk reaches (no, for one already
+	// marked, so history shared between commits is walked once).
+	Walk(ctx context.Context, root Root, r chunk.Reader, visit func(hash.Hash) (bool, error)) error
+}
+
 // ErrUnknownModel is returned for an object whose model the registry lacks,
 // or whose format is newer than its model knows. Nothing is decoded.
 var ErrUnknownModel = errors.New("model: unknown model or format")
