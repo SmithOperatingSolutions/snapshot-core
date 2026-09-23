@@ -391,3 +391,81 @@ func namespaceOf(t *testing.T, r *repo.Repo, root hash.Hash) hash.Hash {
 	}
 	return n.Root()
 }
+
+// forgeConfig seals a config by hand, under keys and for repository id,
+// with the header's magic and version and the plaintext as given: a
+// config that authenticates, saying whatever a test needs it to.
+func forgeConfig(t *testing.T, keys *seal.Keyring, id seal.RepoID, magic string, version uint16, plain []byte) []byte {
+	t.Helper()
+	salt, err := seal.NewSalt()
+	if err != nil {
+		t.Fatal(err)
+	}
+	kid := keys.ID()
+	h := binary.LittleEndian.AppendUint16([]byte(magic), version)
+	h = append(append(append(h, id[:]...), kid[:]...), salt[:]...)
+	key, err := keys.Key(seal.Config, id, salt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sealed, err := key.Seal(h, plain)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return append(h, sealed...)
+}
+
+// plaintext is a config plaintext of the given magic and version.
+func plaintext(magic string, version uint16, g repo.Geometry) []byte {
+	le := binary.LittleEndian
+	p := le.AppendUint16([]byte(magic), version)
+	p = le.AppendUint32(le.AppendUint32(p, uint32(g.CDC.Min)), uint32(g.CDC.Max))
+	p = le.AppendUint64(p, g.CDC.Mask)
+	p = le.AppendUint32(le.AppendUint32(le.AppendUint32(p, uint32(g.Nodes.Min)), uint32(g.Nodes.Target)), uint32(g.Nodes.Max))
+	return le.AppendUint32(le.AppendUint32(p, uint32(g.InlineLimit)), uint32(g.PackSize))
+}
+
+// A config is checked before anything is read by it. One whose header is
+// another format or version, whose plaintext is another format or version
+// or has a byte more, or that names a geometry the core cannot use, is
+// ErrConfig, though each is sealed under the repository's own key; so is
+// one too short to hold a header, or over 4 KiB. The positive control, a
+// config sealed by hand the same way, opens.
+func TestTheConfigIsCheckedBeforeItIsUsed(t *testing.T) {
+	blobs := mem.New()
+	o := options(t, blobs, keyring(t))
+	initRepo(t, o).Close()
+	cfg := readConfig(t, blobs)
+	var id seal.RepoID
+	copy(id[:], cfg[6:22])
+	good := repo.DefaultGeometry()
+	unusable := good
+	unusable.InlineLimit = 600 << 10
+	forge := func(magic string, version uint16, plain []byte) []byte {
+		return forgeConfig(t, o.Keys, id, magic, version, plain)
+	}
+	for _, c := range []struct {
+		name string
+		b    []byte
+	}{
+		{"a header of another format", forge("SCRX", 1, plaintext("SCRP", 1, good))},
+		{"a header of version 2", forge("SCRC", 2, plaintext("SCRP", 1, good))},
+		{"a plaintext of another format", forge("SCRC", 1, plaintext("SCRX", 1, good))},
+		{"a plaintext of version 2", forge("SCRC", 1, plaintext("SCRP", 2, good))},
+		{"a plaintext with a byte more", forge("SCRC", 1, append(plaintext("SCRP", 1, good), 0))},
+		{"an inline limit of 600 KiB", forge("SCRC", 1, plaintext("SCRP", 1, unusable))},
+		{"85 bytes", cfg[:85]},
+		{"4 KiB and a byte", append(bytes.Clone(cfg), make([]byte, 4<<10+1-len(cfg))...)},
+	} {
+		writeConfig(t, blobs, c.b)
+		if _, err := repo.Open(ctx, o); !errors.Is(err, repo.ErrConfig) {
+			t.Errorf("%s: Open = %v, want ErrConfig", c.name, err)
+		}
+	}
+	writeConfig(t, blobs, forge("SCRC", 1, plaintext("SCRP", 1, good)))
+	r, err := repo.Open(ctx, o)
+	if err != nil {
+		t.Fatalf("positive control: a config sealed by hand opens: %v", err)
+	}
+	r.Close()
+}

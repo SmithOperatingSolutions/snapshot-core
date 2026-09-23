@@ -2344,3 +2344,31 @@ find: v, err := vcs.Init(ctx, chunks, p, o.vcs(c.Geometry))
 replace: v, err := vcs.Init(ctx, chunks, p, o.vcs(g))
 pkg: ./core/repo
 run: ^TestAnInitThatStoppedIsFinishedByTheNext$
+
+id: repo-config-length-checked
+file: core/repo/repo.go
+find: if len(b) < headerLen {
+replace: if len(b) < headerLen && false {
+pkg: ./core/repo
+run: ^TestTheConfigIsCheckedBeforeItIsUsed$
+
+id: repo-config-header-checked
+file: core/repo/repo.go
+find: if h.Done() != nil || string(magic) != configMagic || v != configV1 {
+replace: if (h.Done() != nil || string(magic) != configMagic || v != configV1) && false {
+pkg: ./core/repo
+run: ^TestTheConfigIsCheckedBeforeItIsUsed$
+
+id: repo-config-plaintext-checked
+file: core/repo/repo.go
+find: if p.Done() != nil || string(pm) != plainMagic || pv != configV1 {
+replace: if (p.Done() != nil || string(pm) != plainMagic || pv != configV1) && false {
+pkg: ./core/repo
+run: ^TestTheConfigIsCheckedBeforeItIsUsed$
+
+id: repo-config-geometry-checked
+file: core/repo/repo.go
+find: if err := g.validate(); err != nil {\n\t\treturn Config{}, fmt.Errorf("%w: %w", ErrConfig, err)
+replace: if err := g.validate(); err != nil && false {\n\t\treturn Config{}, fmt.Errorf("%w: %w", ErrConfig, err)
+pkg: ./core/repo
+run: ^TestTheConfigIsCheckedBeforeItIsUsed$
