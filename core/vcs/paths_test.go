@@ -29,8 +29,9 @@ func (f fenced) Authorize(_ context.Context, p auth.Principal, a auth.Action, re
 // ("path:<branch>:<path>"): bob, kept out of main's secret/, cannot change
 // a path there by updating the working set (not by a prev that misstates
 // what is stored, either), cannot commit a change there alice staged,
-// cannot merge one in, and cannot resolve a conflict there; each refusal is
-// ErrDenied and changes nothing. His changes elsewhere go through, and
+// cannot merge one in, cannot resolve a conflict there, and cannot abandon
+// a merge whose abandoning would change one; each refusal is ErrDenied and
+// changes nothing. His changes elsewhere go through, and
 // alice's go through everywhere.
 func TestWritesAreAuthorizedPerPath(t *testing.T) {
 	f := newFixture(t)
@@ -117,6 +118,7 @@ func TestWritesAreAuthorizedPerPath(t *testing.T) {
 
 	f.put(main, "secret/plan", f.obj(8, "main"))
 	f.commit(main, "main work")
+	pre, _ := f.r.WorkingSet(ctx, alice, main)
 	if res, err := f.r.Merge(ctx, alice, main, theirs.Hash); err != nil || len(res.Conflicts) != 1 {
 		t.Fatalf("fixture: alice's merge found %d conflicts (%v), want 1 at secret/plan", len(res.Conflicts), err)
 	}
@@ -126,6 +128,19 @@ func TestWritesAreAuthorizedPerPath(t *testing.T) {
 	}
 	if err := f.r.ResolveConflict(ctx, alice, main, "secret/plan", &resolved); err != nil {
 		t.Fatalf("positive control: alice resolving it: %v", err)
+	}
+	merging, _ := f.r.WorkingSet(ctx, alice, main)
+	if err := f.r.AbortMerge(ctx, bob, main); !errors.Is(err, auth.ErrDenied) {
+		t.Fatalf("bob abandoning a merge, which would change secret/plan back = %v, want ErrDenied", err)
+	}
+	if now, _ := f.r.WorkingSet(ctx, alice, main); now.Hash != merging.Hash {
+		t.Fatal("a refused abort changed the working set")
+	}
+	if err := f.r.AbortMerge(ctx, alice, main); err != nil {
+		t.Fatalf("positive control: alice abandoning it: %v", err)
+	}
+	if now, _ := f.r.WorkingSet(ctx, alice, main); now.Merge != nil || now.Working != pre.Working {
+		t.Fatal("alice's abort did not put back the working set from before the merge")
 	}
 }
 
@@ -141,7 +156,7 @@ func (pathsOnly) Authorize(_ context.Context, _ auth.Principal, a auth.Action, r
 
 // Permission on paths is not permission on the branch: with every path
 // granted and the branch not, every write is ErrDenied: an update, a
-// commit, a merge, and a resolution.
+// commit, a merge, a resolution, and an abort.
 func TestAWriteNeedsTheBranchAsWellAsItsPaths(t *testing.T) {
 	f := newFixture(t)
 	main := vcs.MainBranch
@@ -174,6 +189,7 @@ func TestAWriteNeedsTheBranchAsWellAsItsPaths(t *testing.T) {
 		{"CommitWorkingSet", func() error { _, err := r.CommitWorkingSet(ctx, bob, "dev", "c"); return err }},
 		{"Merge", func() error { _, err := r.Merge(ctx, bob, "dev", theirs.Hash); return err }},
 		{"ResolveConflict", func() error { return r.ResolveConflict(ctx, bob, main, "doc", &resolved) }},
+		{"AbortMerge", func() error { return r.AbortMerge(ctx, bob, main) }},
 	} {
 		if err := c.call(); !errors.Is(err, auth.ErrDenied) {
 			t.Errorf("%s with the paths granted and the branch not = %v, want ErrDenied", c.name, err)

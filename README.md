@@ -56,8 +56,9 @@ commit, _ := r.CommitWorkingSet(ctx, me, vcs.MainBranch, "add a note")
 **Branch and merge.** `CreateBranch`, `Merge` (conflicts are recorded in the
 working set, and a commit is refused until they are resolved), `Conflicts`,
 `ResolveConflict`, then `CommitWorkingSet`, which makes a commit with two
-parents. `Log`, `MergeBase`, `Head`, `Branches` and `CreateTag` read and name
-history.
+parents; or `AbortMerge`, which puts the working set back as it was before
+the merge. `Log`, `MergeBase`, `Head` and `Branches` read history; `CreateTag`,
+`Tag`, `Tags` and `DeleteTag` name commits.
 
 **Read.** Open a commit's namespace, `Get` a path, and read the object through
 its model (`blob.Open`, `tree.Read`).
@@ -70,7 +71,10 @@ default), so run it on a schedule.
 ### What a host must do
 
 - **Retry on `vcs.ErrConflict`** by reading again and writing again: another
-  writer got in first, or GC collected a chunk the write counted on.
+  writer got in first.
+- **Reopen on `vcs.ErrSessionLost`** and write again: GC deleted writes the
+  repository held unpublished past the grace window, and the open repository
+  refuses every further write.
 - **Publish within the grace window** what it writes, and use within it the
   hashes it reads. GC deletes only what was unreachable at two marks a window
   apart (docs/DESIGN.md §9).

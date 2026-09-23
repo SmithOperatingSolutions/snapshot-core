@@ -44,10 +44,15 @@ var (
 	ErrBranchNotFound      = errors.New("vcs: no such branch")
 	ErrBranchInUse         = errors.New("vcs: branch is checked out")
 	ErrTagExists           = errors.New("vcs: tag exists")
+	ErrTagNotFound         = errors.New("vcs: no such tag")
 	ErrInvalidName         = errors.New("vcs: invalid branch or tag name")
 	ErrInvalidLimit        = errors.New("vcs: log limit must be 1 to 10,000")
 	ErrUnresolvedConflicts = errors.New("vcs: unresolved merge conflicts")
-	ErrMergeState          = errors.New("vcs: only merging, resolving and committing change a merge in progress")
+	ErrMergeState          = errors.New("vcs: only merging, resolving, committing and abandoning change a merge in progress")
+	ErrNoMerge             = errors.New("vcs: no merge in progress")
+	// ErrSessionLost is the chunk store's: GC deleted writes the repository
+	// had not published, and the host must reopen it and write again.
+	ErrSessionLost = chunk.ErrSessionLost
 )
 
 // Options configures a repository.
@@ -84,6 +89,9 @@ type Tag struct {
 type MergeState struct {
 	Base, Theirs hash.Hash
 	Conflicts    hash.Hash
+	// PreWorking and PreStaged are the namespaces the merge started from,
+	// which AbortMerge puts back.
+	PreWorking, PreStaged hash.Hash
 }
 
 // WorkingSet is a branch's uncommitted state. Hash is its chunk's hash.
@@ -218,9 +226,6 @@ func (r *Repo) update(ctx context.Context, fn func(m *prolly.Map, e *prolly.Edit
 			return err
 		}
 		err = r.s.CompareAndSetRoot(ctx, m.Root(), next.Root())
-		if errors.Is(err, chunk.ErrStale) { // GC fenced the write: the host re-reads
-			return fmt.Errorf("%w: %w", ErrConflict, err)
-		}
 		if !errors.Is(err, chunk.ErrRootConflict) {
 			return err
 		}
@@ -341,11 +346,18 @@ func (r *Repo) Branches(ctx context.Context, p auth.Principal) ([]string, error)
 	if err := r.check(ctx, p, auth.Read, "repo"); err != nil {
 		return nil, err
 	}
+	return r.names(ctx, "heads/")
+}
+
+// names lists the refs under prefix ("heads/" or "tags/") in order, without
+// the prefix.
+func (r *Repo) names(ctx context.Context, prefix string) ([]string, error) {
 	m, err := r.refs(ctx)
 	if err != nil {
 		return nil, err
 	}
-	it, err := m.IterRange(ctx, []byte("heads/"), []byte("heads0")) // '0' follows '/'
+	end := prefix[:len(prefix)-1] + "0" // '0' follows '/'
+	it, err := m.IterRange(ctx, []byte(prefix), []byte(end))
 	if err != nil {
 		return nil, err
 	}
@@ -355,7 +367,7 @@ func (r *Repo) Branches(ctx context.Context, p auth.Principal) ([]string, error)
 		if err != nil || !ok {
 			return out, err
 		}
-		out = append(out, string(bytes.TrimPrefix(k, []byte("heads/"))))
+		out = append(out, string(bytes.TrimPrefix(k, []byte(prefix))))
 	}
 }
 
@@ -386,8 +398,8 @@ func (r *Repo) WorkingSet(ctx context.Context, p auth.Principal, branch string) 
 // UpdateWorkingSet replaces a branch's working set with next if it is still
 // prev (ErrConflict otherwise), and returns next as stored. It changes the
 // namespaces only: next carries the merge in progress as stored
-// (ErrMergeState otherwise), which only merging, resolving and committing
-// change.
+// (ErrMergeState otherwise), which only merging, resolving, committing and
+// abandoning change.
 func (r *Repo) UpdateWorkingSet(ctx context.Context, p auth.Principal, branch string, prev, next WorkingSet) (WorkingSet, error) {
 	if err := r.branchCheck(ctx, p, auth.Write, branch); err != nil {
 		return WorkingSet{}, err
@@ -620,6 +632,68 @@ func (r *Repo) CreateTag(ctx context.Context, p auth.Principal, name string, tar
 	return t, err
 }
 
+// Tags lists the tags' names in order.
+func (r *Repo) Tags(ctx context.Context, p auth.Principal) ([]string, error) {
+	if err := r.check(ctx, p, auth.Read, "repo"); err != nil {
+		return nil, err
+	}
+	return r.names(ctx, "tags/")
+}
+
+// Tag returns the tag a name holds (ErrTagNotFound when there is none).
+func (r *Repo) Tag(ctx context.Context, p auth.Principal, name string) (Tag, error) {
+	if err := r.check(ctx, p, auth.Read, "tag:"+name); err != nil {
+		return Tag{}, err
+	}
+	if err := validName(name); err != nil {
+		return Tag{}, err
+	}
+	m, err := r.refs(ctx)
+	if err != nil {
+		return Tag{}, err
+	}
+	h, ok, err := ref(ctx, m, tagKey(name))
+	if err != nil {
+		return Tag{}, err
+	}
+	if !ok {
+		return Tag{}, fmt.Errorf("%w: %s", ErrTagNotFound, name)
+	}
+	return r.readTag(ctx, h)
+}
+
+func (r *Repo) readTag(ctx context.Context, h hash.Hash) (Tag, error) {
+	b, err := r.s.Get(ctx, h)
+	if err != nil {
+		return Tag{}, err
+	}
+	t, err := decodeTag(b)
+	if err != nil {
+		return Tag{}, err
+	}
+	t.Hash = h
+	return t, nil
+}
+
+// DeleteTag removes a tag, freeing its name. The commit it named stays while
+// anything else reaches it; what only the tag reached, GC collects.
+func (r *Repo) DeleteTag(ctx context.Context, p auth.Principal, name string) error {
+	if err := r.check(ctx, p, auth.Manage, "tag:"+name); err != nil {
+		return err
+	}
+	if err := validName(name); err != nil {
+		return err
+	}
+	return r.update(ctx, func(m *prolly.Map, e *prolly.Editor) error {
+		if _, ok, err := ref(ctx, m, tagKey(name)); err != nil {
+			return err
+		} else if !ok {
+			return fmt.Errorf("%w: %s", ErrTagNotFound, name)
+		}
+		return e.Delete(tagKey(name))
+	})
+}
+
 // byHeight is a max-heap of commits by height, lower hash first on a tie.
 type byHeight []Commit
 
@@ -786,11 +860,47 @@ func (r *Repo) Merge(ctx context.Context, p auth.Principal, branch string, their
 		return merge.Result{}, err
 	}
 	next := WorkingSet{Working: res.Merged.Root(), Staged: res.Merged.Root(),
-		Merge: &MergeState{Base: baseHash, Theirs: theirs, Conflicts: conflicts.Root()}}
+		Merge: &MergeState{Base: baseHash, Theirs: theirs, Conflicts: conflicts.Root(), PreWorking: ws.Working, PreStaged: ws.Staged}}
 	if _, err := r.setWorkingSet(ctx, branch, ws, next, false); err != nil {
 		return merge.Result{}, err
 	}
 	return res, nil
+}
+
+// AbortMerge abandons a branch's merge in progress: it drops the merge
+// state and puts back the working and staged namespaces the merge started
+// from. What the merge brought in, its resolutions and every edit made
+// since it began are discarded; edits made before it began are not. It
+// needs write on the branch and on every path it changes, and with no
+// merge in progress it is ErrNoMerge.
+func (r *Repo) AbortMerge(ctx context.Context, p auth.Principal, branch string) error {
+	if err := r.branchCheck(ctx, p, auth.Write, branch); err != nil {
+		return err
+	}
+	return r.update(ctx, func(m *prolly.Map, e *prolly.Editor) error {
+		_, work, err := branchRefs(ctx, m, branch)
+		if err != nil {
+			return err
+		}
+		ws, err := r.readWorkingSet(ctx, work)
+		if err != nil {
+			return err
+		}
+		if ws.Merge == nil {
+			return fmt.Errorf("%w: %s", ErrNoMerge, branch)
+		}
+		back := WorkingSet{Working: ws.Merge.PreWorking, Staged: ws.Merge.PreStaged}
+		for _, ns := range [][2]hash.Hash{{ws.Working, back.Working}, {ws.Staged, back.Staged}} {
+			if err := r.checkPaths(ctx, p, branch, ns[0], ns[1]); err != nil {
+				return err
+			}
+		}
+		h, err := r.s.Put(ctx, back.encode())
+		if err != nil {
+			return err
+		}
+		return e.Put(workKey(branch), h[:])
+	})
 }
 
 // Conflicts lists a branch's unresolved merge conflicts.
@@ -848,7 +958,8 @@ func (r *Repo) ResolveConflict(ctx context.Context, p auth.Principal, branch, pa
 			return fmt.Errorf("vcs: no conflict at %s on %s", path, branch)
 		}
 		next := ws
-		next.Merge = &MergeState{Base: ws.Merge.Base, Theirs: ws.Merge.Theirs}
+		merging := *ws.Merge // resolving keeps where the merge started
+		next.Merge = &merging
 		for _, dst := range []*hash.Hash{&next.Working, &next.Staged} {
 			n, err := r.Namespace(ctx, *dst)
 			if err != nil {

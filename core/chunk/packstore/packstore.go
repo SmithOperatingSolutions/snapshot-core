@@ -53,8 +53,9 @@ type Options struct {
 	Blobs      blob.BlobStore
 	Keys       *seal.Keyring
 	Repo       seal.RepoID
-	PackSize   int // 0: DefaultPackSize
-	CacheBytes int // 0: DefaultCacheBytes; negative: no cache
+	PackSize   int              // 0: DefaultPackSize
+	CacheBytes int              // 0: DefaultCacheBytes; negative: no cache
+	Clock      func() time.Time // dates this store's uploads; nil: time.Now
 	backoff    time.Duration
 }
 
@@ -85,7 +86,14 @@ type Store struct {
 	inIndex     map[[32]byte][]string // session index objects written, and the packs each lists
 	deduped     map[hash.Hash]bool    // chunks puts found stored, since the last publish
 	sessGen     uint64                // the gcGen those puts began under
+	uploaded    map[string]time.Time  // this store's unpublished packs and index objects, dated by o.Clock
+	lost        error                 // chunk.ErrSessionLost once GC deleted unpublished work: writes refuse
 }
+
+// recheckAfter is how old an unpublished upload is before a publish looks it
+// up; GC keeps its record of a deleted orphan this much past the grace
+// window, so every deletion is caught by one or the other.
+const recheckAfter = time.Hour
 
 var _ chunk.Store = (*Store)(nil)
 
@@ -103,13 +111,17 @@ func Open(ctx context.Context, o Options) (*Store, error) {
 	if o.backoff == 0 {
 		o.backoff = defaultBackoff
 	}
+	if o.Clock == nil {
+		o.Clock = time.Now
+	}
 	codec, err := pack.NewCodec()
 	if err != nil {
 		return nil, err
 	}
 	s := &Store{o: o, codec: codec, index: dedup.New(), inflight: map[string][]byte{},
 		loaded: map[[32]byte]bool{}, keys: map[seal.Salt]*pack.Keys{}, condemned: map[string]bool{},
-		unpublished: map[string]pack.Info{}, inIndex: map[[32]byte][]string{}, deduped: map[hash.Hash]bool{}}
+		unpublished: map[string]pack.Info{}, inIndex: map[[32]byte][]string{}, deduped: map[hash.Hash]bool{},
+		uploaded: map[string]time.Time{}}
 	switch {
 	case o.CacheBytes == 0:
 		s.cache = newCache(DefaultCacheBytes)
@@ -268,6 +280,7 @@ func (s *Store) upload(ctx context.Context, packs []pack.Built) error {
 		if err == nil {
 			delete(s.inflight, b.Name)
 			s.session = append(s.session, b.Info)
+			s.uploaded[b.Name] = s.o.Clock()
 		} else {
 			s.unuploaded = append(s.unuploaded, b)
 		}
@@ -289,6 +302,10 @@ func (s *Store) Put(ctx context.Context, data []byte) (hash.Hash, error) {
 	if s.closed {
 		s.mu.Unlock()
 		return hash.Hash{}, chunk.ErrClosed
+	}
+	if s.lost != nil {
+		s.mu.Unlock()
+		return hash.Hash{}, s.lost
 	}
 	if s.pending != nil && s.pending.Has(h) {
 		s.mu.Unlock()
@@ -375,7 +392,15 @@ func (s *Store) Get(ctx context.Context, h hash.Hash) ([]byte, error) {
 		}
 		loc, frame, keys, err = s.frame(ctx, h)
 		if errors.Is(err, blob.ErrNotFound) {
+			if lost := s.promised(h, loc.Pack.Name); lost != nil {
+				return nil, lost
+			}
 			return nil, fmt.Errorf("%w: %s is in pack %s, which is missing", chunk.ErrCorrupt, h.Short(), loc.Pack.Name)
+		}
+	}
+	if errors.Is(err, chunk.ErrNotFound) {
+		if lost := s.promised(h, ""); lost != nil {
+			return nil, lost
 		}
 	}
 	if err != nil {
@@ -387,6 +412,19 @@ func (s *Store) Get(ctx context.Context, h hash.Hash) ([]byte, error) {
 	}
 	s.cache.put(h, bytes.Clone(data))
 	return data, nil
+}
+
+// promised ends the session when a chunk that cannot be read is one this
+// store told a put was stored: one it counted on, or one in a pack of its
+// own it has not published (packName, when the pack is known). Otherwise
+// it is nil.
+func (s *Store) promised(h hash.Hash, packName string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if _, own := s.unpublished[packName]; own || s.deduped[h] {
+		return s.lostLocked(h.Short() + " was promised to a put and is gone")
+	}
+	return nil
 }
 
 // frame locates a chunk and reads its sealed frame, from memory or the
@@ -480,6 +518,10 @@ func (s *Store) CompareAndSetRoot(ctx context.Context, expected, next hash.Hash)
 		s.mu.Unlock()
 		return chunk.ErrClosed
 	}
+	if s.lost != nil {
+		s.mu.Unlock()
+		return s.lost
+	}
 	if next.IsZero() || (!s.index.Has(next) && (s.pending == nil || !s.pending.Has(next))) {
 		s.mu.Unlock()
 		return fmt.Errorf("%w: %s", chunk.ErrRootMissing, next.Short())
@@ -501,6 +543,9 @@ func (s *Store) CompareAndSetRoot(ctx context.Context, expected, next hash.Hash)
 		return err
 	}
 	if err := s.writeSessionIndex(ctx); err != nil {
+		return err
+	}
+	if err := s.stillStored(ctx); err != nil {
 		return err
 	}
 
@@ -532,6 +577,9 @@ func (s *Store) CompareAndSetRoot(ctx context.Context, expected, next hash.Hash)
 		if err := s.survived(m); err != nil {
 			return err
 		}
+		if err := s.unrecorded(m, pending); err != nil {
+			return err
+		}
 		upd := m
 		upd.seq = m.seq + 1
 		upd.root = next
@@ -550,8 +598,10 @@ func (s *Store) CompareAndSetRoot(ctx context.Context, expected, next hash.Hash)
 			for _, sum := range pending {
 				for _, name := range s.inIndex[sum] {
 					delete(s.unpublished, name)
+					delete(s.uploaded, name)
 				}
 				delete(s.inIndex, sum)
+				delete(s.uploaded, indexName(sum))
 			}
 			s.sessionIdx = s.sessionIdx[len(pending):]
 			s.deduped, s.sessGen = map[hash.Hash]bool{}, upd.gcGen
@@ -624,14 +674,90 @@ func (s *Store) writeSessionIndex(ctx context.Context) error {
 	s.sessionIdx = append(s.sessionIdx, sum)
 	s.loaded[sum] = true
 	s.inIndex[sum] = names
+	s.uploaded[name] = s.o.Clock()
 	s.mu.Unlock()
 	return nil
 }
 
-// survived fails with chunk.ErrStale when GC expired packs since this
-// store's writes began (m, the manifest about to be replaced, is newer in
-// gcGen) and a chunk a put counted on is no longer stored: publishing would
-// name a chunk that is gone. The index was rebuilt when the store saw m.
+// lostLocked ends the store's session: GC deleted what it had written and
+// not published, or a chunk it counted on, and which roots in flight reach
+// that the store cannot know, so every later write is refused (DESIGN §9).
+// Callers hold s.mu.
+func (s *Store) lostLocked(what string) error {
+	s.lost = fmt.Errorf("%w: %s", chunk.ErrSessionLost, what)
+	return s.lost
+}
+
+// unpublishedNames lists the index objects written and not yet in a
+// published manifest, and the packs each lists. Callers hold s.mu.
+func (s *Store) unpublishedNames() []string {
+	var names []string
+	for _, sum := range s.sessionIdx {
+		names = append(append(names, indexName(sum)), s.inIndex[sum]...)
+	}
+	return names
+}
+
+// stillStored looks up each unpublished upload over recheckAfter old by this
+// store's clock, and ends the session if one is gone: GC deleted it as an
+// orphan longer ago than its record lasts. Fresh uploads are not looked up.
+func (s *Store) stillStored(ctx context.Context) error {
+	s.mu.Lock()
+	now := s.o.Clock()
+	var old []string
+	for _, name := range s.unpublishedNames() {
+		if at, ok := s.uploaded[name]; ok && now.Sub(at) > recheckAfter {
+			old = append(old, name)
+		}
+	}
+	s.mu.Unlock()
+	for _, name := range old {
+		_, err := s.o.Blobs.Stat(ctx, name)
+		if errors.Is(err, blob.ErrNotFound) {
+			s.mu.Lock()
+			defer s.mu.Unlock()
+			return s.lostLocked(name + " is gone")
+		}
+		if err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// unrecorded ends the session when m, the manifest about to be replaced,
+// records as a deleted orphan an upload this publish would name. GC swaps
+// its record in before it deletes, so a publish racing the deletion swaps
+// against the record, or loses to it and reads it on the next attempt.
+func (s *Store) unrecorded(m manifest, pending [][32]byte) error {
+	deleted := map[string]bool{}
+	for _, c := range m.condemned {
+		switch c.kind {
+		case deletedPack:
+			deleted[dedup.PackName(c.sum)] = true
+		case deletedIndex:
+			deleted[indexName(c.sum)] = true
+		}
+	}
+	if len(deleted) == 0 {
+		return nil
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for _, sum := range pending {
+		for _, name := range append([]string{indexName(sum)}, s.inIndex[sum]...) {
+			if deleted[name] {
+				return s.lostLocked(name + " was deleted as an orphan")
+			}
+		}
+	}
+	return nil
+}
+
+// survived ends the session when GC expired packs since this store's writes
+// began (m, the manifest about to be replaced, is newer in gcGen) and a
+// chunk a put counted on is no longer stored: publishing would name a chunk
+// that is gone. The index was rebuilt when the store saw m.
 func (s *Store) survived(m manifest) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -640,7 +766,7 @@ func (s *Store) survived(m manifest) error {
 	}
 	for h := range s.deduped {
 		if !s.index.Has(h) && (s.pending == nil || !s.pending.Has(h)) {
-			return fmt.Errorf("%w: %s", chunk.ErrStale, h.Short())
+			return s.lostLocked("counted on " + h.Short() + ", which expired")
 		}
 	}
 	return nil

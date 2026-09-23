@@ -99,7 +99,7 @@ associated data is `tag 0 context`. The key id is
 | KMS envelope | `"SCKW"` · version u16 · key id [32] · wrapped (len-prefixed, ≤ 8 KiB) |
 | Pack | header `"SCPK"` · version u16 · flags u16 · salt [32]; frames `seal(Chunk, ctx = chunk hash, zstd-or-raw)`; index `seal(PackIndex, ctx = header, "SCPI" · version · count · entries sorted by hash: hash [32] · offset · stored · raw · codec)`; trailer index-offset u64 · index-length u32 · `"SCPE"` |
 | Index object | `"SCIX"` · version u16 · salt [32] · `seal(Index, ctx = header, "SCIP" · version · packs: pack hash [32] · salt [32] · size · entries …)`, packs and entries strictly sorted |
-| Manifest (the root value) | `"SCMF"` · version u16 · salt [32] · `seal(Refs, ctx = header, "SCMP" · version · seq u64 · gcGen u64 · root [32] · count · index-object hashes [32] strictly sorted · count · condemned (kind u8: 1 pack, 2 index object · hash [32] · at i64 unix ns))` |
+| Manifest (the root value) | `"SCMF"` · version u16 · salt [32] · `seal(Refs, ctx = header, "SCMP" · version · seq u64 · gcGen u64 · root [32] · count · index-object hashes [32] strictly sorted · count · condemned (kind u8: 1 pack, 2 index object, 3 orphan pack deleted, 4 orphan index object deleted · hash [32] · at i64 unix ns))` |
 | local store | `.snapshot-core` marker (`"SCLS"` · version · store id [16]) · `objects/<segment>~` · `tmp/` · `root` (`"SCRF"` · version · value · SHA-256) · `root.lock` |
 | multivol map | `"SCMV"` · version u16 · count u16 · (volume id [16] · path) … · SHA-256 |
 | S3 keys | `<prefix>objects/<name>!` (the `!` keeps any key from being both an object and a path prefix, which MinIO hides from listings; it sorts below every name byte) · `<prefix>root` = 16-byte nonce ‖ value · `<prefix>probe/…` |
@@ -331,7 +331,8 @@ commit       0x03 · parents u8 (0–2) · parent [32] × parents · namespace [
              time i64 (UTC, unix ns) · author (uvarint length ≤ 256, UTF-8) · message (≤ 64 KiB, UTF-8)
 tag          0x04 · target [32] · time i64 · tagger (≤ 256) · message (≤ 64 KiB)
 working set  0x05 · working [32] · staged [32] · merging u8 (0 or 1) ·
-             [base [32] · theirs [32] · conflicts [32]]   (when merging)
+             [base [32] · theirs [32] · conflicts [32] ·
+              working before [32] · staged before [32]]   (when merging)
 ```
 
 - **Height** is 0 for a root commit and one more than the higher parent
@@ -341,19 +342,32 @@ working set  0x05 · working [32] · staged [32] · merging u8 (0 or 1) ·
 - **Branch and tag names**: `^[a-zA-Z0-9][a-zA-Z0-9._/-]{0,127}$`, with no
   `..`, no `//`, and no trailing `/` or `.lock`; anything else is refused.
 - `Log` takes a limit, capped at 10,000.
+- **Tags** are read back by name (`Tag`, read on `tag:<name>`), listed
+  (`Tags`, read on the repository) and deleted (`DeleteTag`, manage on
+  `tag:<name>`); a name the refs map does not hold is `ErrTagNotFound`. A
+  tag does not move: deleting it and creating it again names another
+  commit. What only a deleted tag reached is unreachable, and GC collects
+  it.
 - A working set names stored namespaces, and a branch or tag a stored
   commit. `UpdateWorkingSet` changes the namespaces only: the merge state
   it is handed must be the stored one (`ErrMergeState`), since only
-  `Merge`, `ResolveConflict` and `CommitWorkingSet` change it. There is no
-  abort in v1: a merge in progress ends by resolving every conflict and
-  committing.
+  `Merge`, `ResolveConflict`, `CommitWorkingSet` and `AbortMerge` change it.
+- **Abandoning a merge.** `Merge` merges into the working namespace as it
+  is, uncommitted edits and all, so the merge state records the working and
+  staged namespaces it started from. `AbortMerge` drops the merge state and
+  puts those two back: what the merge brought in, its resolutions and every
+  edit made since it began are discarded, and edits made before it are
+  not. It asks for write on the branch and on every path it changes, and a
+  branch with no merge in progress is `ErrNoMerge`. (The two roots joined
+  the working set's merge layout before any release; no repository held
+  the shorter one.)
 - A writer that loses the root swap re-reads and re-applies, up to 1,000
   times in a row, then gives up with an error; nothing it did reaches the
   root. A store error anywhere is the call's error, and leaves the refs as
   they were.
 - Every call takes a `Principal` and asks the `Authorizer` about exactly
-  what it does (read, write or manage a branch, manage a tag, admin the
-  repository), except `Namespace`: it opens what a hash names, and a host
+  what it does (read, write or manage a branch, read or manage a tag, admin
+  the repository), except `Namespace`: it opens what a hash names, and a host
   that has the hash has the chunk store it came from. Writes are also
   authorized per path (the spec's "per path prefix"): every write asks for
   write on each path it changes, `path:<branch>:<path>`. `UpdateWorkingSet`
@@ -401,8 +415,8 @@ handed the raw store and is the only caller of `Delete`.
 **Reachability.** Marking starts at the manifest's root, the refs map, and
 follows: the map's nodes; `heads/<b>` to a commit; `tags/<t>` to a tag and its
 target; `work/<b>` to a working set, its working and staged namespaces, and,
-during a merge, its base and theirs commits and its conflicts map (whose
-records name objects too); a commit to its namespace and its parents; a
+during a merge, its base and theirs commits, its conflicts map (whose
+records name objects too) and the namespaces it started from; a commit to its namespace and its parents; a
 namespace to its nodes and to every object it names. What an object reaches
 only its model knows (a tree entry holds its blob's root inside the model's
 bytes), so a model makes its objects collectable by implementing
@@ -448,18 +462,45 @@ unreachable. One run:
    manifest can still load them for a grace window); gcGen + 1 when anything
    expired. A swap that loses to a writer starts the run over, from a fresh
    read and a fresh mark.
-4. Delete the expired packs and the expired index objects, then any pack or
-   index object no manifest names (left by a writer that never published)
-   once it is older than the grace window.
+4. Delete the expired packs and the expired index objects, then the
+   orphans: packs and index objects no manifest names (left by a writer
+   that never published) that are older than the grace window. GC lists
+   them before its swap and records each in it as deleted, at its own
+   clock, and deletes only once the swap has landed; the record stays for a
+   grace window and an hour. An object under `packs/` or `index/` whose
+   name no pack or index object could have is deleted unrecorded, since no
+   writer uploaded it; so is every orphan of a store with no manifest yet,
+   where there is nothing to record in and no manifest to publish against.
 
 **Writers.** Put never deduplicates against a chunk whose only copy is in a
 condemned pack; it stores it again. A writer remembers the chunks it did
 deduplicate, and when the manifest's gcGen has moved by the time it
-publishes, it first checks each is still stored; if one expired, the publish
-fails with `chunk.ErrStale`, which the version graph reports as `ErrConflict`,
-and the writer's host re-reads and writes again. A store that sees a new gcGen
-rebuilds its index from the manifest's index objects, so nothing points into
-a deleted pack.
+publishes, it first checks each is still stored. A store that sees a new
+gcGen rebuilds its index from the manifest's index objects, so nothing
+points into a deleted pack.
+
+A writer's own unpublished packs and index objects are checked at publish
+too: the publish is refused if the manifest it would replace records one of
+them as a deleted orphan, or if one it uploaded more than an hour ago (by
+its own clock) is no longer stored. The record makes a publish that races
+the deletion fail inside the swap itself: GC's swap comes first, so the
+writer either swaps against a manifest that carries the record or loses to
+it and reads it next; the existence check covers deletions older than a
+record lasts, and an ordinary publish, whose uploads are fresh, checks
+nothing.
+
+**A lost session.** Either way, what the store told its callers was stored
+is partly gone, and it cannot know which roots in flight reach it: a chunk
+written into a deleted pack was promised to a put as surely as one found
+stored. So the publish fails with `chunk.ErrSessionLost` (the version
+graph's `ErrSessionLost`), and from then on the store refuses every write;
+reads go on. A read that finds such a chunk gone ends the session the same
+way, since a host reads what it has just written before it publishes: a
+chunk a put counted on, or one in a pack of the store's own it has not
+published, is `ErrSessionLost` when it cannot be read, never a plain miss
+or corruption. The host reopens the repository, which starts a fresh
+session, and writes again. Only a host that broke the grace window gets
+here.
 
 **Clocks.** Expiry is GC's own reckoning: it dates condemnations by its
 clock, and an expired pack is deleted by name whatever else is true. An
@@ -487,7 +528,7 @@ reads, and at the end that nothing unreachable is left to condemn.
 **What a host must do.** Publish what it writes, and use what it reads,
 within the grace window. A chunk is deleted only when it was unreachable at
 two marks at least a grace window apart, so a host that holds a hash, or an
-unpublished write, across that span can lose it; the check at publish covers
-deduplication, and `UpdateWorkingSet` refuses namespace roots that are not
-stored, but a host that sits on hashes for a week is outside the contract, as
+unpublished write, across that span can lose it; the checks at publish
+cover deduplication and the writer's own uploads, and `UpdateWorkingSet`
+refuses namespace roots that are not stored, but a host that sits on hashes for a week is outside the contract, as
 it is with git's `gc.pruneExpire`.

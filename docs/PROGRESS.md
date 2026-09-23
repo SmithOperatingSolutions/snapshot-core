@@ -5,9 +5,8 @@ every "first failing test" checkbox in both specs. Updated at each milestone
 boundary and whenever a checklist item turns green; the evidence for each item
 is the named test, and the commit that added it carries its red.
 
-**Updated 2026-09-23** · branch `storage-core`, one PR into `main` · 227 commits
-· red-check clean · 452 checked-in mutants, all killed · lint clean · every
-package at or above its coverage gate
+**Updated 2026-09-23** · red-check clean · every checked-in mutant killed ·
+lint clean · every package at or above its coverage gate
 
 ## Milestones
 
@@ -17,7 +16,7 @@ package at or above its coverage gate
 | **C1 Blobs and chunks** | ✅ Done | `core/hash`, `core/internal/wire`, `core/cdc`, `core/seal` (per-object HKDF keys, key files, KMS port + contract); `core/blob` port + contract, `blob/mem`, `blob/local`, `blob/multivol`, `blob/s3` (pure-Go in-process S3 server `s3fake`, startup probe, MinIO tier), `blob/cache`; `core/pack`, `core/dedup`; `core/chunk` port + contract, `chunk/memstore`, `chunk/packstore` | Blob contract green on all backends ✅ (mem, local, multivol, s3 in-process and MinIO, and through the cache); crash harness passes ✅ (local and multivol at the blob layer, packstore at the chunk layer) |
 | **C2 Keyed data** | ✅ Done | `core/boundary` (the integer split rule), `core/stream` (CDC byte streams under a content-defined index tree), `core/prolly` (Map, Editor with incremental Flush, Diff) | Determinism and bounded-diff properties hold on 1M entries ✅ (`-tags slow`, about 9 s) |
 | **C3 History and models** | ✅ Done | `core/auth` (Principal, default-deny Authorizer), `core/model` (the port, frozen, and the registry), `core/object` (46-byte object references, the path grammar, namespaces and their diff), `model/contract`, `model/blob`, `model/tree`, `core/merge` (the zipped three-way driver), `core/vcs` (refs, commits, tags, working sets, merge base, log, merge and conflicts), `core/repo` (Init and Open over the sealed config object) | A folder of files branches, diffs and merges end to end ✅ (`TestAFolderBranchesDiffsAndMerges`, on a local disk store through encrypted packs); model interface frozen ✅ (`core/model`, port version 1) |
-| **C4 GC and hardening** | ✅ Done | Walks: `stream.Walk`, `prolly.Walk`, `object.Walk`, `vcs.Walk`, and `model.Walker` (optional, beside the frozen port) in `model/blob` and `model/tree`; packstore's GC rounds (condemn, reprieve, expire, compact) and the writer's fence (`chunk.ErrStale`); `core/gc` (mark, apply, delete, orphans by the backend's clock); `repo.GC`; the repository on `NoDelete`; writes authorized per path; fuzz targets for every decoder | GC safety property holds ✅ (`TestGCSafetyProperty` over random histories; `TestAFoldersHistoryComesThroughGC` end to end); security table fully verified ✅ (below) |
+| **C4 GC and hardening** | ✅ Done | Walks: `stream.Walk`, `prolly.Walk`, `object.Walk`, `vcs.Walk`, and `model.Walker` (optional, beside the frozen port) in `model/blob` and `model/tree`; packstore's GC rounds (condemn, reprieve, expire, compact) and the writer's fence (a lost session, `chunk.ErrSessionLost`, since #3); `core/gc` (mark, apply, delete, orphans by the backend's clock); `repo.GC`; the repository on `NoDelete`; writes authorized per path; fuzz targets for every decoder | GC safety property holds ✅ (`TestGCSafetyProperty` over random histories; `TestAFoldersHistoryComesThroughGC` end to end); security table fully verified ✅ (below) |
 
 **Closing C1** took more than the last component. The coverage gate found
 guards nothing executed, each now backfilled with a test and the mutant it
@@ -154,7 +153,7 @@ packages have no gate: their callers exercise them.
 - [x] SHA-256 verified on every read, from every backend, cached or not (chunk contract on every backend, `TestCachedReadsAreVerified`; disk-cache entries carry their own SHA-256, `TestDamagedEntryIsRefetched`)
 - [x] Hand-written, bounds-checked decoders, fuzzed: `wire`, key file, KMS envelope, local root file and marker, multivol volume map, pack, index object, manifest, stream index node, prolly node, commit, tag, working set, conflict record, tree entry, object reference (`FuzzDecodeRef`) and repository config (`FuzzOpenConfig`); each sealed format also with a v1 golden file, every format with forgery tests, and CI's fuzz step lists the targets itself
 - [x] Model ids resolved only against the compiled-in registry (registries are built explicitly by the host, `model.NewRegistry`; nothing registers itself, and an id or format the registry lacks is `ErrUnknownModel` before anything is read)
-- [x] Every public call takes a `Principal`; the core passes it to a default-deny `Authorizer` per branch and per path prefix. Per branch, tag and repository (`TestEveryCallIsAuthorized` over all fifteen version-graph calls under a recording, a denying, a nil and a read-only authorizer; `Init` and `repo.GC` ask for admin, `TestARefusedInitWritesNothing`, `TestAnAdminCollectsTheRepositoryOnTheRawStore`; a nil authorizer denies, `TestDenyAllRefusesEveryCall`); per path, every write asks for each path it changes, checked against what is stored (`TestWritesAreAuthorizedPerPath`). Argued in DESIGN §8: `Namespace` opens what a hash names without asking, and reads stay per branch (a host holding the chunk store reads what it can open)
+- [x] Every public call takes a `Principal`; the core passes it to a default-deny `Authorizer` per branch and per path prefix. Per branch, tag and repository (`TestEveryCallIsAuthorized` over every version-graph call under a recording, a denying, a nil and a read-only authorizer; `Init` and `repo.GC` ask for admin, `TestARefusedInitWritesNothing`, `TestAnAdminCollectsTheRepositoryOnTheRawStore`; a nil authorizer denies, `TestDenyAllRefusesEveryCall`); per path, every write asks for each path it changes, checked against what is stored (`TestWritesAreAuthorizedPerPath`). Argued in DESIGN §8: `Namespace` opens what a hash names without asking, and reads stay per branch (a host holding the chunk store reads what it can open)
 - [x] Hard limits: object size, list page, chunk size, pack size and chunks per pack, index objects per manifest, key size, inline value size, tree height; path depth and length (`TestInvalidPathsAreRejected`), conflicts per merge (`TestTooManyConflictsAbort`, default 100,000), `Log` length (`TestLogIsBoundedAndHighestFirst`), commit and tag messages (`TestMessagesAreBoundedUTF8`), principal ids
 - [x] Supply chain: disknexus pinned by version and `go.sum`; `go mod verify`, `govulncheck` in CI
 - [x] CI: `staticcheck` (via golangci-lint), `golangci-lint` warnings as errors, `govulncheck`, red-check
@@ -244,18 +243,21 @@ Beyond the list: merging what a branch already holds changes nothing (`TestMergi
 - **Every format test carries its own codec**, written from the DESIGN text, so the writer is checked against the documented format and the reader against hand-built input; goldens pin what only the implementation could produce.
 - **A mutant that hangs counts as killed** at the mutation engine's per-run timeout (three minutes).
 - **Property tests prove their reach**: a property over trees fails unless enough of its cases built deep ones.
-- **The merge state is the version graph's**: `UpdateWorkingSet` changes a branch's namespaces and nothing else, checked against the stored working set; there is no merge abort in v1.
+- **The merge state is the version graph's**: `UpdateWorkingSet` changes a branch's namespaces and nothing else, checked against the stored working set; only merging, resolving, committing and abandoning change it.
+- **Abandoning a merge puts back where it started**: `Merge` merges into the working namespace as it is, so the merge state records the working and staged namespaces it started from, and `AbortMerge` restores them; edits made before the merge survive it. The two roots joined the working set's merge layout in place, before any release.
 - **Merging what a branch already holds is a no-op**, and merging a descendant is not fast-forwarded (it makes a two-parent commit).
 - **`Init` is resumable**: it claims the store by writing the config, and the next `Init` with the same key finishes one that stopped after that; `Open` reports such a store as `ErrNoRepo`.
 - **`vcs.Namespace` asks no authorizer**: it opens what a hash names, and a host holding the hash holds the chunk store.
 - **Store errors are swept, not sampled**: every package with a store under it has a test that fails exactly one store call at every point an operation makes one (chunk layer, keyed data, objects, trees, the version graph and, at the blob level, `Init` and `Open`).
 - **GC's reachability comes from the models**: `model.Walker` is optional, beside the frozen port, and the model contract requires it (what a model names must hold its object); GC refuses to collect a repository holding an object it cannot walk.
 - **A walk says which chunks are leaves**, and the marker prunes only nodes it has gone into, so bytes that are a file in one place and a node in another cannot steer it.
-- **GC condemns, waits, re-marks, deletes**; writers never deduplicate against a condemned pack and are fenced (`chunk.ErrStale`, reported as `vcs.ErrConflict`) when a pack they counted on expired; a store rebuilds its index when gcGen moves.
+- **GC condemns, waits, re-marks, deletes**; writers never deduplicate against a condemned pack; a store rebuilds its index when gcGen moves.
+- **GC records the orphans it deletes**, in the swap before the deletion, for a grace window and an hour (condemned kinds 3 and 4); a writer's publish is refused when the manifest records one of its unpublished uploads, or when one over an hour old is gone.
+- **A lost session, not a conflict**: a store that finds writes it promised gone (a chunk a put counted on in a pack GC expired, an upload GC deleted as an orphan, found at publish or on a read) fails with `chunk.ErrSessionLost` and refuses every later write; the host reopens the repository. Retrying on the same store could keep failing, and fencing only counted-on chunks would miss chunks written into a deleted pack.
 - **Expiry by GC's clock, orphan ages by the backend's**, read from a probe object.
 - **The repository runs on `blob.NoDelete`**; `repo.GC`, with admin and the raw store, is the one path that deletes.
 - **Writes are authorized per path, reads per branch.**
-- **Equivalent mutants, not catalogued:** the cache's `Dir` check (`MkdirAll("")` fails anyway) and its `MkdirAll` error path (the `Chmod` after it fails); the pack index's per-entry read check (the reader's error is sticky and `Done` reports it); `OpenFrame`'s length check (authentication fails anyway); the manifest's count limits (the read fails at the first missing entry); the repository config's 4 KiB bound (the read is cut there anyway and a cut config fails to authenticate); `gc.Run`'s options check (a missing store, key or registry fails deeper down all the same). Their statements are covered; no test can tell the mutant from the original.
+- **Equivalent mutants, not catalogued:** the cache's `Dir` check (`MkdirAll("")` fails anyway) and its `MkdirAll` error path (the `Chmod` after it fails); the pack index's per-entry read check (the reader's error is sticky and `Done` reports it); `OpenFrame`'s length check (authentication fails anyway); the manifest's count limits (the read fails at the first missing entry); the repository config's 4 KiB bound (the read is cut there anyway and a cut config fails to authenticate); `gc.Run`'s options check (a missing store, key or registry fails deeper down all the same); the version graph's walk of a conflict's sides (`vcs-walk-follows-conflicts`, retired: since a merge records where it started, the base, theirs and starting namespaces hold every side too, so the visit is defense in depth). Their statements are covered; no test can tell the mutant from the original.
 
 ## What testing has found so far
 
@@ -299,6 +301,10 @@ Beyond the list: merging what a branch already holds changes nothing (`TestMergi
 | the full gates, closing C4 | A commit changing a signature mechanically across tests was blocked (each changed test judged); a stored-namespace check the path checks made dead; a branch check the path checks masked | The commit split into a refactor and a red; the check removed; a test granting paths and not the branch |
 | the PR's first CI run | Docker Hub no longer serves `minio/minio`: the MinIO tier had passed locally on a copy cached a year before, and the failure said only "exit status 125" | The tier runs MinIO's release from quay.io, pinned by digest; a failed command's error carries what it printed |
 | the PR's second CI run | On a cold runner `docker run -d` writes its pull progress on stderr and the container id on stdout; `tools/ci` merged the two, so `docker port` was handed an id that began with the progress | `output()` returns stdout alone; stderr only says why a command failed |
+| the design of #3 | A writer's session index objects are as exposed as its packs, and worse: a manifest naming a deleted index object opens nowhere | Index objects are recorded and checked like packs |
+| the design of #3 | Answering a lost write with a conflict to retry on the same store could fail forever (a lost chunk the retry no longer writes), and a fence on counted-on chunks misses chunks written into a deleted pack | A lost session: `ErrSessionLost`, writes refused, the host reopens (the fence on expired packs too) |
+| the GC property, run 150 times | A host reading back what it had just written found a chunk its put had deduplicated against a pack GC expired meanwhile: a plain `ErrNotFound`, before any publish could be fenced (one run in about 120) | A read of a promised chunk that is gone ends the session (`TestReadingAPromisedChunkThatIsGoneLosesTheSession`) |
+| the GC property's reach | The spanning edit lost a session in only about 94% of runs, so a check that one did was flaky | A slow-writer step, whose pack GC deletes as an orphan before it publishes |
 | (redcheck on this branch) | Build-tagged tests unjudged; `TestMain` judged; pairs not matched by scope; contract changes invisible; environment-bound callers refused; no `main` in a new clone; a tagged backfill's mutants built without its tag; fuzz targets not counted as tests | Tool fixed each time, with a red test |
 
 ## Next
@@ -309,15 +315,27 @@ them, each tracked as an issue:
 1. **Reclaiming space in mixed packs** (#1): GC frees whole packs;
    rewriting mostly-dead ones (their live chunks copied out, the pack
    condemned) is the step after v1.
-2. **Reading and deleting tags** (#2): tags are written and kept alive by
-   GC, but the version graph has no call to list, read or delete them.
-3. **A slow writer's unpublished packs** (#3): the contract has hosts
-   publish within the grace window; a check at publish would turn a breach
-   into `ErrStale` rather than a root naming a deleted pack.
+2. ✅ **Reading and deleting tags** (#2): `Tags`, `Tag` and `DeleteTag`
+   (`TestTagsAreListedAndReadBack`, `TestAMissingOrDeletedTagIsNotFound`,
+   `TestForgedTagRefsAreCorrupt`; what only a deleted tag reached is
+   collected, `TestADeletedTagsHistoryIsCollected`).
+3. ✅ **A slow writer's unpublished packs** (#3): GC records the orphans it
+   deletes, a writer checks its uploads at publish, and a lost write ends
+   the session (`TestARoundRecordsTheOrphansItDeletes`,
+   `TestAPublishFailsOnAPackRecordedAsADeletedOrphan`,
+   `TestAPublishFailsOnAnOldUploadThatIsGone`, the index-object pair,
+   `TestReadingAPromisedChunkThatIsGoneLosesTheSession`; end to end,
+   `TestAWriterCannotPublishAPackGCDeletedAsAnOrphan`; slow writers in
+   `TestGCSafetyProperty`).
 4. **Real S3 in the nightly run** (#4): the test is written
    (`TestContractAgainstRealS3`); a nightly job to run it, and the
    credentials it needs as CI secrets, are not there yet.
-5. **Abandoning a merge** (#5): a merge in progress ends only by resolving
-   every conflict and committing.
+5. ✅ **Abandoning a merge** (#5): `AbortMerge` puts back the working and
+   staged namespaces the merge started from
+   (`TestAnAbandonedMergeLeavesTheBranchAsItWas`,
+   `TestOnlyAMergeInProgressCanBeAbandoned`; per path,
+   `TestWritesAreAuthorizedPerPath`; GC keeps the starting namespaces,
+   `TestAWalkNamesAllTheRepositoryHolds`, and collects an abandoned merge,
+   `TestAnAbandonedMergeIsCollected`).
 6. **The index in memory** (#6): about 70 to 80 bytes per chunk to open a
    repository, and a map of every live chunk to collect one.

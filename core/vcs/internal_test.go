@@ -56,16 +56,18 @@ func TestForgedChunksAreCorrupt(t *testing.T) {
 		}
 	}
 
-	ws := WorkingSet{Working: hash.Sum([]byte("w")), Staged: hash.Sum([]byte("s")), Merge: &MergeState{Base: hash.Sum([]byte("b"))}}
-	if back, err := decodeWorkingSet(ws.encode()); err != nil || back.Merge == nil || back.Merge.Base != ws.Merge.Base {
-		t.Fatalf("positive control: %+v, %v", back, err)
+	ws := WorkingSet{Working: hash.Sum([]byte("w")), Staged: hash.Sum([]byte("s")),
+		Merge: &MergeState{Base: hash.Sum([]byte("b")), PreWorking: hash.Sum([]byte("pw")), PreStaged: hash.Sum([]byte("ps"))}}
+	if back, err := decodeWorkingSet(ws.encode()); err != nil || back.Merge == nil || *back.Merge != *ws.Merge {
+		t.Fatalf("positive control: a working set's merge state %+v reads back as %+v (%v)", *ws.Merge, back.Merge, err)
 	}
 	flagTwo := (WorkingSet{Working: ws.Working, Staged: ws.Staged}).encode()
 	flagTwo[len(flagTwo)-1] = 2
 	for name, b := range map[string][]byte{
-		"merge flag 2":        flagTwo,
-		"a byte past the end": append(ws.encode(), 0),
-		"truncated":           ws.encode()[:70],
+		"merge flag 2":                     flagTwo,
+		"a byte past the end":              append(ws.encode(), 0),
+		"truncated":                        ws.encode()[:70],
+		"a merge without where it started": ws.encode()[:len(ws.encode())-2*hash.Size],
 	} {
 		if _, err := decodeWorkingSet(b); !errors.Is(err, chunk.ErrCorrupt) {
 			t.Errorf("working set, %s: %v, want ErrCorrupt", name, err)

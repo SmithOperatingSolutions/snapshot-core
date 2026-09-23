@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math/rand"
 	"strings"
 	"sync"
 	"testing"
@@ -196,6 +197,14 @@ func (w *world) note(m model.ID, content string) object.Ref {
 
 func (w *world) put(branch, path string, ref object.Ref) {
 	w.t.Helper()
+	if err := w.tryPut(branch, path, ref); err != nil {
+		w.t.Fatal(err)
+	}
+}
+
+// tryPut is put, returning the update's error.
+func (w *world) tryPut(branch, path string, ref object.Ref) error {
+	w.t.Helper()
 	ws, err := w.r.WorkingSet(ctx, alice, branch)
 	if err != nil {
 		w.t.Fatal(err)
@@ -213,9 +222,30 @@ func (w *world) put(branch, path string, ref object.Ref) {
 	}
 	next := ws
 	next.Working, next.Staged = n.Root(), n.Root()
-	if _, err := w.r.UpdateWorkingSet(ctx, alice, branch, ws, next); err != nil {
+	_, err = w.r.UpdateWorkingSet(ctx, alice, branch, ws, next)
+	return err
+}
+
+// reopen opens the repository again on a fresh store, as a host does when
+// its session was lost.
+func (w *world) reopen() {
+	w.t.Helper()
+	w.s = w.store()
+	r, err := vcs.Open(ctx, w.s, w.vcs())
+	if err != nil {
 		w.t.Fatal(err)
 	}
+	w.r = r
+}
+
+// root is the refs root the store sees.
+func (w *world) root() hash.Hash {
+	w.t.Helper()
+	h, err := w.s.Root(ctx)
+	if err != nil {
+		w.t.Fatal(err)
+	}
+	return h
 }
 
 func (w *world) commit(branch, msg string) vcs.Commit {
@@ -439,6 +469,138 @@ func TestGCKeepsWhatTheRefsReachAndDeletesTheRest(t *testing.T) {
 		if !got[c] {
 			t.Fatalf("after the replaced index objects went, %q no longer reads", c)
 		}
+	}
+}
+
+// A tag keeps what it names through GC; once the tag is deleted, what only
+// it reached is collected a grace window later (issue #2).
+func TestADeletedTagsHistoryIsCollected(t *testing.T) {
+	w := newWorld(t)
+	w.put(vcs.MainBranch, "notes/main", w.note(7, "a note main keeps"))
+	w.commit(vcs.MainBranch, "main")
+	if err := w.r.CreateBranch(ctx, alice, "release", w.commitOf(vcs.MainBranch)); err != nil {
+		t.Fatal(err)
+	}
+	w.put("release", "notes/release", w.note(7, "a note only the tag keeps"))
+	tagged := w.commit("release", "the release")
+	if _, err := w.r.CreateTag(ctx, alice, "v1", tagged.Hash, "release 1"); err != nil {
+		t.Fatal(err)
+	}
+	if err := w.r.DeleteBranch(ctx, alice, "release"); err != nil {
+		t.Fatal(err)
+	}
+	only := hash.Sum([]byte("a note only the tag keeps"))
+	for _, jump := range []time.Duration{0, grace + time.Minute} {
+		w.jump = jump
+		if _, err := w.gc(); err != nil {
+			t.Fatalf("GC: %v", err)
+		}
+	}
+	if _, err := w.store().Get(ctx, only); err != nil {
+		t.Fatalf("after GC an object only a tag reaches reads as %v: GC did not keep what the tag names", err)
+	}
+	if err := w.r.DeleteTag(ctx, alice, "v1"); err != nil {
+		t.Fatalf("DeleteTag = %v", err)
+	}
+	for _, jump := range []time.Duration{grace + 2*time.Minute, 2*grace + 3*time.Minute} {
+		w.jump = jump
+		if _, err := w.gc(); err != nil {
+			t.Fatalf("GC after the tag was deleted: %v", err)
+		}
+	}
+	if _, err := w.store().Get(ctx, only); !errors.Is(err, chunk.ErrNotFound) {
+		t.Fatalf("two grace windows after its tag was deleted, an object only the tag reached reads as %v, want ErrNotFound", err)
+	}
+	if got := w.readable(); !got["a note main keeps"] {
+		t.Fatal("collecting the tag's history lost what main keeps")
+	}
+}
+
+// Once a merge is abandoned, what only it held (here the object its
+// conflict was resolved with) is collected a grace window later (issue #5).
+func TestAnAbandonedMergeIsCollected(t *testing.T) {
+	w := newWorld(t)
+	main := vcs.MainBranch
+	w.put(main, "notes/base", w.note(7, "a note main keeps"))
+	w.commit(main, "base")
+	if err := w.r.CreateBranch(ctx, alice, "dev", w.commitOf(main)); err != nil {
+		t.Fatal(err)
+	}
+	w.put("dev", "notes/both", w.note(7, "added on dev"))
+	theirs := w.commit("dev", "dev work")
+	w.put(main, "notes/both", w.note(7, "added on main"))
+	w.commit(main, "main work")
+	if res, err := w.r.Merge(ctx, alice, main, theirs.Hash); err != nil || len(res.Conflicts) != 1 {
+		t.Fatalf("fixture: the merge found %d conflicts (%v), want 1", len(res.Conflicts), err)
+	}
+	resolution := w.note(7, "a resolution only the merge holds")
+	if err := w.r.ResolveConflict(ctx, alice, main, "notes/both", &resolution); err != nil {
+		t.Fatal(err)
+	}
+	if err := w.r.AbortMerge(ctx, alice, main); err != nil {
+		t.Fatalf("AbortMerge = %v", err)
+	}
+	for _, jump := range []time.Duration{0, grace + time.Minute} {
+		w.jump = jump
+		if _, err := w.gc(); err != nil {
+			t.Fatalf("GC: %v", err)
+		}
+	}
+	if _, err := w.store().Get(ctx, resolution.Root.Hash); !errors.Is(err, chunk.ErrNotFound) {
+		t.Fatalf("a grace window after the merge was abandoned, the object only it held reads as %v, want ErrNotFound", err)
+	}
+	if got := w.readable(); !got["a note main keeps"] || !got["added on main"] {
+		t.Fatal("collecting the abandoned merge lost what main keeps")
+	}
+}
+
+// incompressible is n bytes of content that no codec shrinks.
+func incompressible(seed int64, n int) string {
+	b := make([]byte, n)
+	rand.New(rand.NewSource(seed)).Read(b)
+	return string(b)
+}
+
+// A writer that sat on a pack it uploaded past the grace window, while GC
+// deleted it as an orphan, cannot publish a root that reaches it: its
+// session is lost (ErrSessionLost) and the refs stay as they were. The host
+// reopens the repository, writes the note again, and it publishes; the
+// repository reads whole (issue #3).
+func TestAWriterCannotPublishAPackGCDeletedAsAnOrphan(t *testing.T) {
+	w := newWorld(t)
+	main := vcs.MainBranch
+	w.put(main, "notes/first", w.note(7, "an ordinary note"))
+	w.commit(main, "first")
+	packs := count(t, w.blobs, "packs/")
+	notes := []string{incompressible(1, 1500), incompressible(2, 1500), incompressible(3, 1500)}
+	var refs []object.Ref
+	for _, n := range notes { // the third fills the pack holding the first two: uploaded, not published
+		refs = append(refs, w.note(7, n))
+	}
+	if n := count(t, w.blobs, "packs/"); n != packs+1 {
+		t.Fatalf("fixture: the writer left %d packs, want one more than the %d published", n, packs)
+	}
+	root := w.root()
+	w.jump = grace + time.Minute
+	rep, err := w.gc()
+	if err != nil {
+		t.Fatalf("GC: %v", err)
+	}
+	deleted := strings.Join(rep.Deleted, " ")
+	if !strings.Contains(deleted, "packs/") {
+		t.Fatalf("fixture: GC deleted %v, want the writer's pack among them", rep.Deleted)
+	}
+	if err := w.tryPut(main, "notes/slow", refs[0]); !errors.Is(err, vcs.ErrSessionLost) {
+		t.Fatalf("publishing a note whose pack GC deleted as an orphan = %v, want ErrSessionLost", err)
+	}
+	if w.root() != root {
+		t.Fatal("the refused publish moved the refs")
+	}
+	w.reopen()
+	w.put(main, "notes/slow", w.note(7, notes[0]))
+	w.commit(main, "the slow note, written again")
+	if got := w.readable(); !got[notes[0]] {
+		t.Fatal("the note written again does not read")
 	}
 }
 

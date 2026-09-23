@@ -407,46 +407,44 @@ func readWorkingSet(f *fixture) error {
 	return err
 }
 
-// staleOnce is a store whose next root swap fails as a fenced writer's
-// does: GC collected a chunk the write counted on (DESIGN §9).
-type staleOnce struct {
+// lostOnce is a store whose next root swap fails as the swap of a store
+// whose session GC lost does (DESIGN §9).
+type lostOnce struct {
 	*memstore.Store
 	armed bool
 }
 
-func (s *staleOnce) CompareAndSetRoot(ctx context.Context, expected, next hash.Hash) error {
+func (s *lostOnce) CompareAndSetRoot(ctx context.Context, expected, next hash.Hash) error {
 	if s.armed {
 		s.armed = false
-		return fmt.Errorf("%w: a chunk this write counted on", chunk.ErrStale)
+		return fmt.Errorf("%w: a chunk this write counted on", chunk.ErrSessionLost)
 	}
 	return s.Store.CompareAndSetRoot(ctx, expected, next)
 }
 
-// A write fenced by GC is a conflict to the host: ErrConflict (the cause,
-// chunk.ErrStale, kept), so a host that re-reads on a conflict re-reads
-// here too; nothing changed, and the host's second try lands.
-func TestAWriteFencedByGCIsAConflict(t *testing.T) {
-	s := &staleOnce{Store: memstore.New()}
+// A write whose store lost its session to GC is ErrSessionLost to the host,
+// not a conflict: reading again and writing again on the same store cannot
+// help, so the host reopens the repository instead. Nothing changed.
+func TestALostSessionIsNoConflict(t *testing.T) {
+	s := &lostOnce{Store: memstore.New()}
 	f := newFixtureOn(t, s)
 	main := vcs.MainBranch
 	f.put(main, "a", f.obj(7, "a"))
 	before := f.head(main)
 	s.armed = true
-	if _, err := f.r.CommitWorkingSet(ctx, alice, main, "fenced"); !errors.Is(err, vcs.ErrConflict) || !errors.Is(err, chunk.ErrStale) {
-		t.Fatalf("a commit fenced by GC = %v, want ErrConflict with chunk.ErrStale", err)
+	_, err := f.r.CommitWorkingSet(ctx, alice, main, "lost")
+	if !errors.Is(err, vcs.ErrSessionLost) || errors.Is(err, vcs.ErrConflict) {
+		t.Fatalf("a commit whose session GC lost = %v, want ErrSessionLost and no conflict", err)
 	}
 	if got := f.head(main); got.Hash != before.Hash {
-		t.Fatal("a fenced commit moved the head")
+		t.Fatal("the lost commit moved the head")
 	}
 	ws, err := f.r.WorkingSet(ctx, alice, main)
 	if err != nil {
 		t.Fatal(err)
 	}
 	s.armed = true
-	if _, err := f.r.UpdateWorkingSet(ctx, alice, main, ws, ws); !errors.Is(err, vcs.ErrConflict) || !errors.Is(err, chunk.ErrStale) {
-		t.Fatalf("a working-set update fenced by GC = %v, want ErrConflict with chunk.ErrStale", err)
-	}
-	if _, err := f.r.CommitWorkingSet(ctx, alice, main, "again"); err != nil {
-		t.Fatalf("the host's second try: %v", err)
+	if _, err := f.r.UpdateWorkingSet(ctx, alice, main, ws, ws); !errors.Is(err, vcs.ErrSessionLost) || errors.Is(err, vcs.ErrConflict) {
+		t.Fatalf("a working-set update whose session GC lost = %v, want ErrSessionLost and no conflict", err)
 	}
 }
