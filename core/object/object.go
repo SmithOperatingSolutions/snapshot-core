@@ -253,3 +253,21 @@ func (d *DiffIter) Detail(ctx context.Context, c Change) (model.DiffIter, error)
 	m, _ := d.to.reg.Resolve(c.To.Model, c.To.Root.Format)
 	return m.Diff(ctx, c.From.Root, c.To.Root, d.to.s)
 }
+
+// ErrNotWalkable is returned for an object whose model does not implement
+// model.Walker: what it reaches is unknown (docs/DESIGN.md §9).
+var ErrNotWalkable = errors.New("object: the object's model cannot walk")
+
+// Walk calls visit for every chunk the namespace at root reaches: its nodes,
+// root first, and each object it names, through the object's model. An
+// object whose model the registry lacks is model.ErrUnknownModel, and one
+// whose model cannot walk ErrNotWalkable: Walk refuses rather than name too
+// little.
+func Walk(ctx context.Context, rd chunk.Reader, c prolly.Config, reg *model.Registry, root hash.Hash, visit func(h hash.Hash, leaf bool) (bool, error)) error {
+	return errors.New("object: Walk is not written yet")
+}
+
+// WalkRef calls visit for every chunk one object reaches, through its model.
+func WalkRef(ctx context.Context, rd chunk.Reader, reg *model.Registry, ref Ref, visit func(h hash.Hash, leaf bool) (bool, error)) error {
+	return errors.New("object: WalkRef is not written yet")
+}
