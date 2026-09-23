@@ -18,6 +18,7 @@ import (
 	"errors"
 	"fmt"
 	"go/ast"
+	"go/build/constraint"
 	"go/parser"
 	"go/token"
 	"io"
@@ -145,8 +146,9 @@ func (c checker) git(args ...string) (string, error) {
 }
 
 // changedTests returns, per package directory, the Test functions that exist
-// at commit and either did not exist at its parent or have a different body.
-func (c checker) changedTests(commit string) (map[string][]string, error) {
+// at commit and either did not exist at its parent or have a different body,
+// and the build tags those tests' files require.
+func (c checker) changedTests(commit string) (map[string][]string, map[string][]string, error) {
 	parent := commit + "^"
 	if _, err := c.git("rev-parse", "--verify", "--quiet", parent); err != nil {
 		parent = "" // root commit: everything is new
@@ -159,16 +161,17 @@ func (c checker) changedTests(commit string) (map[string][]string, error) {
 		files, err = c.git("diff", "--name-only", "--diff-filter=AM", parent, commit)
 	}
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	changed := map[string][]string{}
+	tagSets := map[string]map[string]bool{}
 	for _, f := range strings.Fields(files) {
 		if !strings.HasSuffix(f, "_test.go") {
 			continue
 		}
 		now, err := c.git("show", commit+":"+f)
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 		before := ""
 		if parent != "" {
@@ -176,20 +179,77 @@ func (c checker) changedTests(commit string) (map[string][]string, error) {
 		}
 		nowFns, err := testBodies(f, now)
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 		beforeFns, _ := testBodies(f, before) // an unparsable parent just means "all new"
 		for name, body := range nowFns {
 			if prev, ok := beforeFns[name]; !ok || prev != body {
 				dir := path.Dir(f)
 				changed[dir] = append(changed[dir], name)
+				if tagSets[dir] == nil {
+					tagSets[dir] = map[string]bool{}
+				}
+				for _, tag := range buildTags(now) {
+					tagSets[dir][tag] = true
+				}
 			}
 		}
 	}
-	for _, names := range changed {
+	tags := map[string][]string{}
+	for dir, names := range changed {
 		sort.Strings(names)
+		for tag := range tagSets[dir] {
+			tags[dir] = append(tags[dir], tag)
+		}
+		sort.Strings(tags[dir])
 	}
-	return changed, nil
+	return changed, tags, nil
+}
+
+// platformTags are satisfied (or not) by the toolchain itself; forcing one on
+// with -tags would compile another platform's files.
+var platformTags = map[string]bool{
+	"linux": true, "darwin": true, "windows": true, "freebsd": true, "openbsd": true, "netbsd": true,
+	"unix": true, "js": true, "wasip1": true, "amd64": true, "arm64": true, "386": true, "arm": true,
+	"cgo": true, "ignore": true, "race": true,
+}
+
+// buildTags returns the custom tags a file's //go:build line mentions
+// un-negated (slow, crash, ...), which the test must be run with.
+func buildTags(src string) []string {
+	var tags []string
+	for _, line := range strings.Split(src, "\n") {
+		line = strings.TrimSpace(line)
+		if strings.HasPrefix(line, "package ") {
+			break
+		}
+		if !constraint.IsGoBuild(line) {
+			continue
+		}
+		expr, err := constraint.Parse(line)
+		if err != nil {
+			continue
+		}
+		var walk func(e constraint.Expr, negated bool)
+		walk = func(e constraint.Expr, negated bool) {
+			switch x := e.(type) {
+			case *constraint.TagExpr:
+				if !negated && !platformTags[x.Tag] && !strings.HasPrefix(x.Tag, "go1.") {
+					tags = append(tags, x.Tag)
+				}
+			case *constraint.NotExpr:
+				walk(x.X, !negated)
+			case *constraint.AndExpr:
+				walk(x.X, negated)
+				walk(x.Y, negated)
+			case *constraint.OrExpr:
+				walk(x.X, negated)
+				walk(x.Y, negated)
+			}
+		}
+		walk(expr, false)
+	}
+	return tags
 }
 
 // testBodies maps each top-level Test function in src to its source text.
@@ -230,7 +290,7 @@ func backfillMutants(body string) []string {
 }
 
 func (c checker) checkTestCommit(commit string, mutants []string) ([]Violation, int, error) {
-	changed, err := c.changedTests(commit)
+	changed, tags, err := c.changedTests(commit)
 	if err != nil {
 		return nil, 0, err
 	}
@@ -258,7 +318,7 @@ func (c checker) checkTestCommit(commit string, mutants []string) ([]Violation, 
 	for _, dir := range dirs {
 		names := changed[dir]
 		fmt.Fprintf(c.o.Log, "redcheck: %.9s ./%s %v\n", commit, dir, names)
-		results, err := c.runTests(wt, dir, names)
+		results, err := c.runTests(wt, dir, names, tags[dir])
 		if err != nil {
 			return nil, ran, err
 		}
@@ -362,9 +422,13 @@ type testEvent struct {
 	Output string
 }
 
-func (c checker) runTests(wt, dir string, names []string) (runResults, error) {
+func (c checker) runTests(wt, dir string, names, tags []string) (runResults, error) {
 	pattern := "^(" + strings.Join(names, "|") + ")$"
-	cmd := exec.CommandContext(c.ctx, c.o.GoCmd, "test", "-count=1", "-json", "-run", pattern, "./"+dir)
+	args := []string{"test", "-count=1", "-json", "-run", pattern}
+	if len(tags) > 0 {
+		args = append(args, "-tags", strings.Join(tags, ","))
+	}
+	cmd := exec.CommandContext(c.ctx, c.o.GoCmd, append(args, "./"+dir)...)
 	cmd.Dir = wt
 	cmd.Env = append(os.Environ(), "GOFLAGS=")
 	var stderr bytes.Buffer

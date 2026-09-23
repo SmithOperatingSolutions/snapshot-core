@@ -235,3 +235,10 @@ find: return append(append([]byte(keyFileTag), 0), header...)
 replace: return append([]byte(keyFileTag), 0)
 pkg: ./core/seal
 run: ^TestKeyFileFormatIsPinned$
+
+id: redcheck-passes-build-tags
+file: tools/redcheck/redcheck.go
+find: args = append(args, "-tags", strings.Join(tags, ","))
+replace: _ = tags
+pkg: ./tools/redcheck
+run: ^TestBuildTaggedTestIsRunWithItsTag$
