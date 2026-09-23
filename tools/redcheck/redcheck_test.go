@@ -438,3 +438,24 @@ func TestPassingContractChangeIsBlocked(t *testing.T) {
 			"on the (alias-importing) test that runs it:\n%s", reasons(rep))
 	}
 }
+
+// With no base named, redcheck checks from main; in a clone with no main
+// (a new repository whose first branch is the work branch), from the root
+// commit, so every commit after it is checked instead of none.
+func TestBaseDefaultsToMainThenTheRootCommit(t *testing.T) {
+	f := newFixture(t)
+	f.write("calc/calc_test.go", addTest)
+	f.commit("test(calc): Add adds")
+
+	rep, err := Check(context.Background(), Options{Dir: f.dir})
+	if err != nil || rep.Base != "main" || rep.Commits != 1 || rep.Checked != 1 {
+		t.Fatalf("with main present and no base named: base %q, %d commits, %d checked (%v); want main, 1, 1",
+			rep.Base, rep.Commits, rep.Checked, err)
+	}
+	f.git("branch", "-D", "main")
+	rep, err = Check(context.Background(), Options{Dir: f.dir})
+	if err != nil || rep.Base != f.base || rep.Commits != 1 || rep.Checked != 1 {
+		t.Fatalf("with no main and no base named: base %q, %d commits, %d checked (%v); want the root commit %s, 1, 1",
+			rep.Base, rep.Commits, rep.Checked, err, f.base)
+	}
+}

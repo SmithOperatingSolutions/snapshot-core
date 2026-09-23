@@ -60,9 +60,10 @@ type Violation struct {
 // Report is the outcome of a check. Checked and TestsRun exist so that a check
 // that scanned nothing cannot look like a pass (docs/TESTING.md §8).
 type Report struct {
-	Commits    int // commits in base..head
-	Checked    int // test: commits checked
-	TestsRun   int // added or changed tests executed across all test: commits
+	Base       string // the branch point checked from
+	Commits    int    // commits in base..head
+	Checked    int    // test: commits checked
+	TestsRun   int    // added or changed tests executed across all test: commits
 	Violations []Violation
 }
 
