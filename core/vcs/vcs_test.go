@@ -585,6 +585,62 @@ func TestConflictsBlockTheCommitUntilResolved(t *testing.T) {
 	}
 }
 
+// Engine Spec L3: "A commit is refused while unresolved conflicts exist on
+// that branch". So UpdateWorkingSet cannot change a merge in progress: not
+// drop it, not empty its conflicts, not name a commit that was never merged
+// as the second parent, and not by misstating the merge state in prev.
+// Editing files during a merge keeps the merge state, and goes through.
+func TestUpdateWorkingSetKeepsTheMergeState(t *testing.T) {
+	f := newFixture(t)
+	main := vcs.MainBranch
+	f.put(main, "doc", f.obj(8, "base"))
+	base := f.commit(main, "base")
+	f.branchFrom("dev")
+	f.put("dev", "doc", f.obj(8, "dev"))
+	theirs := f.commit("dev", "dev work")
+	f.put(main, "doc", f.obj(8, "main"))
+	f.commit(main, "main work")
+	if r, err := f.r.Merge(ctx, alice, main, theirs.Hash); err != nil || len(r.Conflicts) != 1 {
+		t.Fatalf("fixture: the merge found %d conflicts (%v), want 1", len(r.Conflicts), err)
+	}
+	ws, err := f.r.WorkingSet(ctx, alice, main)
+	if err != nil || ws.Merge == nil {
+		t.Fatalf("fixture: the working set is %+v (%v), want a merge in progress", ws, err)
+	}
+	none, err := prolly.Empty(ctx, f.s, f.o.Config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	misstated := ws
+	misstated.Merge = nil
+	for _, c := range []struct {
+		name  string
+		prev  vcs.WorkingSet
+		merge *vcs.MergeState
+	}{
+		{"dropped", ws, nil},
+		{"with its conflicts emptied", ws, &vcs.MergeState{Base: ws.Merge.Base, Theirs: ws.Merge.Theirs, Conflicts: none.Root()}},
+		{"naming another commit as theirs", ws, &vcs.MergeState{Base: ws.Merge.Base, Theirs: base.Hash, Conflicts: ws.Merge.Conflicts}},
+		{"dropped, from a prev that says there is none", misstated, nil},
+	} {
+		next := ws
+		next.Merge = c.merge
+		if _, err := f.r.UpdateWorkingSet(ctx, alice, main, c.prev, next); !errors.Is(err, vcs.ErrMergeState) {
+			t.Errorf("an update with the merge %s = %v, want ErrMergeState", c.name, err)
+		}
+		if now, _ := f.r.WorkingSet(ctx, alice, main); now.Hash != ws.Hash {
+			t.Fatalf("a refused update (the merge %s) changed the working set", c.name)
+		}
+	}
+	if _, err := f.r.CommitWorkingSet(ctx, alice, main, "unresolved"); !errors.Is(err, vcs.ErrUnresolvedConflicts) {
+		t.Fatalf("committing after the refused updates = %v, want ErrUnresolvedConflicts", err)
+	}
+	f.put(main, "notes", f.obj(7, "during the merge"))
+	if now, _ := f.r.WorkingSet(ctx, alice, main); now.Merge == nil || *now.Merge != *ws.Merge {
+		t.Fatalf("editing a file during the merge left the merge state %+v, want %+v", now.Merge, ws.Merge)
+	}
+}
+
 // Engine Spec L3: "A CellMerger error mid-merge leaves the working set hash
 // unchanged"; so does passing the conflict limit.
 func TestAFailedMergeLeavesTheWorkingSetUnchanged(t *testing.T) {

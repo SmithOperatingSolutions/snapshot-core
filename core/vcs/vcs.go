@@ -45,6 +45,7 @@ var (
 	ErrInvalidName         = errors.New("vcs: invalid branch or tag name")
 	ErrInvalidLimit        = errors.New("vcs: log limit must be 1 to 10,000")
 	ErrUnresolvedConflicts = errors.New("vcs: unresolved merge conflicts")
+	ErrMergeState          = errors.New("vcs: only merging, resolving and committing change a merge in progress")
 )
 
 // Options configures a repository.
