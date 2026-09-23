@@ -24,9 +24,12 @@ import (
 	"os"
 	"os/exec"
 	"path"
+	"path/filepath"
 	"regexp"
 	"sort"
 	"strings"
+
+	"github.com/SmithOperatingSolutions/snapshot-core/tools/internal/mutation"
 )
 
 // Options configures a check.
@@ -63,6 +66,7 @@ var (
 	testSubject = regexp.MustCompile(`^test(\([^)]*\))?!?:`)
 	featSubject = regexp.MustCompile(`^(feat|fix)(\([^)]*\))?!?:`)
 	testFunc    = regexp.MustCompile(`^Test([^a-z].*)?$`)
+	redTrailer  = regexp.MustCompile(`(?m)^Red-Check:\s*mutants\s+(.+)$`)
 )
 
 // Check runs the red-check over base..head.
@@ -75,6 +79,9 @@ func Check(ctx context.Context, o Options) (Report, error) {
 	}
 	if o.Log == nil {
 		o.Log = io.Discard
+	}
+	if o.MutantsFile == "" {
+		o.MutantsFile = "tools/mutate/mutants.txt"
 	}
 	c := checker{ctx: ctx, o: o}
 
@@ -96,7 +103,11 @@ func Check(ctx context.Context, o Options) (Report, error) {
 		case testSubject.MatchString(subject):
 			sawTest = true
 			rep.Checked++
-			vs, ran, err := c.checkTestCommit(commit)
+			body, err := c.git("log", "-1", "--format=%B", commit)
+			if err != nil {
+				return rep, err
+			}
+			vs, ran, err := c.checkTestCommit(commit, backfillMutants(body))
 			if err != nil {
 				return rep, fmt.Errorf("%s %q: %w", short, subject, err)
 			}
@@ -202,7 +213,23 @@ func testBodies(name, src string) (map[string]string, error) {
 	return fns, nil
 }
 
-func (c checker) checkTestCommit(commit string) ([]Violation, int, error) {
+// backfillMutants returns the mutant IDs a "Red-Check: mutants a, b" trailer
+// names, or nil for an ordinary red test commit.
+func backfillMutants(body string) []string {
+	m := redTrailer.FindStringSubmatch(body)
+	if m == nil {
+		return nil
+	}
+	var ids []string
+	for _, id := range strings.Split(m[1], ",") {
+		if id = strings.TrimSpace(id); id != "" {
+			ids = append(ids, id)
+		}
+	}
+	return ids
+}
+
+func (c checker) checkTestCommit(commit string, mutants []string) ([]Violation, int, error) {
 	changed, err := c.changedTests(commit)
 	if err != nil {
 		return nil, 0, err
@@ -242,22 +269,81 @@ func (c checker) checkTestCommit(commit string) ([]Violation, int, error) {
 		}
 		for _, n := range names {
 			ran++
-			r := results.tests[n]
-			switch {
-			case r.panicked:
-				vs = append(vs, Violation{Test: n, Reason: "panicked — a red must be an assertion, not a panic"})
-			case r.action == "fail":
-				// the red we want
-			case r.action == "pass":
-				vs = append(vs, Violation{Test: n, Reason: "passed without the change — it is not testing it"})
-			case r.action == "skip":
-				vs = append(vs, Violation{Test: n, Reason: "was skipped — a skip is a deleted test"})
-			default:
-				vs = append(vs, Violation{Test: n, Reason: "did not run"})
+			if v, bad := judge(n, results.tests[n], mutants != nil); bad {
+				vs = append(vs, v)
 			}
 		}
 	}
+	if mutants != nil {
+		mvs, err := c.checkMutants(wt, changed, mutants)
+		if err != nil {
+			return nil, ran, err
+		}
+		vs = append(vs, mvs...)
+	}
 	return vs, ran, nil
+}
+
+// judge classifies one test's outcome. An ordinary test: commit wants a fail;
+// a backfill wants a pass, because the behavior it guards already exists.
+func judge(name string, r *testResult, backfill bool) (Violation, bool) {
+	switch {
+	case r.panicked:
+		return Violation{Test: name, Reason: "panicked — a red must be an assertion, not a panic"}, true
+	case r.action == "skip":
+		return Violation{Test: name, Reason: "was skipped — a skip is a deleted test"}, true
+	case r.action == "":
+		return Violation{Test: name, Reason: "did not run"}, true
+	case backfill && r.action == "fail":
+		return Violation{Test: name, Reason: "backfilled test fails at its own commit — it must guard behavior that exists"}, true
+	case !backfill && r.action == "pass":
+		return Violation{Test: name, Reason: "passed without the change — it is not testing it"}, true
+	}
+	return Violation{}, false
+}
+
+// checkMutants proves a backfill: every named mutant exists at this commit and
+// is killed by the tests this commit added or changed — not by some other test.
+func (c checker) checkMutants(wt string, changed map[string][]string, ids []string) ([]Violation, error) {
+	f, err := os.Open(filepath.Join(wt, filepath.FromSlash(c.o.MutantsFile)))
+	if err != nil {
+		return []Violation{{Reason: fmt.Sprintf("names mutants %v but %s is unreadable at this commit: %v", ids, c.o.MutantsFile, err)}}, nil
+	}
+	defined, err := mutation.Parse(f)
+	f.Close()
+	if err != nil {
+		return []Violation{{Reason: fmt.Sprintf("%s at this commit does not parse: %v", c.o.MutantsFile, err)}}, nil
+	}
+	byID := map[string]mutation.Mutant{}
+	for _, m := range defined {
+		byID[m.ID] = m
+	}
+	var vs []Violation
+	for _, id := range ids {
+		m, ok := byID[id]
+		if !ok {
+			vs = append(vs, Violation{Reason: fmt.Sprintf("names mutant %q, which %s at this commit does not define", id, c.o.MutantsFile)})
+			continue
+		}
+		names := changed[strings.TrimPrefix(path.Clean(m.Pkg), "./")]
+		if len(names) == 0 {
+			vs = append(vs, Violation{Reason: fmt.Sprintf("mutant %q is judged in %s, where this commit changed no test", id, m.Pkg)})
+			continue
+		}
+		m.Run = "^(" + strings.Join(names, "|") + ")$"
+		outs, err := mutation.Run(c.ctx, mutation.Options{Root: wt, GoCmd: c.o.GoCmd, Log: c.o.Log}, []mutation.Mutant{m})
+		if err != nil {
+			return nil, err
+		}
+		switch o := outs[0]; o.Status {
+		case mutation.Killed:
+		case mutation.Survived:
+			vs = append(vs, Violation{Reason: fmt.Sprintf("mutant %q survived this commit's tests: %s", id, o.Detail)})
+		default:
+			vs = append(vs, Violation{Reason: fmt.Sprintf("mutant %q is invalid: %s", id, o.Detail)})
+		}
+	}
+	return vs, nil
 }
 
 type testResult struct {
