@@ -26,6 +26,12 @@ jobs:
       - uses: actions/setup-go@v5
         with: { go-version-file: go.mod, cache: true }
       - run: go run ./tools/ci -only fuzz -fuzztime 10m
+      - if: failure() # a finding's input, to minimize and check in (CONTRIBUTING)
+        uses: actions/upload-artifact@v4
+        with:
+          name: fuzz-findings
+          path: '**/testdata/fuzz/**'
+          if-no-files-found: ignore
 
   crash:
     runs-on: ubuntu-latest
