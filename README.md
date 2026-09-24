@@ -133,3 +133,7 @@ and the testing standard, [`docs/TESTING.md`](docs/TESTING.md).
 - [`docs/DESIGN.md`](docs/DESIGN.md): how the spec became code, on-disk formats, protocols, GC
 - [`docs/PROGRESS.md`](docs/PROGRESS.md): milestones, checklists and their tests, what testing found
 - [`docs/specs/engine-spec.md`](docs/specs/engine-spec.md): the consuming engine's spec; its L0 to L3 rules apply here
+
+## License
+
+Apache License 2.0; see [`LICENSE`](LICENSE).
