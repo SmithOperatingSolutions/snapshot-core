@@ -524,6 +524,21 @@ func (r *Repo) CommitWorkingSet(ctx context.Context, p auth.Principal, branch, m
 	return out, err
 }
 
+// Commit replaces a branch's working and staged namespaces with namespace
+// and commits it onto the branch's head, in one publish: the working set
+// must still be prev (ErrConflict otherwise) and carry the merge in
+// progress as stored, whose conflicts must be resolved; a merge adds its
+// second parent. It is UpdateWorkingSet then CommitWorkingSet, at one
+// swap's cost (#10).
+func (r *Repo) Commit(ctx context.Context, p auth.Principal, branch string, prev WorkingSet, namespace hash.Hash, message string) (Commit, error) {
+	next := prev
+	next.Working, next.Staged = namespace, namespace
+	if _, err := r.UpdateWorkingSet(ctx, p, branch, prev, next); err != nil {
+		return Commit{}, err
+	}
+	return r.CommitWorkingSet(ctx, p, branch, message)
+}
+
 // CreateBranch names a new branch at a commit.
 func (r *Repo) CreateBranch(ctx context.Context, p auth.Principal, name string, at hash.Hash) error {
 	if err := r.branchCheck(ctx, p, auth.Manage, name); err != nil {
