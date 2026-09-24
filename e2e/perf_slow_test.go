@@ -134,12 +134,7 @@ func (p *perfRepo) put(path string, rd io.Reader) (write, commit time.Duration) 
 	if n, err = e.Flush(ctx); err != nil {
 		p.t.Fatal(err)
 	}
-	next := ws
-	next.Working, next.Staged = n.Root(), n.Root()
-	if _, err := p.r.UpdateWorkingSet(ctx, p.me, vcs.MainBranch, ws, next); err != nil {
-		p.t.Fatal(err)
-	}
-	if _, err := p.r.CommitWorkingSet(ctx, p.me, vcs.MainBranch, "put "+path); err != nil {
+	if _, err := p.r.Commit(ctx, p.me, vcs.MainBranch, ws, n.Root(), "put "+path); err != nil {
 		p.t.Fatal(err)
 	}
 	return write, time.Since(t1)

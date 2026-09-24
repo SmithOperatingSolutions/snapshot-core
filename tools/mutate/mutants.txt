@@ -4306,3 +4306,24 @@ find: payload = make([]byte, len(z))\n\t\tcopy(payload, z)
 replace: payload = z
 pkg: ./core/chunk/packstore
 run: ^TestAChunkPreparedForOnePackStoresInTheNext$
+
+id: vcs-commit-needs-the-working-set-it-was-given
+file: core/vcs/vcs.go
+find: if work != prev.Hash {\n\t\t\treturn fmt.Errorf("%w: branch %s", ErrConflict, branch)\n\t\t}\n\t\tstored, err := r.readWorkingSet(ctx, work)\n\t\tif err != nil {\n\t\t\treturn err\n\t\t}\n\t\tif !sameMerge(stored.Merge, prev.Merge) {
+replace: if work != prev.Hash && false {\n\t\t\treturn fmt.Errorf("%w: branch %s", ErrConflict, branch)\n\t\t}\n\t\tstored, err := r.readWorkingSet(ctx, work)\n\t\tif err != nil {\n\t\t\treturn err\n\t\t}\n\t\tif !sameMerge(stored.Merge, prev.Merge) {
+pkg: ./core/vcs
+run: ^TestACommitIsOnePublish$
+
+id: vcs-commit-leaves-a-clean-working-set
+file: core/vcs/vcs.go
+find: nextWS, err := r.s.Put(ctx, WorkingSet{Working: namespace, Staged: namespace}.encode())
+replace: nextWS, err := r.s.Put(ctx, WorkingSet{Working: stored.Working, Staged: namespace}.encode())
+pkg: ./core/vcs
+run: ^TestACommitIsOnePublish$
+
+id: vcs-commit-parents-the-head
+file: core/vcs/vcs.go
+find: c := Commit{Parents: []hash.Hash{head.Hash}, Namespace: namespace, Height: head.Height + 1,
+replace: c := Commit{Parents: nil, Namespace: namespace, Height: head.Height + 1,
+pkg: ./core/vcs
+run: ^TestACommitIsOnePublish$
