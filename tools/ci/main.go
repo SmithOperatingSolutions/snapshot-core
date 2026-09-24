@@ -42,6 +42,7 @@ type config struct {
 	base            string
 	fuzzTime        string
 	crashIterations int
+	layout          layout          // the module's product, adapters and path
 	required        map[string]bool // steps named with -only must not skip
 }
 
@@ -70,7 +71,15 @@ func run() int {
 	flag.StringVar(&c.base, "base", "", "red-check branch point (default: main, else origin/main, else the root commit)")
 	flag.StringVar(&c.fuzzTime, "fuzztime", envOr("FUZZTIME", "30s"), "time per fuzz target")
 	flag.IntVar(&c.crashIterations, "crash-iterations", 100, "kill -9 iterations per crash harness (weekly: 1000)")
+	product := flag.String("product", "core/,model/", "comma-separated directories that are the product: gated, fuzzed, crash-tested, measured")
+	adapters := flag.String("adapters", "core/dnx,core/blob/s3", "comma-separated product packages that adapt a third-party API (an 80% coverage gate)")
 	flag.Parse()
+	module, err := modulePath(context.Background())
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "ci: %v\n", err)
+		return 2
+	}
+	c.layout = newLayout(module, *product, *adapters)
 
 	var selected []step
 	if *only != "" {
@@ -195,8 +204,8 @@ func stepRace(ctx context.Context, _ *config) error {
 	return stream(ctx, []string{"CGO_ENABLED=1"}, "go", "test", "-race", "-count=1", "-timeout", "30m", "./...")
 }
 
-func stepCover(ctx context.Context, _ *config) error {
-	pkgs, err := productPackages(ctx)
+func stepCover(ctx context.Context, c *config) error {
+	pkgs, err := productPackages(ctx, c.layout)
 	if err != nil {
 		return err
 	}
@@ -218,13 +227,13 @@ func stepCover(ctx context.Context, _ *config) error {
 	if err != nil {
 		return err
 	}
-	cs := CoverageFromProfile(string(b))
-	for _, c := range cs {
-		if th := Threshold(c.Pkg); th > 0 {
-			fmt.Printf("  %-40s %5.1f%%  (gate %.0f%%)\n", c.Pkg, c.Percent, th)
+	cs := c.layout.CoverageFromProfile(string(b))
+	for _, pc := range cs {
+		if th := c.layout.Threshold(pc.Pkg); th > 0 {
+			fmt.Printf("  %-40s %5.1f%%  (gate %.0f%%)\n", pc.Pkg, pc.Percent, th)
 		}
 	}
-	fs := GateCoverage(cs)
+	fs := c.layout.GateCoverage(cs)
 	if len(fs) == 0 {
 		return nil
 	}
@@ -243,11 +252,11 @@ func stepRedcheck(ctx context.Context, c *config) error {
 			return err
 		}
 	}
-	return stream(ctx, nil, "go", "run", "./tools/redcheck", "-base", base)
+	return tool(ctx, "redcheck", "-base", base)
 }
 
 func stepCrash(ctx context.Context, c *config) error {
-	pkgs, err := productPackages(ctx)
+	pkgs, err := productPackages(ctx, c.layout)
 	if err != nil {
 		return err
 	}
@@ -262,8 +271,8 @@ func stepCrash(ctx context.Context, c *config) error {
 // 1M-entry maps): too slow for every push, run weekly and by `mise run ci`.
 // One package at a time: these tests measure, and a measurement sharing
 // the machine with another package's is a measurement of the contention.
-func stepSlow(ctx context.Context, _ *config) error {
-	pkgs, err := productPackages(ctx)
+func stepSlow(ctx context.Context, c *config) error {
+	pkgs, err := productPackages(ctx, c.layout)
 	if err != nil {
 		return err
 	}
@@ -277,7 +286,7 @@ func stepSlow(ctx context.Context, _ *config) error {
 var fuzzName = regexp.MustCompile(`^Fuzz\w+$`)
 
 func stepFuzz(ctx context.Context, c *config) error {
-	pkgs, err := productPackages(ctx)
+	pkgs, err := productPackages(ctx, c.layout)
 	if err != nil {
 		return err
 	}
@@ -307,7 +316,7 @@ func stepFuzz(ctx context.Context, c *config) error {
 }
 
 func stepMutate(ctx context.Context, _ *config) error {
-	return stream(ctx, nil, "go", "run", "./tools/mutate")
+	return tool(ctx, "mutate")
 }
 
 // s3Image is the S3-compatible server the S3 suites run against in CI,
@@ -324,7 +333,7 @@ const s3Image = "docker.io/chrislusf/seaweedfs:4.47@sha256:ce9e796f1fe6f06968f4c
 // run's real provider); otherwise it starts SeaweedFS in Docker, or skips
 // when Docker is unavailable. SNAPSHOT_S3_REQUIRED=1 makes the tests fail
 // rather than skip on a missing endpoint.
-func stepS3(ctx context.Context, _ *config) error {
+func stepS3(ctx context.Context, c *config) error {
 	if _, err := os.Stat("core/blob/s3"); err != nil {
 		return errSkip{"no S3 backend yet"}
 	}
@@ -353,7 +362,7 @@ func stepS3(ctx context.Context, _ *config) error {
 			"SNAPSHOT_S3_SECRET_KEY=snapshotcore-secret", "SNAPSHOT_S3_BUCKET=snapshot-core-test",
 			"SNAPSHOT_S3_LIST_ORDER=tree")
 	}
-	pkgs, err := productPackages(ctx)
+	pkgs, err := productPackages(ctx, c.layout)
 	if err != nil {
 		return err
 	}
@@ -369,19 +378,37 @@ func stepS3(ctx context.Context, _ *config) error {
 
 // --- helpers ---
 
-func productPackages(ctx context.Context) ([]string, error) {
+func productPackages(ctx context.Context, l layout) ([]string, error) {
 	out, err := output(ctx, nil, "go", "list", "-e", "./...")
 	if err != nil {
 		return nil, err
 	}
 	var pkgs []string
 	for _, p := range strings.Fields(out) {
-		rel := strings.TrimPrefix(p, modulePrefix)
-		if strings.HasPrefix(rel, "core/") || strings.HasPrefix(rel, "model/") {
+		if rel := l.rel(p); l.isProduct(rel) {
 			pkgs = append(pkgs, "./"+rel)
 		}
 	}
 	return pkgs, nil
+}
+
+// modulePath is the path of the module the runner runs in.
+func modulePath(ctx context.Context) (string, error) {
+	out, err := output(ctx, nil, "go", "list", "-m")
+	if err != nil {
+		return "", fmt.Errorf("reading the module path: %w", err)
+	}
+	return strings.TrimSpace(out), nil
+}
+
+// tool runs one of the storage core's tools: from ./tools/<name> in the
+// core itself, and as a Go tool (go.mod's tool directive) in a module that
+// takes the core as a dependency.
+func tool(ctx context.Context, name string, args ...string) error {
+	if _, err := os.Stat("tools/" + name); err == nil {
+		return stream(ctx, nil, "go", append([]string{"run", "./tools/" + name}, args...)...)
+	}
+	return stream(ctx, nil, "go", append([]string{"tool", name}, args...)...)
 }
 
 func defaultBase(ctx context.Context) (string, error) {
