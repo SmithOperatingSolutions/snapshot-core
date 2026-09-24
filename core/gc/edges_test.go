@@ -93,7 +93,7 @@ func ripe(t *testing.T) *world {
 	if rep, err := w.gc(); err != nil || rep.Condemned == 0 {
 		t.Fatalf("fixture: the first run condemned %d (%v)", rep.Condemned, err)
 	}
-	w.jump = grace + time.Minute
+	w.setJump(grace + time.Minute)
 	return w
 }
 
@@ -174,7 +174,7 @@ func TestGCDefaultsToSevenDaysAndTheWallClock(t *testing.T) {
 		jump   time.Duration
 		expire bool
 	}{{time.Minute, false}, {7*24*time.Hour - time.Minute, false}, {7*24*time.Hour + time.Minute, true}} {
-		w.jump = c.jump
+		w.setJump(c.jump)
 		rep, err := gc.Run(ctx, o)
 		if err != nil {
 			t.Fatal(err)
@@ -199,7 +199,7 @@ func TestGCOnAStoreWithNoRepository(t *testing.T) {
 	if rep, err := w.gcOn(bare); err != nil || len(rep.Deleted) != 0 {
 		t.Fatalf("GC deleted %d strays younger than the window (%v)", len(rep.Deleted), err)
 	}
-	w.jump = grace + time.Minute
+	w.setJump(grace + time.Minute)
 	rep, err := w.gcOn(bare)
 	if err != nil || len(rep.Deleted) != blob.MaxListPage+1 {
 		t.Fatalf("GC deleted %d of %d strays past the window (%v)", len(rep.Deleted), blob.MaxListPage+1, err)

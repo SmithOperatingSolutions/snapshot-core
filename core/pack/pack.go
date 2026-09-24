@@ -22,6 +22,7 @@ import (
 	"errors"
 	"fmt"
 	"sort"
+	"sync"
 
 	"github.com/klauspost/compress/zstd"
 
@@ -99,8 +100,9 @@ func Name(b []byte) string {
 // Codec holds the zstd encoder and a size-bounded decoder. Safe for
 // concurrent use; one per chunk store.
 type Codec struct {
-	enc *zstd.Encoder
-	dec *zstd.Decoder
+	enc     *zstd.Encoder
+	dec     *zstd.Decoder
+	scratch sync.Pool // []byte the encoder writes into
 }
 
 // NewCodec builds a codec.
@@ -116,7 +118,9 @@ func NewCodec() (*Codec, error) {
 		_ = enc.Close()
 		return nil, err
 	}
-	return &Codec{enc: enc, dec: dec}, nil
+	c := &Codec{enc: enc, dec: dec}
+	c.scratch.New = func() any { return make([]byte, 0, MaxChunkSize+MaxChunkSize/8) }
+	return c, nil
 }
 
 // Close releases the codec.
@@ -170,7 +174,11 @@ func NewWriter(kr *seal.Keyring, repo seal.RepoID, codec *Codec, maxSize int) (*
 	w.U16(version)
 	w.U16(0) // flags
 	w.Raw(salt[:])
-	return &Writer{codec: codec, keys: keys, salt: salt, maxSize: maxSize, buf: w.Bytes(),
+	// The pack's bytes, allocated once at the pack's size: appending frames
+	// then never grows and copies the pack, which was a third of what a
+	// store did per chunk (#10).
+	buf := make([]byte, 0, maxSize)
+	return &Writer{codec: codec, keys: keys, salt: salt, maxSize: maxSize, buf: append(buf, w.Bytes()...),
 		entries: map[hash.Hash]Entry{}}, nil
 }
 
@@ -182,32 +190,79 @@ func indexBound(n int) int { return len(indexMagic) + 2 + 5 + n*maxEntryLen + se
 // past its size or count limit (ErrFull: start another pack). A pack's first
 // chunk is always accepted, so one oversized chunk still gets a pack.
 func (w *Writer) Add(h hash.Hash, data []byte) error {
+	if w.finished || len(data) > MaxChunkSize || len(w.entries) >= MaxChunksPerPack {
+		return w.AddCompressed(h, len(data), nil, CodecRaw) // the refusal, without compressing first
+	}
+	payload, codec := w.codec.Compress(data)
+	return w.AddCompressed(h, len(data), payload, codec)
+}
+
+// Compress is the payload a chunk is stored as: zstd when that is shorter,
+// else the bytes themselves. Safe to call from many goroutines at once.
+// The encoder writes into a scratch buffer kept from call to call, so a
+// chunk that does not compress costs no allocation, and one that does
+// costs its compressed size.
+func (c *Codec) Compress(data []byte) (payload []byte, codec uint8) {
+	if len(data) == 0 {
+		return data, CodecRaw
+	}
+	scratch := c.scratch.Get().([]byte)
+	z := c.enc.EncodeAll(data, scratch[:0])
+	if len(z) < len(data) {
+		payload = make([]byte, len(z))
+		copy(payload, z)
+		codec = CodecZstd
+	} else {
+		payload, codec = data, CodecRaw
+	}
+	c.scratch.Put(z[:0]) //nolint:staticcheck // SA6002: the slice is what the pool holds
+	return payload, codec
+}
+
+// AddCompressed is Add for a chunk already compressed by this writer's
+// codec (Compress): rawLen is the chunk's length, payload and codec what
+// Compress returned. The seal, which needs this pack's keys, happens here.
+func (w *Writer) AddCompressed(h hash.Hash, rawLen int, payload []byte, codec uint8) error {
+	if w.finished || rawLen > MaxChunkSize || len(w.entries) >= MaxChunksPerPack {
+		return w.AddSealed(h, rawLen, nil, codec) // the refusal, without sealing first
+	}
+	sealed, err := w.Seal(h, payload) // a duplicate is refused by AddSealed, after a seal it did not need
+
+	if err != nil {
+		return err
+	}
+	return w.AddSealed(h, rawLen, sealed, codec)
+}
+
+// Salt identifies this pack's keys: a frame sealed by one writer's Seal
+// belongs in no other pack.
+func (w *Writer) Salt() seal.Salt { return w.salt }
+
+// Seal seals a compressed payload for this pack, on any goroutine (#10):
+// the chunk's hash is the frame's associated data.
+func (w *Writer) Seal(h hash.Hash, payload []byte) ([]byte, error) {
+	return w.keys.chunk.Seal(h[:], payload)
+}
+
+// AddSealed appends a frame this writer's Seal produced: rawLen is the
+// chunk's length, codec what Compress returned. It refuses what Add does.
+func (w *Writer) AddSealed(h hash.Hash, rawLen int, sealed []byte, codec uint8) error {
 	switch {
 	case w.finished:
 		return errors.New("pack: writer is finished")
-	case len(data) > MaxChunkSize:
-		return fmt.Errorf("%w: %d bytes, limit %d", ErrTooLarge, len(data), MaxChunkSize)
+	case rawLen > MaxChunkSize:
+		return fmt.Errorf("%w: %d bytes, limit %d", ErrTooLarge, rawLen, MaxChunkSize)
 	case len(w.entries) >= MaxChunksPerPack:
 		return ErrFull
 	}
 	if _, ok := w.entries[h]; ok {
 		return ErrDup
 	}
-	payload, codec := data, CodecRaw
-	if len(data) > 0 {
-		if z := w.codec.enc.EncodeAll(data, nil); len(z) < len(data) {
-			payload, codec = z, CodecZstd
-		}
-	}
-	sealed, err := w.keys.chunk.Seal(h[:], payload)
-	if err != nil {
-		return err
-	}
 	if len(w.entries) > 0 && len(w.buf)+len(sealed)+indexBound(len(w.entries)+1)+TrailerSize > w.maxSize {
 		return ErrFull
 	}
 	w.entries[h] = Entry{Hash: h, Offset: uint32(len(w.buf)), StoredLen: uint32(len(sealed)),
-		RawLen: uint32(len(data)), Codec: codec}
+		RawLen: uint32(rawLen), Codec: codec}
 	w.buf = append(w.buf, sealed...)
 	return nil
 }
@@ -249,12 +304,14 @@ func (w *Writer) Finish() (Built, error) {
 	if err != nil {
 		return Built{}, err
 	}
+	// The pack is built in the writer's own buffer, allocated at the pack's
+	// size, so finishing copies nothing; the writer is done with it.
 	indexOffset := len(w.buf)
-	b := make([]byte, 0, len(w.buf)+len(sealed)+TrailerSize)
-	b = append(append(b, w.buf...), sealed...)
+	b := w.buf
+	b = append(b, sealed...)
 	b = binary.LittleEndian.AppendUint64(b, uint64(indexOffset))
 	b = binary.LittleEndian.AppendUint32(b, uint32(len(sealed)))
-	b = append(b, trailerMagic...)
+	b = append(b, trailerMagic...) // w.buf's array, appended beyond its length: a Get on the frames meanwhile reads bytes this never touches
 	name := Name(b)
 	return Built{Name: name, Bytes: b, Info: Info{Name: name, Salt: w.salt, Size: int64(len(b)), Entries: entries}}, nil
 }

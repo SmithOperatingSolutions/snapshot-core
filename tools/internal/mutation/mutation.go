@@ -23,6 +23,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -41,9 +42,10 @@ type Mutant struct {
 
 // Outcome is what happened to one mutant.
 type Outcome struct {
-	Mutant Mutant
-	Status Status
-	Detail string
+	Mutant   Mutant
+	Status   Status
+	Detail   string
+	TimedOut bool // Killed, but by the test hanging until the timeout
 }
 
 // Status classifies an outcome.
@@ -178,6 +180,7 @@ type Options struct {
 	GoCmd   string        // defaults to "go"
 	Log     io.Writer     // progress; nil discards
 	Timeout time.Duration // per mutant test run; 0: DefaultTimeout
+	Workers int           // mutants run at once, each in a copy of its own; 0 or 1: one after another
 }
 
 // DefaultTimeout bounds one mutant's test run: a mutant that makes a test
@@ -185,7 +188,11 @@ type Options struct {
 // run, the crash harness at 1,000 kills, takes seconds.
 const DefaultTimeout = 3 * time.Minute
 
-// Run applies each mutant in a throwaway copy of Root and reports outcomes.
+// Run applies each mutant in a throwaway copy of Root and reports outcomes,
+// in the order given. With Options.Workers above one, that many run at once,
+// each in a copy of its own; a mutant whose test then times out is run
+// again alone before it is judged, since a test slowed by its neighbours'
+// builds must never pose as a kill and hide a survivor.
 func Run(ctx context.Context, o Options, ms []Mutant) ([]Outcome, error) {
 	if o.GoCmd == "" {
 		o.GoCmd = "go"
@@ -196,21 +203,66 @@ func Run(ctx context.Context, o Options, ms []Mutant) ([]Outcome, error) {
 	if o.Timeout == 0 {
 		o.Timeout = DefaultTimeout
 	}
-	work, err := os.MkdirTemp("", "mutate-*")
-	if err != nil {
-		return nil, err
+	workers := max(1, min(o.Workers, len(ms)))
+	dirs := make([]string, 0, workers)
+	for range workers {
+		work, err := os.MkdirTemp("", "mutate-*")
+		if err != nil {
+			return nil, err
+		}
+		defer os.RemoveAll(work)
+		if err := copyTree(o.Root, work); err != nil {
+			return nil, fmt.Errorf("copying the tree: %w", err)
+		}
+		dirs = append(dirs, work)
 	}
-	defer os.RemoveAll(work)
-	if err := copyTree(o.Root, work); err != nil {
-		return nil, fmt.Errorf("copying the tree: %w", err)
+	outs := make([]Outcome, len(ms))
+	if workers == 1 {
+		for i, m := range ms {
+			if err := ctx.Err(); err != nil {
+				return outs[:i], err
+			}
+			fmt.Fprintf(o.Log, "mutate: %s (%s)\n", m.ID, m.File)
+			outs[i] = runOne(ctx, o, dirs[0], m)
+		}
+		return outs, nil
 	}
-	outs := make([]Outcome, 0, len(ms))
-	for _, m := range ms {
+	jobs := make(chan int)
+	var wg sync.WaitGroup
+	for _, dir := range dirs {
+		wg.Add(1)
+		go func(dir string) {
+			defer wg.Done()
+			for i := range jobs {
+				if ctx.Err() != nil {
+					continue
+				}
+				fmt.Fprintf(o.Log, "mutate: %s (%s)\n", ms[i].ID, ms[i].File)
+				outs[i] = runOne(ctx, o, dir, ms[i])
+			}
+		}(dir)
+	}
+	for i := range ms {
+		jobs <- i
+	}
+	close(jobs)
+	wg.Wait()
+	if err := ctx.Err(); err != nil {
+		return outs, err
+	}
+	// Hangs under load: again, alone, and that run is the verdict.
+	for i, out := range outs {
+		if !out.TimedOut {
+			continue
+		}
 		if err := ctx.Err(); err != nil {
 			return outs, err
 		}
-		fmt.Fprintf(o.Log, "mutate: %s (%s)\n", m.ID, m.File)
-		outs = append(outs, runOne(ctx, o, work, m))
+		fmt.Fprintf(o.Log, "mutate: %s (%s) again, alone: it timed out among the others\n", ms[i].ID, ms[i].File)
+		outs[i] = runOne(ctx, o, dirs[0], ms[i])
+		if outs[i].TimedOut {
+			outs[i].Detail = fmt.Sprintf("timed out after %v alone: a hang counts as a kill", o.Timeout)
+		}
 	}
 	return outs, nil
 }
@@ -248,7 +300,7 @@ func runOne(ctx context.Context, o Options, work string, m Mutant) Outcome {
 	case err == nil:
 		return Outcome{Mutant: m, Status: Survived, Detail: fmt.Sprintf("%s stayed green under the mutant", m.Run)}
 	case errors.As(err, &exitErr) && strings.Contains(out, "panic: test timed out"):
-		return Outcome{Mutant: m, Status: Killed, Detail: fmt.Sprintf("timed out after %v: a hang counts as a kill", o.Timeout)}
+		return Outcome{Mutant: m, Status: Killed, TimedOut: true, Detail: fmt.Sprintf("timed out after %v: a hang counts as a kill", o.Timeout)}
 	case errors.As(err, &exitErr):
 		return Outcome{Mutant: m, Status: Killed, Detail: firstFailure(out)}
 	default:

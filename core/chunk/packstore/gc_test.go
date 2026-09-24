@@ -408,6 +408,7 @@ func TestAStoresOwnPacksAcrossARebuild(t *testing.T) {
 	if _, err := s.Put(ctx, payload("more", 10<<10)); err != nil { // fills the pack holding c
 		t.Fatal(err)
 	}
+	packstore.WaitUploads(s)
 	if n := len(objects(t, bs, "packs/")); n != 3 {
 		t.Fatalf("fixture: %d packs in the store, want a third: c's, finished and not published", n)
 	}

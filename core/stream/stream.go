@@ -17,6 +17,7 @@ import (
 	"io"
 	"math"
 	"math/bits"
+	"runtime"
 
 	"github.com/SmithOperatingSolutions/snapshot-core/core/boundary"
 	"github.com/SmithOperatingSolutions/snapshot-core/core/cdc"
@@ -43,6 +44,10 @@ type Ref struct {
 type Config struct {
 	CDC   cdc.Geometry      // how data is cut
 	Nodes boundary.Geometry // how index nodes are split
+	// Workers hash and compress chunks in parallel while one goroutine cuts
+	// and one appends, in stream order (#10): 0 is runtime.GOMAXPROCS(0),
+	// 1 is the serial path. Chunks and hashes are the same at any count.
+	Workers int
 }
 
 // DefaultConfig is the default repo geometry.
@@ -65,6 +70,25 @@ func Write(ctx context.Context, w chunk.Writer, r io.Reader, c Config) (Ref, err
 		return Ref{}, err
 	}
 	b := &builder{ctx: ctx, w: w, rule: rule}
+	defer func() { // the stream is over: what it left pending may be stored now (#10)
+		if f, ok := w.(chunk.Flusher); ok {
+			_ = f.Flush(ctx) // a failure to start storing surfaces at the publish
+		}
+	}()
+	workers := c.Workers
+	if workers == 0 {
+		workers = runtime.GOMAXPROCS(0)
+	}
+	if pw, ok := w.(chunk.Preparer); ok && workers > 1 {
+		stop := make(chan struct{}) // the write is over: every goroutine winds down
+		defer close(stop)
+		par, err := cdc.NewParallel(r, c.CDC, workers)
+		if err != nil {
+			return Ref{}, err
+		}
+		defer par.Close()
+		return b.parallel(par, pw, workers, stop)
+	}
 	for {
 		data, err := cut.Next()
 		if errors.Is(err, io.EOF) {
@@ -81,6 +105,86 @@ func Write(ctx context.Context, w chunk.Writer, r io.Reader, c Config) (Ref, err
 			return Ref{}, err
 		}
 	}
+}
+
+// job is one chunk on its way through the workers: cut, then prepared,
+// then stored in stream order.
+type job struct {
+	data []byte
+	p    chunk.Prepared
+	err  error
+	done chan struct{}
+}
+
+// cutter is what parallel cuts with: cdc.Parallel, whose own goroutines
+// read the stream and hash it (cdc.Chunker in tests).
+type cutter interface {
+	Next() ([]byte, error)
+}
+
+// parallel is Write with the chunks hashed and compressed on workers
+// goroutines (#10): the cutter's goroutines read and hash the stream and
+// its caller places the cuts, the workers prepare, and this goroutine
+// stores each prepared chunk in stream order and grows the index. At most
+// 2*workers chunks and a few read blocks are in flight, so memory is
+// bounded by about 2*workers*MaxChunkSize whatever the stream's size. The stream is the same as the serial path's: the
+// cutter is the same and stores happen in its order, so every chunk, hash
+// and node is identical. stop, closed by the caller when the write is
+// over, winds every goroutine down.
+func (b *builder) parallel(cut cutter, w chunk.Preparer, workers int, stop chan struct{}) (Ref, error) {
+	work := make(chan *job, workers) // cut, to be prepared
+	order := make(chan *job, workers)
+	go func() {
+		defer close(work)
+		defer close(order)
+		for {
+			data, err := cut.Next()
+			j := &job{data: data, err: err, done: make(chan struct{})}
+			if err != nil {
+				close(j.done) // nothing to prepare; the storer sees the error, or EOF
+				select {
+				case order <- j:
+				case <-stop:
+				}
+				return
+			}
+			select {
+			case order <- j:
+			case <-stop:
+				return
+			}
+			select {
+			case work <- j:
+			case <-stop:
+				return
+			}
+		}
+	}()
+	for range workers {
+		go func() {
+			for j := range work {
+				j.p, j.err = w.Prepare(j.data)
+				close(j.done)
+			}
+		}()
+	}
+	for j := range order {
+		<-j.done
+		if errors.Is(j.err, io.EOF) {
+			return b.finish()
+		}
+		if j.err != nil {
+			return Ref{}, j.err
+		}
+		h, err := w.PutPrepared(b.ctx, j.p)
+		if err != nil {
+			return Ref{}, err
+		}
+		if err := b.add(1, entry{child: h, size: uint64(len(j.data))}); err != nil {
+			return Ref{}, err
+		}
+	}
+	return Ref{}, errors.New("stream: the cutter stopped without an end")
 }
 
 // builder grows the index tree one entry at a time: each level holds the

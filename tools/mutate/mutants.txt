@@ -714,15 +714,15 @@ run: ^TestListFillsPagesAcrossShortServerPages$
 
 id: pack-refuses-oversized-chunks
 file: core/pack/pack.go
-find: case len(data) > MaxChunkSize:
-replace: case len(data) > MaxChunkSize+1:
+find: case rawLen > MaxChunkSize:
+replace: case rawLen > MaxChunkSize+1:
 pkg: ./core/pack
 run: ^TestWriterLimits$
 
 id: pack-refuses-duplicates
 file: core/pack/pack.go
-find: if _, ok := w.entries[h]; ok {\n\t\treturn ErrDup
-replace: if _, ok := w.entries[h]; ok && false {\n\t\treturn ErrDup
+find: if _, ok := w.entries[h]; ok {\n\t\treturn ErrDup\n\t}\n\tif len(w.entries) > 0
+replace: if _, ok := w.entries[h]; ok && false {\n\t\treturn ErrDup\n\t}\n\tif len(w.entries) > 0
 pkg: ./core/pack
 run: ^TestWriterLimits$
 
@@ -735,8 +735,8 @@ run: ^TestWriterLimits$
 
 id: pack-compresses-only-when-smaller
 file: core/pack/pack.go
-find: if z := w.codec.enc.EncodeAll(data, nil); len(z) < len(data) {
-replace: if z := w.codec.enc.EncodeAll(data, nil); len(z) < len(data)+1<<20 {
+find: z := c.enc.EncodeAll(data, scratch[:0])\n\tif len(z) < len(data) {
+replace: z := c.enc.EncodeAll(data, scratch[:0])\n\tif len(z) < len(data)+1<<20 {
 pkg: ./core/pack
 run: ^TestCompressesOnlyWhenItHelps$
 
@@ -952,8 +952,8 @@ run: ^TestContract$/^TooLarge$
 
 id: packstore-uploads-before-publishing
 file: core/chunk/packstore/packstore.go
-find: if err := s.upload(ctx, toUpload); err != nil {\n\t\treturn err\n\t}
-replace: _ = toUpload
+find: go func() { uploaded <- s.uploadPacks(ctx, toUpload, false) }()
+replace: go func() { uploaded <- nil }()
 pkg: ./core/chunk/packstore
 run: ^TestPublishedChunksAreDurableBeforeTheRoot$
 
@@ -1607,8 +1607,8 @@ id: stream-negative-offset
 file: core/stream/stream.go
 find: if off < 0 {
 replace: if off < 0 && false {
-pkg: ./core/prolly
-run: ^TestStreamRefusesImpossibleRefsAndOffsets$
+pkg: ./core/stream
+run: ^TestRandomAccessMatchesTheSource$
 
 id: stream-write-validates-nodes
 file: core/stream/stream.go
@@ -1871,29 +1871,29 @@ run: ^TestANewRepoHasMainAtAnEmptyInitialCommit$
 
 id: vcs-stale-working-set-conflicts
 file: core/vcs/vcs.go
-find: if work != prev.Hash {
-replace: if work != prev.Hash && false {
+find: if work != prev.Hash {\n\t\t\treturn fmt.Errorf("%w: branch %s", ErrConflict, branch)\n\t\t}\n\t\tif keepMerge {
+replace: if work != prev.Hash && false {\n\t\t\treturn fmt.Errorf("%w: branch %s", ErrConflict, branch)\n\t\t}\n\t\tif keepMerge {
 pkg: ./core/vcs
 run: ^TestAStaleWorkingSetUpdateIsAConflict$
 
 id: vcs-conflicts-block-commits
 file: core/vcs/vcs.go
-find: } else if n > 0 {
-replace: } else if n > 0 && false {
+find: if n, err := r.conflictCount(ctx, ws); err != nil {\n\t\t\treturn err\n\t\t} else if n > 0 {
+replace: if n, err := r.conflictCount(ctx, ws); err != nil {\n\t\t\treturn err\n\t\t} else if n > 0 && false {
 pkg: ./core/vcs
 run: ^TestConflictsBlockTheCommitUntilResolved$
 
 id: vcs-merge-commit-has-two-parents
 file: core/vcs/vcs.go
-find: c.Parents = append(c.Parents, theirs.Hash)
-replace: _ = theirs.Hash
+find: theirs, err := r.readCommit(ctx, ws.Merge.Theirs)\n\t\t\tif err != nil {\n\t\t\t\treturn err\n\t\t\t}\n\t\t\tc.Parents = append(c.Parents, theirs.Hash)
+replace: theirs, err := r.readCommit(ctx, ws.Merge.Theirs)\n\t\t\tif err != nil {\n\t\t\t\treturn err\n\t\t\t}\n\t\t\t_ = theirs.Hash
 pkg: ./core/vcs
 run: ^TestConflictsBlockTheCommitUntilResolved$
 
 id: vcs-author-is-the-principal
 file: core/vcs/vcs.go
-find: Time: r.o.Clock().UTC(), Author: p.ID, Message: message}
-replace: Time: r.o.Clock().UTC(), Author: "someone", Message: message}
+find: Namespace: ws.Staged, Height: head.Height + 1,\n\t\t\tTime: r.o.Clock().UTC(), Author: p.ID, Message: message}
+replace: Namespace: ws.Staged, Height: head.Height + 1,\n\t\t\tTime: r.o.Clock().UTC(), Author: "someone", Message: message}
 pkg: ./core/vcs
 run: ^TestTheAuthorIsThePrincipal$
 
@@ -2074,8 +2074,8 @@ run: ^TestAFolderBranchesDiffsAndMerges$
 
 id: e2e-merge-commit-has-two-parents
 file: core/vcs/vcs.go
-find: c.Parents = append(c.Parents, theirs.Hash)
-replace: _ = theirs.Hash
+find: theirs, err := r.readCommit(ctx, ws.Merge.Theirs)\n\t\t\tif err != nil {\n\t\t\t\treturn err\n\t\t\t}\n\t\t\tc.Parents = append(c.Parents, theirs.Hash)
+replace: theirs, err := r.readCommit(ctx, ws.Merge.Theirs)\n\t\t\tif err != nil {\n\t\t\t\treturn err\n\t\t\t}\n\t\t\t_ = theirs.Hash
 pkg: ./e2e
 run: ^TestAFolderBranchesDiffsAndMerges$
 
@@ -2088,8 +2088,8 @@ run: ^TestAFolderBranchesDiffsAndMerges$
 
 id: e2e-commits-write-their-index
 file: core/chunk/packstore/packstore.go
-find: if err := s.writeSessionIndex(ctx); err != nil {
-replace: if err := error(nil); err != nil {
+find: written, err := s.writeSessionIndex(ctx, toUpload)
+replace: written, err := &indexWriter{}, error(nil)
 pkg: ./e2e
 run: ^TestAFolderBranchesDiffsAndMerges$
 
@@ -2138,8 +2138,8 @@ run: ^TestUpdateWorkingSetKeepsTheMergeState$
 
 id: vcs-merge-state-checked-against-the-store
 file: core/vcs/vcs.go
-find: stored, err := r.readWorkingSet(ctx, work)
-replace: stored, err := prev, error(nil)
+find: if keepMerge {\n\t\t\tstored, err := r.readWorkingSet(ctx, work)
+replace: if keepMerge {\n\t\t\tstored, err := prev, error(nil)
 pkg: ./core/vcs
 run: ^TestUpdateWorkingSetKeepsTheMergeState$
 
@@ -2167,8 +2167,8 @@ run: ^TestRefsNameOnlyStoredObjects$
 
 id: vcs-commit-message-bounded
 file: core/vcs/vcs.go
-find: if len(message) > MaxMessageLen || !utf8.ValidString(message) {\n\t\treturn Commit{}
-replace: if (len(message) > MaxMessageLen || !utf8.ValidString(message)) && false {\n\t\treturn Commit{}
+find: func (r *Repo) CommitWorkingSet(ctx context.Context, p auth.Principal, branch, message string) (Commit, error) {\n\tif err := r.branchCheck(ctx, p, auth.Write, branch); err != nil {\n\t\treturn Commit{}, err\n\t}\n\tif len(message) > MaxMessageLen || !utf8.ValidString(message) {
+replace: func (r *Repo) CommitWorkingSet(ctx context.Context, p auth.Principal, branch, message string) (Commit, error) {\n\tif err := r.branchCheck(ctx, p, auth.Write, branch); err != nil {\n\t\treturn Commit{}, err\n\t}\n\tif (len(message) > MaxMessageLen || !utf8.ValidString(message)) && false {
 pkg: ./core/vcs
 run: ^TestMessagesAreBoundedUTF8$
 
@@ -3775,10 +3775,17 @@ replace: if gone > 0 {
 pkg: ./core/chunk/packstore
 run: ^TestARoundRepacksAPackThatIsMostlyDead$
 
+id: repack-copies-the-chunks-credited-to-the-pack
+file: core/chunk/packstore/gc.go
+find: } else if !credited {\n\t\t\t\tcontinue\n\t\t\t}
+replace: } else if !credited && false {\n\t\t\t\tcontinue\n\t\t\t}
+pkg: ./core/chunk/packstore
+run: ^TestARepackLeavesAChunkCreditedToAnotherPack$
+
 id: repack-copies-a-shared-chunk-once
 file: core/chunk/packstore/gc.go
-find: if moved[e.Hash] {\n\t\t\t\tcontinue\n\t\t\t}
-replace: if false {\n\t\t\t\tcontinue\n\t\t\t}
+find: return binary.LittleEndian.Uint32(v[0:]) == uint32(pi), nil
+replace: return true, nil
 pkg: ./core/chunk/packstore
 run: ^TestRepackingCopiesAChunkTwoPacksShareOnce$
 
@@ -3861,8 +3868,8 @@ run: ^TestATableAnswersEveryRecordItWasBuiltFrom$
 
 id: table-finish-removes-the-runs
 file: core/dedup/table.go
-find: removeAll(b.runs)\n\tb.runs = nil\n\tt, err := OpenTable(path)
-replace: b.runs = nil\n\tt, err := OpenTable(path)
+find: removeAll(b.runs)\n\tb.runs = nil\n\treturn OpenTable(path)
+replace: b.runs = nil\n\treturn OpenTable(path)
 pkg: ./core/dedup
 run: ^TestATableAnswersEveryRecordItWasBuiltFrom$
 
@@ -4068,3 +4075,395 @@ find: n += s.disk.len() // a chunk in both is counted twice: about, not exactly
 replace: n += 0
 pkg: ./core/chunk/packstore
 run: ^TestAStoreSpillsItsIndexToDisk$
+
+id: cdc-hash-rotates-by-one
+file: core/cdc/cdc.go
+find: hash = bits.RotateLeft64(hash, 1) ^ outTable[win[pos]] ^ table[b]\n\t\twin[pos] = b\n\t\tif pos++; pos == window {\n\t\t\tpos = 0\n\t\t}\n\t\tif hash&c.hard == 0 {
+replace: hash = bits.RotateLeft64(hash, 2) ^ outTable[win[pos]] ^ table[b]\n\t\twin[pos] = b\n\t\tif pos++; pos == window {\n\t\t\tpos = 0\n\t\t}\n\t\tif hash&c.hard == 0 {
+pkg: ./core/dnx/compat
+run: ^TestTheChunkerCutsWhereDisknexusCuts$
+
+id: cdc-window-leaves-by-the-out-table
+file: core/cdc/cdc.go
+find: hash = bits.RotateLeft64(hash, 1) ^ outTable[win[pos]] ^ table[b]\n\t\twin[pos] = b\n\t\tif pos++; pos == window {\n\t\t\tpos = 0\n\t\t}\n\t\tif hash&c.easy == 0 {
+replace: hash = bits.RotateLeft64(hash, 1) ^ table[win[pos]] ^ table[b]\n\t\twin[pos] = b\n\t\tif pos++; pos == window {\n\t\t\tpos = 0\n\t\t}\n\t\tif hash&c.easy == 0 {
+pkg: ./core/dnx/compat
+run: ^TestTheChunkerCutsWhereDisknexusCuts$
+
+id: cdc-hard-mask-below-min
+file: core/cdc/cdc.go
+find: hard: g.Mask<<2 | g.Mask, easy: g.Mask >> 2,
+replace: hard: g.Mask << 2, easy: g.Mask >> 2,
+pkg: ./core/dnx/compat
+run: ^TestTheChunkerCutsWhereDisknexusCuts$
+
+id: cdc-easy-mask-from-min
+file: core/cdc/cdc.go
+find: hard: g.Mask<<2 | g.Mask, easy: g.Mask >> 2,
+replace: hard: g.Mask<<2 | g.Mask, easy: g.Mask >> 1,
+pkg: ./core/dnx/compat
+run: ^TestTheChunkerCutsWhereDisknexusCuts$
+
+id: cdc-min-is-exclusive
+file: core/cdc/cdc.go
+find: for lim := min(c.g.Min-n-1, len(p)); i < lim; i++ {
+replace: for lim := min(c.g.Min-n, len(p)); i < lim; i++ {
+pkg: ./core/dnx/compat
+run: ^TestTheChunkerCutsWhereDisknexusCuts$
+
+id: cdc-cuts-at-max
+file: core/cdc/cdc.go
+find: for lim := min(c.g.Max-n-1, len(p)); i < lim; i++ {
+replace: for lim := min(c.g.Max-n, len(p)); i < lim; i++ {
+pkg: ./core/dnx/compat
+run: ^TestTheChunkerCutsWhereDisknexusCuts$
+
+id: cdc-hash-carries-across-chunks
+file: core/cdc/cdc.go
+find: func (c *Chunker) Next() ([]byte, error) {\n\tc.buf = c.buf[:0]
+replace: func (c *Chunker) Next() ([]byte, error) {\n\tc.buf = c.buf[:0]\n\tc.hash, c.pos, c.win = zeroWindowHash, 0, [window]byte{}
+pkg: ./core/dnx/compat
+run: ^TestTheChunkerCutsWhereDisknexusCuts$
+
+id: cdc-starts-from-the-zero-window
+file: core/cdc/buzhash.go
+find: h ^= bits.RotateLeft64(table[0], window-1-i)
+replace: h ^= bits.RotateLeft64(table[0], window-i)
+pkg: ./core/dnx/compat
+run: ^TestTheChunkerCutsWhereDisknexusCuts$
+
+id: cdc-table-is-little-endian
+file: core/cdc/buzhash.go
+find: in[i] = binary.LittleEndian.Uint64(h[:8])
+replace: in[i] = binary.BigEndian.Uint64(h[:8])
+pkg: ./core/dnx/compat
+run: ^TestTheChunkerCutsWhereDisknexusCuts$
+
+id: cdc-returns-the-rest-at-eof
+file: core/cdc/cdc.go
+find: if errors.Is(err, io.EOF) && len(c.buf) > 0 {
+replace: if false {
+pkg: ./core/dnx/compat
+run: ^TestTheChunkerCutsWhereDisknexusCuts$
+
+id: cdc-serves-bytes-before-the-error
+file: core/cdc/cdc.go
+find: case err != nil:\n\t\t\tc.rerr = err
+replace: case err != nil:\n\t\t\treturn err
+pkg: ./core/dnx/compat
+run: ^TestTheChunkerCutsWhereDisknexusCuts$
+
+id: cdc-gives-up-on-no-progress
+file: core/cdc/cdc.go
+find: if empty++; empty >= maxConsecutiveEmptyReads {
+replace: if empty++; false {
+pkg: ./core/dnx/compat
+run: ^TestTheChunkerCutsWhereDisknexusCuts$
+
+id: cdc-chunks-are-the-callers
+file: core/cdc/cdc.go
+find: c.rpos += end\n\t\t\treturn append([]byte(nil), c.buf...), nil
+replace: c.rpos += end\n\t\t\treturn c.buf, nil
+pkg: ./core/dnx/compat
+run: ^TestTheChunkerCutsWhereDisknexusCuts$
+
+id: stream-workers-surface-the-sources-error
+file: core/stream/stream.go
+find: if j.err != nil {\n\t\t\treturn Ref{}, j.err\n\t\t}\n\t\th, err := w.PutPrepared(b.ctx, j.p)
+replace: if j.err != nil && false {\n\t\t\treturn Ref{}, j.err\n\t\t}\n\t\th, err := w.PutPrepared(b.ctx, j.p)
+pkg: ./core/stream
+run: ^TestAWorkersWriteSurfacesTheSourcesError$
+
+id: stream-workers-surface-the-stores-error
+file: core/stream/stream.go
+find: h, err := w.PutPrepared(b.ctx, j.p)\n\t\tif err != nil {\n\t\t\treturn Ref{}, err\n\t\t}
+replace: h, err := w.PutPrepared(b.ctx, j.p)\n\t\tif err != nil && false {\n\t\t\treturn Ref{}, err\n\t\t}
+pkg: ./core/stream
+run: ^TestAWorkersWriteSurfacesTheStoresError$
+
+id: stream-workers-finish-at-eof
+file: core/stream/stream.go
+find: if errors.Is(j.err, io.EOF) {\n\t\t\treturn b.finish()\n\t\t}
+replace: if errors.Is(j.err, io.EOF) && false {\n\t\t\treturn b.finish()\n\t\t}
+pkg: ./core/stream
+run: ^TestWorkersWriteTheSerialPathsChunks$
+
+id: stream-workers-count-each-chunks-bytes
+file: core/stream/stream.go
+find: if err := b.add(1, entry{child: h, size: uint64(len(j.data))}); err != nil {
+replace: if err := b.add(1, entry{child: h, size: uint64(len(j.data)) + 1}); err != nil {
+pkg: ./core/stream
+run: ^TestWorkersWriteTheSerialPathsChunks$
+
+id: packstore-refuses-a-chunk-prepared-elsewhere
+file: core/chunk/packstore/packstore.go
+find: p, ok := cp.(*prepared)\n\tif !ok {
+replace: p, ok := cp.(*prepared)\n\tif !ok && false {
+pkg: ./core/chunk/packstore
+run: ^TestAChunkPreparedByAnotherStoreIsRefused$
+
+id: finisher-publish-waits-for-the-finishers
+file: core/chunk/packstore/packstore.go
+find: // Every finisher has landed its pack or left it to retry here.\n\ts.finishers.Wait()
+replace: // Every finisher has landed its pack or left it to retry here.\n\t_ = s.finishers
+pkg: ./core/chunk/packstore
+run: ^TestAPublishWaitsForItsUploads$
+
+id: finisher-bounds-the-packs-in-flight
+file: core/chunk/packstore/packstore.go
+find: const maxInFlight = 2
+replace: const maxInFlight = 64
+pkg: ./core/chunk/packstore
+run: ^TestAtMostTwoPacksAreInFlight$
+
+id: finisher-keeps-a-finishing-pack-readable
+file: core/chunk/packstore/packstore.go
+find: if data, ok, err := s.finishingGetLocked(h); ok {
+replace: if data, ok, err := s.finishingGetLocked(h); ok && false {
+pkg: ./core/chunk/packstore
+run: ^TestAChunkOfAPackBeingFinishedReads$
+
+id: finisher-finishes-beside-the-writer
+file: core/chunk/packstore/packstore.go
+find: go func() {\n\t\tdefer s.finishers.Done()\n\t\tdefer func() { <-s.slots }()\n\t\ts.finish(context.WithoutCancel(ctx), w)\n\t}()
+replace: func() {\n\t\tdefer s.finishers.Done()\n\t\tdefer func() { <-s.slots }()\n\t\ts.finish(context.WithoutCancel(ctx), w)\n\t}()
+pkg: ./core/chunk/packstore
+run: ^TestAnUploadDoesNotHoldUpTheWriter$
+
+id: cdc-parallel-warms-the-window-with-the-bytes-before
+file: core/cdc/parallel.go
+find: for _, b := range prev {\n\t\thash = bits.RotateLeft64(hash, 1) ^ outTable[0] ^ table[b]\n\t}
+replace: for range prev {\n\t}
+pkg: ./core/cdc
+run: ^TestTheParallelChunkerCutsWhereTheChunkerCuts$
+
+id: cdc-parallel-the-leaving-byte-comes-from-before-the-block
+file: core/cdc/parallel.go
+find: out = hist[i]
+replace: out = 0
+pkg: ./core/cdc
+run: ^TestTheParallelChunkerCutsWhereTheChunkerCuts$
+
+id: cdc-parallel-marks-the-hard-mask
+file: core/cdc/parallel.go
+find: if hash&hmask == 0 {\n\t\t\thard[i>>6] |= 1 << (i & 63)
+replace: if hash&emask == 0 && hmask != 0 {\n\t\t\thard[i>>6] |= 1 << (i & 63)
+pkg: ./core/cdc
+run: ^TestTheParallelChunkerCutsWhereTheChunkerCuts$
+
+id: cdc-parallel-first-set-stays-within-to
+file: core/cdc/parallel.go
+find: if i < to {\n\t\t\t\treturn i\n\t\t\t}\n\t\t\treturn -1
+replace: if i < to || true {\n\t\t\t\treturn i\n\t\t\t}\n\t\t\treturn -1
+pkg: ./core/cdc
+run: ^TestFirstSetStaysWithinItsBounds$
+
+id: cdc-parallel-hard-mask-under-min
+file: core/cdc/parallel.go
+find: if need := p.g.Min - p.n - 1; need > 0 {
+replace: if need := p.g.Min - p.n; need > 0 {
+pkg: ./core/cdc
+run: ^TestTheParallelChunkerCutsWhereTheChunkerCuts$
+
+id: cdc-parallel-cuts-at-max
+file: core/cdc/parallel.go
+find: if need := p.g.Max - p.n - 1; need > 0 {
+replace: if need := p.g.Max - p.n; need > 0 {
+pkg: ./core/cdc
+run: ^TestTheParallelChunkerCutsWhereTheChunkerCuts$
+
+id: cdc-parallel-returns-the-rest-at-eof
+file: core/cdc/parallel.go
+find: if errors.Is(b.err, io.EOF) && len(p.buf) > 0 {
+replace: if false {
+pkg: ./core/cdc
+run: ^TestTheParallelChunkerCutsWhereTheChunkerCuts$
+
+id: cdc-parallel-close-stops-the-reader
+file: core/cdc/parallel.go
+find: case p.order <- b:\n\t\tcase <-p.stop:\n\t\t\treturn\n\t\t}
+replace: case p.order <- b:\n\t\t}
+pkg: ./core/cdc
+run: ^TestCloseStopsAParallelChunkerNobodyReads$
+
+id: cdc-parallel-gives-up-on-no-progress
+file: core/cdc/parallel.go
+find: if empty++; empty >= maxConsecutiveEmptyReads {
+replace: if empty++; false {
+pkg: ./core/cdc
+run: ^TestTheParallelChunkerCutsWhereTheChunkerCuts$
+
+id: packstore-seals-again-for-another-pack
+file: core/chunk/packstore/packstore.go
+find: if p.sealed != nil && s.pending.Salt() == p.salt {
+replace: if p.sealed != nil {
+pkg: ./core/chunk/packstore
+run: ^TestAChunkPreparedForOnePackStoresInTheNext$
+
+id: cdc-parallel-a-chunk-is-not-a-slice-of-its-block
+file: core/cdc/parallel.go
+find: out = make([]byte, len(share))\n\t\tcopy(out, share)
+replace: out = share
+pkg: ./core/cdc
+run: ^TestTheParallelChunkerCutsWhereTheChunkerCuts$
+
+id: pack-compress-copies-out-of-the-scratch
+file: core/pack/pack.go
+find: payload = make([]byte, len(z))\n\t\tcopy(payload, z)
+replace: payload = z
+pkg: ./core/chunk/packstore
+run: ^TestAChunkPreparedForOnePackStoresInTheNext$
+
+id: vcs-commit-needs-the-working-set-it-was-given
+file: core/vcs/vcs.go
+find: if work != prev.Hash {\n\t\t\treturn fmt.Errorf("%w: branch %s", ErrConflict, branch)\n\t\t}\n\t\tstored, err := r.readWorkingSet(ctx, work)\n\t\tif err != nil {\n\t\t\treturn err\n\t\t}\n\t\tif !sameMerge(stored.Merge, prev.Merge) {
+replace: if work != prev.Hash && false {\n\t\t\treturn fmt.Errorf("%w: branch %s", ErrConflict, branch)\n\t\t}\n\t\tstored, err := r.readWorkingSet(ctx, work)\n\t\tif err != nil {\n\t\t\treturn err\n\t\t}\n\t\tif !sameMerge(stored.Merge, prev.Merge) {
+pkg: ./core/vcs
+run: ^TestACommitIsOnePublish$
+
+id: vcs-commit-leaves-a-clean-working-set
+file: core/vcs/vcs.go
+find: nextWS, err := r.s.Put(ctx, WorkingSet{Working: namespace, Staged: namespace}.encode())
+replace: nextWS, err := r.s.Put(ctx, WorkingSet{Working: stored.Working, Staged: namespace}.encode())
+pkg: ./core/vcs
+run: ^TestACommitIsOnePublish$
+
+id: vcs-commit-parents-the-head
+file: core/vcs/vcs.go
+find: c := Commit{Parents: []hash.Hash{head.Hash}, Namespace: namespace, Height: head.Height + 1,
+replace: c := Commit{Parents: nil, Namespace: namespace, Height: head.Height + 1,
+pkg: ./core/vcs
+run: ^TestACommitIsOnePublish$
+
+id: publish-writes-the-index-with-the-uploads
+file: core/chunk/packstore/packstore.go
+find: go func() { uploaded <- s.uploadPacks(ctx, toUpload, false) }()
+replace: func() { uploaded <- s.uploadPacks(ctx, toUpload, false) }()
+pkg: ./core/chunk/packstore
+run: ^TestAPublishWritesItsPackAndIndexObjectTogether$
+
+id: publish-fails-when-a-pack-fails
+file: core/chunk/packstore/packstore.go
+find: if uerr := <-uploaded; uerr != nil {\n\t\treturn uerr\n\t}
+replace: <-uploaded
+pkg: ./core/chunk/packstore
+run: ^TestFailedUploadStaysReadableAndIsRetried$
+
+id: publish-indexes-the-packs-it-uploads
+file: core/chunk/packstore/packstore.go
+find: for _, b := range uploading {\n\t\tif err := w.add(b.Info); err != nil {\n\t\t\treturn nil, err\n\t\t}\n\t}
+replace: for range uploading {\n\t}
+pkg: ./core/chunk/packstore
+run: ^TestAPublishWritesItsPackAndIndexObjectTogether$
+
+id: flush-hands-the-pending-pack-over
+file: core/chunk/packstore/packstore.go
+find: w := s.takePendingLocked()\n\ts.mu.Unlock()\n\ts.startFinisher(ctx, w)\n\treturn nil
+replace: s.mu.Unlock()\n\treturn nil
+pkg: ./core/chunk/packstore
+run: ^TestFlushUploadsAPackWorthAnUpload$
+
+id: stream-flushes-when-the-stream-ends
+file: core/stream/stream.go
+find: if f, ok := w.(chunk.Flusher); ok {
+replace: if f, ok := w.(chunk.Flusher); ok && false {
+pkg: ./e2e
+run: ^TestAStreamsLastPackIsUploadedWhenTheStreamEnds$
+
+id: flush-waits-under-an-eighth-of-a-pack
+file: core/chunk/packstore/packstore.go
+find: if s.pending == nil || s.pending.Size() < s.o.PackSize/flushShare {
+replace: if s.pending == nil {
+pkg: ./core/chunk/packstore
+run: ^TestFlushUploadsAPackWorthAnUpload$
+
+id: flush-uploads-from-an-eighth-of-a-pack
+file: core/chunk/packstore/packstore.go
+find: if s.pending == nil || s.pending.Size() < s.o.PackSize/flushShare {
+replace: if s.pending == nil || s.pending.Size() < s.o.PackSize {
+pkg: ./core/chunk/packstore
+run: ^TestFlushUploadsAPackWorthAnUpload$
+
+id: mutate-runs-a-hang-again-alone
+file: tools/internal/mutation/mutation.go
+find: if !out.TimedOut {\n\t\t\tcontinue\n\t\t}
+replace: if !out.TimedOut || true {\n\t\t\tcontinue\n\t\t}
+pkg: ./tools/internal/mutation
+run: ^TestAHangUnderLoadIsRunAgainAlone$
+
+id: mutate-workers-run-at-once
+file: tools/internal/mutation/mutation.go
+find: workers := max(1, min(o.Workers, len(ms)))
+replace: workers := 1
+pkg: ./tools/internal/mutation
+run: ^TestMutantsRunAtOnceOnWorkers$
+
+id: vcs-commit-bounds-the-message
+file: core/vcs/vcs.go
+find: func (r *Repo) Commit(ctx context.Context, p auth.Principal, branch string, prev WorkingSet, namespace hash.Hash, message string) (Commit, error) {\n\tif err := r.branchCheck(ctx, p, auth.Write, branch); err != nil {\n\t\treturn Commit{}, err\n\t}\n\tif len(message) > MaxMessageLen || !utf8.ValidString(message) {
+replace: func (r *Repo) Commit(ctx context.Context, p auth.Principal, branch string, prev WorkingSet, namespace hash.Hash, message string) (Commit, error) {\n\tif err := r.branchCheck(ctx, p, auth.Write, branch); err != nil {\n\t\treturn Commit{}, err\n\t}\n\tif (len(message) > MaxMessageLen || !utf8.ValidString(message)) && false {
+pkg: ./core/vcs
+run: ^TestCommitRefusesWhatTheTwoStepsRefuse$
+
+id: vcs-commit-checks-the-merge-state
+file: core/vcs/vcs.go
+find: if !sameMerge(stored.Merge, prev.Merge) {
+replace: if !sameMerge(stored.Merge, prev.Merge) && false {
+pkg: ./core/vcs
+run: ^TestCommitRefusesWhatTheTwoStepsRefuse$
+
+id: vcs-commit-waits-for-conflicts
+file: core/vcs/vcs.go
+find: if n, err := r.conflictCount(ctx, stored); err != nil {\n\t\t\treturn err\n\t\t} else if n > 0 {
+replace: if n, err := r.conflictCount(ctx, stored); err != nil {\n\t\t\treturn err\n\t\t} else if n > 0 && false {
+pkg: ./core/vcs
+run: ^TestCommitRefusesWhatTheTwoStepsRefuse$
+
+id: vcs-commit-of-a-merge-has-two-parents
+file: core/vcs/vcs.go
+find: theirs, err := r.readCommit(ctx, stored.Merge.Theirs)\n\t\t\tif err != nil {\n\t\t\t\treturn err\n\t\t\t}\n\t\t\tc.Parents = append(c.Parents, theirs.Hash)
+replace: theirs, err := r.readCommit(ctx, stored.Merge.Theirs)\n\t\t\tif err != nil {\n\t\t\t\treturn err\n\t\t\t}\n\t\t\t_ = theirs.Hash
+pkg: ./core/vcs
+run: ^TestCommitRefusesWhatTheTwoStepsRefuse$
+
+id: open-refuses-a-negative-index-bound
+file: core/chunk/packstore/packstore.go
+find: if o.IndexInMemory < 0 {
+replace: if o.IndexInMemory < 0 && false {
+pkg: ./core/chunk/packstore
+run: ^TestOpenRefusesANegativeIndexBound$
+
+id: stats-count-the-packs-being-finished
+file: core/chunk/packstore/packstore.go
+find: for _, w := range s.finishing {\n\t\tn += int64(w.Count())\n\t}
+replace: for range s.finishing {\n\t}
+pkg: ./core/chunk/packstore
+run: ^TestStatsCountAPackBeingFinished$
+
+id: prepared-knows-its-hash
+file: core/chunk/packstore/packstore.go
+find: func (p *prepared) Hash() hash.Hash { return p.h }
+replace: func (p *prepared) Hash() hash.Hash { return hash.Hash{} }
+pkg: ./core/chunk/packstore
+run: ^TestAPreparedChunkKnowsItsHashAndLength$
+
+id: prepared-knows-its-length
+file: core/chunk/packstore/packstore.go
+find: func (p *prepared) Len() int        { return p.n }
+replace: func (p *prepared) Len() int        { return 0 }
+pkg: ./core/chunk/packstore
+run: ^TestAPreparedChunkKnowsItsHashAndLength$
+
+id: refresh-keeps-the-unpublished-packs
+file: core/chunk/packstore/packstore.go
+find: s.loaded[sum] = true\n\t\t}\n\t\tfor _, info := range s.unpublished {\n\t\t\ts.mem.Add(info)\n\t\t}
+replace: s.loaded[sum] = true\n\t\t}
+pkg: ./core/chunk/packstore
+run: ^TestUnpublishedPacksSurviveARefresh$
+
+id: has-refreshes-on-a-miss
+file: core/chunk/packstore/packstore.go
+find: if missing {\n\t\tif err := s.refresh(ctx); err != nil {
+replace: if missing && false {\n\t\tif err := s.refresh(ctx); err != nil {
+pkg: ./core/chunk/packstore
+run: ^TestAMissSeesAnotherStoresPublish$

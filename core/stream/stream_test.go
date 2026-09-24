@@ -256,6 +256,7 @@ func TestForgedStreamsAreCorrupt(t *testing.T) {
 		"ref size disagrees":             {Root: good.Root, Size: 15, Depth: 1},
 		"ref depth too deep":             {Root: good.Root, Size: 14, Depth: 2},
 		"ref depth too shallow":          {Root: good.Root, Size: 14, Depth: 0},
+		"ref depth past any stream's":    {Root: good.Root, Size: 14, Depth: 64},
 		"node claims level 2":            {Root: node(2, ok...), Size: 14, Depth: 2},
 		"a single-child top":             {Root: node(2, ientry{inner, 14}), Size: 14, Depth: 2},
 		"a node with no entries":         {Root: node(1), Size: 0, Depth: 1},
@@ -293,6 +294,9 @@ func TestRandomAccessMatchesTheSource(t *testing.T) {
 	}
 	if n, err := r.ReadAt(make([]byte, 1), int64(len(data))); n != 0 || !errors.Is(err, io.EOF) {
 		t.Fatalf("ReadAt at the end = %d, %v; want 0, io.EOF", n, err)
+	}
+	if n, err := r.ReadAt(make([]byte, 1), -1); n != 0 || err == nil {
+		t.Fatalf("ReadAt before the start = %d, %v; want 0 and an error", n, err)
 	}
 }
 

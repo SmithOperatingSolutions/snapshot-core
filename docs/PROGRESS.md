@@ -117,7 +117,7 @@ packages have no gate: their callers exercise them.
 - [x] `s3` startup probe refuses an endpoint that ignores `If-Match` (`TestProbeRefusesEndpointsThatIgnoreConditionalWrites`)
 
 ### Chunkers
-- [x] `cdc` via `core/dnx`: golden boundaries for a fixed 64 MiB corpus match a checked-in list (`TestCDCGoldenBoundariesRepoGeometry64MiB`, cross-checked against an independent reference implementation)
+- [x] `cdc` cuts disknexus's boundaries: golden boundaries for a fixed 64 MiB corpus match a checked-in list (`TestCDCGoldenBoundariesRepoGeometry64MiB`, cross-checked against an independent reference implementation), and `core/cdc`'s own Buzhash cuts where disknexus cuts byte for byte over every stream shape and reader behaviour (`TestTheChunkerCutsWhereDisknexusCuts`, #10)
 - [x] `cdc`: inserting 1 byte near the start of a 1 GiB file changes at most 3 chunks (`TestSlowOneByteInsertChangesAtMostThreeChunks1GiB`, `-tags slow`; 16 MiB on every run)
 - [x] `cdc`: stored bytes re-hash to their chunk id on every read path: unfinished pack, in-flight pack, cache and backend (chunk contract `IdentityIsSHA256` and `FlippedByteIsCorrupt` on every backend, `TestCachedReadsAreVerified`, `TestFailedUploadStaysReadableAndIsRetried`)
 - [x] `prolly`: all Engine Spec L1 tests (determinism, history independence, bounded diff cost); see the L1 list below
@@ -267,6 +267,14 @@ Beyond the list: merging what a branch already holds changes nothing (`TestMergi
   harness, the mutant catalog, the slow tier and the real-provider S3
   suites every Sunday and on demand.
 
+- **`core/cdc` cuts disknexus's boundaries itself** (2026-09-23, #10).
+  The spec marks the chunker "reuse" through `core/dnx`; disknexus reads a
+  byte at a time and a write could not go past about 200 MB/s whatever
+  ran in parallel. `core/cdc` rolls the same Buzhash with the same rules
+  over each read buffer; disknexus stays the oracle in `core/dnx/compat`
+  (the goldens, and a differential test over every stream shape and reader
+  behaviour), as the spec's rule 3 allows: a package of our own beside it.
+
 ## What testing has found so far
 
 | Found by | What it showed | Fix |
@@ -320,6 +328,21 @@ Beyond the list: merging what a branch already holds changes nothing (`TestMergi
 | the memory measurement (#6) | A session's packs went into one index object whatever their number, so a session of about 1.5 million chunks could not publish (`dedup.MaxObjectSize`), and every store decoded that object whole | Index objects are written in batches of at most 8 MiB estimated (`TestALargeSessionPublishesSeveralIndexObjects`) |
 | the memory measurement (#6) | With the index and the mark on disk a collection still peaked at 185 bytes a chunk: GC's reader kept a 64 MiB chunk cache the walk never read twice from, and a candidate pack was read whole to repack it | The reader runs without a cache; a candidate's frames stream from one GET |
 | the measurement at two million (#6) | The peak grew 48 bytes a chunk from one million to two: a refresh decoded every index object into memory before deciding to spill, and, larger, the in-memory blob backend held what the collection stored (it repacked one small mixed pack and rewrote every index object), which a heap measure cannot tell from the collector's own memory | A refresh keeps at most the bound's worth of decoded objects; the measurement's repository is on disk |
+| the write path's profile (#10) | With hashing and compression on sixteen workers a write went 1.3× faster, not 3×: three quarters of the wall time was disknexus's chunker, serial by nature | `core/cdc` cuts the same boundaries itself at 800 MB/s (`TestSlowTheChunkerOutrunsDisknexus`) |
+| the write path's profile, again (#10) | With the chunker fast the storer bound the write: appending frames to the pending pack grew and copied its buffer over and over, a third of the storer's time | The pending pack's buffer is allocated at the pack's size once |
+| the chunker's differential test (#10) | Two mutants survived: the byte that makes a chunk exactly Min long is judged by the easy mask, which random streams reach one chunk in thousands, and bytes returned together with a read error, which no `iotest` reader does | A stream drawn from the corpus so a chunk is exactly Min by the easy mask alone; a reader that hands 64 KiB over with its error |
+| the write path's profile, a third time (#10) | With the chunker fast the storer did the per-pack work on the per-chunk path: naming (SHA-256 of 32 MiB), building and uploading each full pack, half its time | Full packs are finished and uploaded beside the writer, two at a time |
+| the throughput measurement (#10) | The compressible figure stopped moving at 330 MB/s: the test's text generator wrote a byte at a time through a modulo and had become the source being measured | It copies from a page of the pattern |
+| the finisher's tests (#10) | The publish-waits test judged the order of what landed before the held pack had landed at all, so a publish that did not wait passed; the finishing-pack read test read a pack already named and held at its upload, where the ordinary path serves it | Every pack is waited for before the order is judged; a hold seam stops a finisher before it names its pack |
+| the write path's profile, a fourth time (#10) | With packs finished beside the writer, the cutter bounded the write at about 800 MB/s: a Buzhash rolls a byte at a time, and the serial dependency looked like the end of it | The hash at a byte depends on the 48 bytes before it alone, so the masks' hits are marked in parallel and only the cut placement is serial: 2.4 GB/s |
+| the parallel chunker's tests (#10) | Two mutants survived at first: a bit set past the search's end within its last word, which random data never places, and a reader blocked handing over a block, which the differential test's reader never was | A unit test of the bit search's bounds; a reader that fills every slot ahead and then blocks, closed with nobody reading |
+| the race detector, on the finisher (#10) | The GC property test's clock offsets were plain fields, written by the test and now read by a finisher goroutine uploading a pack | Atomic offsets, set and read through methods |
+| the write path's profile, a fifth time (#10) | With the storer trivial the wall did not move: a 256 MiB write allocated 3.4 GB, and both measurement tests were bounded by their own sources (a byte-at-a-time text generator, then a ChaCha8 stream at 700 MB/s) | One copy per chunk, recycled blocks, a compression scratch, packs built in place; the tests generate their data once beforehand |
+| the commit's trace (#10) | A commit was two publishes, each a pack, an index object and a root swap written one after the other, six fsyncs on this disk at about 11 ms each whatever the pack's size, plus the file's last pack still pending | One publish per commit; the packs and the index objects written together; the last pack flushed when the stream ends |
+| the GC property, under the finisher (#10) | Its slow-writer step jumped the clock the moment its puts returned, before the pack they filled had been uploaded beside them, so GC never met the orphan and no history lost a session; and its end asked GC to be done three windows after the last write, while a repack's chain of expiries (the pack it empties, then the index objects rewritten over it) is longer, and starts at whichever window the repack falls in | The step waits for the pack to land; the end runs quiet windows until a collection condemns, reprieves, repacks and deletes nothing, at most eight, then checks the next is quiet too; the failure names each deleted object's writer and age, and each collection's report |
+| the GC property, waiting for convergence (#10) | Histories in which GC repacked a pack every window for ever: a repack copied every live chunk of the pack it emptied, while the join credits a chunk two packs hold to the first listed, so a fresh pack holding a chunk credited elsewhere counted as mostly dead next window and was repacked again, each time into a pack with the same flaw. #1's repacking had this from the start; three quiet windows hid it | A repack copies the chunks credited to the pack it empties alone (`TestARepackLeavesAChunkCreditedToAnotherPack`); a shared chunk is proved copied once by the new packs' entries |
+| the memory measure (#10) | A store's open cost came out at 18 EB: a sync.Pool's buffers survive one collection in its victim cache, so the heap after opening was under the heap before it, and the difference was unsigned | Two collections per sample, signed differences |
+| the coverage gate (#10) | `core/stream` fell to 79.5% when its pipeline tests moved to `e2e` (depguard forbids the stream package a pack store): the gate counts the `core/` and `model/` test binaries, so an `e2e` test proves nothing to it | The pipeline's tests run in the package against a preparer over the memstore, with the store's own tests in `e2e` beside them; the pack store's flush, index bound, stats over a finishing pack, unpublished packs across a spilled refresh and a miss that reads another store's publish each have a test and a mutant in the package |
 | (redcheck on this branch) | Build-tagged tests unjudged; `TestMain` judged; pairs not matched by scope; contract changes invisible; environment-bound callers refused; no `main` in a new clone; a tagged backfill's mutants built without its tag; fuzz targets not counted as tests | Tool fixed each time, with a red test |
 
 ### Batch 2 (in progress)
@@ -367,9 +390,28 @@ them, each tracked as an issue:
    in memory open in 16 KiB and collect in a 31 MiB peak, against 117 MiB
    and 371 MiB before, and two million in 20 KiB and 34 MiB
    (`TestSlowMemoryPerChunkOn1MChunks`).
-7. **The write path is single-threaded** (#10): measured on a laptop
-   over `blob/local`, 113 MB/s writing random data, 187 compressible,
-   188 re-snapshotting a deduplicated file, 0.5–1.2 GB/s reading, 80 ms
-   a commit. First a slow-tier test that reports the figures weekly,
-   then hashing, compressing and sealing chunks on N workers with the
-   memory in flight bounded.
+7. ✅ **The write path was single-threaded** (#10): chunks are hashed and
+   compressed on `stream.Config.Workers` goroutines and stored in order
+   (`TestSlowWorkersOutrunOneWorker`, `TestTheStreamIsTheSameAtAnyWorkerCount`),
+   and `core/cdc` cuts disknexus's boundaries itself three times as fast
+   (`TestSlowTheChunkerOutrunsDisknexus`). On the same laptop over
+   `blob/local`: 321 MB/s writing random data (from 114), 509 compressible
+   (from 188), 376 re-snapshotting (from 203); in memory 830 on sixteen
+   workers against 300 on one; reads and commits unchanged
+   (`TestSlowThroughputOnLocalDisk`, weekly). Full packs are finished and
+   uploaded beside the writer, at most two at once
+   (`TestAnUploadDoesNotHoldUpTheWriter`, `TestAtMostTwoPacksAreInFlight`,
+   `TestAPublishWaitsForItsUploads`); `cdc.Parallel` marks the masks' hits
+   on every core and places the cuts on one, 2.4 GB/s against 750 serial
+   (`TestSlowParallelCuttingOutrunsTheChunker`,
+   `TestTheParallelChunkerCutsWhereTheChunkerCuts`); chunks are sealed on
+   the preparing goroutine (`TestAChunkPreparedForOnePackStoresInTheNext`)
+   and the path copies each chunk once. On disk the fsync'ed write bounds
+   it; more packs in flight measured the same at two, four and eight. A
+   commit is one publish (`Repo.Commit`, `TestACommitIsOnePublish`) whose
+   packs and index objects are written together
+   (`TestAPublishWritesItsPackAndIndexObjectTogether`), the stream's last
+   pack having uploaded when the stream ended if it held at least an eighth
+   of a pack (`TestAStreamsLastPackIsUploadedWhenTheStreamEnds`): 81 / 39 / 33 ms
+   for the three files, from 125–142 / 80 / 86; 37 ms when any work
+   separates the write from the commit.

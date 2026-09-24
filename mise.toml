@@ -41,7 +41,7 @@ description = "Every `test:` commit on this branch fails (on an assertion) witho
 run = "go run ./tools/redcheck"
 
 [tasks.mutate]
-description = "Re-run the checked-in mutants (tools/mutate/mutants.txt) in a throwaway copy; every one must be killed"
+description = "Re-run the checked-in mutants (tools/mutate/mutants.txt) in throwaway copies, half the threads at once (-j); every one must be killed"
 run = "go run ./tools/mutate"
 
 [tasks.crash]

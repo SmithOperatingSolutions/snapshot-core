@@ -3,6 +3,7 @@ package gc_test
 import (
 	"errors"
 	"fmt"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -27,10 +28,13 @@ type history struct {
 	tags     []vcs.Tag
 	names    int
 	deleted  int
-	merges   int // merges in progress read back after a collection
-	lost     int // sessions lost to GC and reopened
-	slow     int // slow writers so far
-	repacked int // packs repacked by collections
+	merges   int      // merges in progress read back after a collection
+	lost     int      // sessions lost to GC and reopened
+	slow     int      // slow writers so far
+	steps    int      // steps taken
+	collects int      // collections run
+	log      []string // what each collection reported
+	repacked int      // packs repacked by collections
 }
 
 var (
@@ -92,7 +96,10 @@ func (h *history) head(branch string) vcs.Commit {
 
 func (h *history) step(rt *rapid.T) {
 	b := rapid.SampledFrom(h.branches).Draw(rt, "branch")
-	switch rapid.IntRange(0, 13).Draw(rt, "op") {
+	op := rapid.IntRange(0, 13).Draw(rt, "op")
+	h.steps++
+	h.w.clock.during(fmt.Sprintf("step %d, op %d on %s", h.steps, op, b))
+	switch op {
 	case 0, 1, 2:
 		path, content := rapid.SampledFrom(paths).Draw(rt, "path"), rapid.SampledFrom(contents).Draw(rt, "content")
 		h.edit(b, func(e *object.Editor) error { return e.Put(path, h.w.note(7, content)) })
@@ -162,7 +169,7 @@ func (h *history) step(rt *rapid.T) {
 		}
 		h.tags = append(h.tags, tag)
 	case 10:
-		h.w.jump += rapid.SampledFrom([]time.Duration{0, grace / 2, grace + time.Minute}).Draw(rt, "wait")
+		h.w.addJump(rapid.SampledFrom([]time.Duration{0, grace / 2, grace + time.Minute}).Draw(rt, "wait"))
 		h.collect()
 	case 12:
 		h.diverge(rt, b)
@@ -175,13 +182,15 @@ func (h *history) step(rt *rapid.T) {
 		note := incompressible(int64(h.slow), 1500)
 		first := true
 		h.edit(b, func(e *object.Editor) error {
+			packs := count(rt, h.w.blobs, "packs/")
 			ref := h.w.note(7, note)
 			for i := range 2 { // the second fills the pack holding the note: uploaded, not published
 				h.w.note(7, incompressible(int64(h.slow)<<8|int64(i), 1500))
 			}
 			if first {
 				first = false
-				h.w.jump += grace + time.Minute
+				waitForPacks(rt, h.w.blobs, packs+1) // the upload lands beside the writer
+				h.w.addJump(grace + time.Minute)
 				h.collect()
 			}
 			return e.Put(path, ref)
@@ -196,7 +205,7 @@ func (h *history) step(rt *rapid.T) {
 			if first {
 				first = false
 				for range 2 {
-					h.w.jump += grace + time.Minute
+					h.w.addJump(grace + time.Minute)
 					h.collect()
 				}
 			}
@@ -245,17 +254,34 @@ func (h *history) others(b string) []string {
 
 // collect runs GC and checks the whole repository still reads.
 func (h *history) collect() gcReport {
+	h.collects++
+	h.w.clock.during(fmt.Sprintf("collection %d", h.collects))
 	rep, err := h.w.gc()
 	if err != nil {
 		h.w.t.Fatalf("GC: %v", err)
 	}
 	h.deleted += len(rep.Deleted)
 	h.repacked += rep.Repacked
+	h.log = append(h.log, fmt.Sprintf("collection %d: %d rounds, %d live, %d condemned, %d reprieved, %d repacked, deleted %v", h.collects, rep.Rounds, rep.Live, rep.Condemned, rep.Reprieved, rep.Repacked, rep.Deleted))
+	h.w.clock.during(fmt.Sprintf("reading everything after collection %d", h.collects))
 	h.readsWhole()
-	return gcReport{condemned: rep.Condemned, deleted: len(rep.Deleted)}
+	written := make([]string, 0, len(rep.Deleted))
+	for _, name := range rep.Deleted {
+		written = append(written, h.w.clock.written(name))
+	}
+	return gcReport{condemned: rep.Condemned, reprieved: rep.Reprieved, repacked: rep.Repacked, deleted: written}
 }
 
-type gcReport struct{ condemned, deleted int }
+type gcReport struct {
+	condemned, reprieved, repacked int
+	deleted                        []string
+}
+
+// quiet is a collection that found nothing to do: nothing to condemn,
+// reprieve, repack or delete, so nothing for the next window to finish.
+func (r gcReport) quiet() bool {
+	return r.condemned == 0 && r.reprieved == 0 && r.repacked == 0 && len(r.deleted) == 0
+}
 
 // readsWhole reads, from a fresh store, everything the repository holds
 // through its API: every branch's history and namespaces, working sets,
@@ -355,14 +381,20 @@ func (h *history) readsWhole() {
 // them as the clock moves on by nothing, half a grace window or more than
 // one, GC never deletes a chunk any ref or working set reaches: after every
 // run the whole repository reads. And it does delete what nothing reaches:
-// once grace windows pass with no writer, a run finds nothing left to
-// condemn and nothing to delete, and what the store holds has converged on
+// once grace windows pass with no writer (at most maxQuietWindows), a run
+// finds nothing left to condemn and nothing to delete, so does the next,
+// and what the store holds has converged on
 // what is reachable: every pack at least half live, so the packs' bytes are
 // at most twice the live bytes and a pack's overhead each (#1). The run
 // proves its reach: GC deleted something in most histories, merges in
 // progress were read back, slow writers (and fenced edits) lost their
 // sessions and did their work again on a reopened repository, and packs
 // were repacked.
+// maxQuietWindows bounds the grace windows GC gets, with no writer, to
+// find nothing left to condemn or delete: a repack's chain of expiries is
+// four windows long, and no history should start two.
+const maxQuietWindows = 8
+
 func TestGCSafetyProperty(t *testing.T) {
 	var cases, collected, merges, lost, repacked atomic.Int64
 	rapid.Check(t, func(rt *rapid.T) {
@@ -373,13 +405,25 @@ func TestGCSafetyProperty(t *testing.T) {
 		for range rapid.IntRange(5, 40).Draw(rt, "steps") {
 			h.step(rt)
 		}
-		for range 3 {
-			w.jump += grace + time.Minute
-			h.collect()
+		// With no writer, each grace window lets GC finish what the last one
+		// started: a condemned pack expires, and the index objects rewritten
+		// over it expire a window later; a repack may make a pack holding the
+		// same chunks as the fresh one dead, and that pack takes the same
+		// road. Two chains of that length, and GC has run out of things to
+		// do: a collection then finds nothing, and so does the next.
+		quiet := 0
+		for ; quiet < maxQuietWindows; quiet++ {
+			w.addJump(grace + time.Minute)
+			if h.collect().quiet() {
+				break
+			}
 		}
-		w.jump += grace + time.Minute
-		if last := h.collect(); last.condemned != 0 || last.deleted != 0 {
-			rt.Fatalf("grace windows after the last write, GC still condemned %d packs and deleted %d objects", last.condemned, last.deleted)
+		if quiet == maxQuietWindows {
+			rt.Fatalf("%d grace windows after the last write, every collection still condemned, reprieved, repacked or deleted something: GC does not converge\n%s", maxQuietWindows, strings.Join(h.log[max(0, len(h.log)-maxQuietWindows):], "\n"))
+		}
+		w.addJump(grace + time.Minute)
+		if last := h.collect(); !last.quiet() {
+			rt.Fatalf("a collection that found nothing to do was followed by one that condemned %d packs, reprieved %d, repacked %d and deleted %d objects: %v\n%s", last.condemned, last.reprieved, last.repacked, len(last.deleted), last.deleted, strings.Join(h.log[max(0, len(h.log)-6):], "\n"))
 		}
 		h.converged(rt)
 		if h.deleted > 0 {

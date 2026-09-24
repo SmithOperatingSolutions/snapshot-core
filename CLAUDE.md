@@ -21,6 +21,9 @@ wins where they disagree.
   commit. `docs:`, `chore:`, `ci:`, `build:`, `refactor:` need no red.
 - A test for behavior that already exists is a backfill: add its mutant to
   `tools/mutate/mutants.txt` and put `Red-Check: mutants <id>` in the body.
+- A measurement is never a red: a performance change lands as `refactor:`
+  with before/after figures in the body; its timing test is a regression
+  guard with headroom, committed as `chore:`.
 - `mise run redcheck` must pass for the branch before calling work done.
 - Keep `docs/PROGRESS.md` current: update it at every milestone boundary and
   whenever a spec checklist item turns green (name the test that proves it).

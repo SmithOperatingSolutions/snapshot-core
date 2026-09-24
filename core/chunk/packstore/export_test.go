@@ -2,6 +2,7 @@ package packstore
 
 import (
 	"context"
+	"fmt"
 	"sort"
 	"time"
 
@@ -104,6 +105,36 @@ func PackOrder(ctx context.Context, o Options) ([]string, error) {
 	return out, nil
 }
 
+// PackEntries lists the chunks the manifest's index objects say pack name
+// holds, in the pack's order.
+func PackEntries(ctx context.Context, o Options, name string) ([]hash.Hash, error) {
+	r, err := o.Blobs.Root(ctx)
+	if err != nil {
+		return nil, err
+	}
+	m, err := openManifest(r.Value, o.Keys, o.Repo)
+	if err != nil {
+		return nil, err
+	}
+	for _, sum := range m.indexes {
+		infos, err := loadIndex(ctx, o, sum)
+		if err != nil {
+			return nil, err
+		}
+		for _, p := range infos {
+			if p.Name != name {
+				continue
+			}
+			var out []hash.Hash
+			for _, e := range p.Entries {
+				out = append(out, e.Hash)
+			}
+			return out, nil
+		}
+	}
+	return nil, fmt.Errorf("no index object lists %s", name)
+}
+
 // ForgedSpilled is a spilled index over a table whose records were written
 // by hand, to prove the record decoder refuses what it should.
 func ForgedSpilled(t *dedup.Table, packs int) interface {
@@ -130,3 +161,11 @@ func JoinForged(t *dedup.Table, packs int, live Live) error {
 	_, _, err := r.join(live)
 	return err
 }
+
+// WaitUploads waits for every pack a finisher is naming and uploading, so a
+// test can count on what filled being in the backend.
+func WaitUploads(s *Store) { s.finishers.Wait() }
+
+// HoldFinish makes every finisher call f before it names and builds its
+// pack, so a test can hold a pack at that point.
+func HoldFinish(s *Store, f func()) { s.holdFinish = f }

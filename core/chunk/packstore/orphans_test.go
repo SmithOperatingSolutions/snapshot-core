@@ -54,6 +54,7 @@ func uploadUnpublished(t *testing.T, bs blob.BlobStore, s *packstore.Store, c []
 	if _, err := s.Put(ctx, payload("filler for "+hash.Sum(c).String(), 10<<10)); err != nil { // never stored before, so it fills
 		t.Fatal(err)
 	}
+	packstore.WaitUploads(s)
 	added := newNames(before, objects(t, bs, "packs/"))
 	if len(added) != 1 {
 		t.Fatalf("fixture: the writer uploaded packs %v, want one", added)
