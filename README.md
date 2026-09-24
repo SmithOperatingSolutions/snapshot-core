@@ -90,8 +90,11 @@ default), so run it on a schedule.
   repository; if the disk holding the root is lost, `split.Recover` seeds a
   fresh root store from the copy.
 - **Authorize.** Every call takes a `Principal` and asks the `Authorizer`
-  about `repo`, `branch:<name>`, `tag:<name>` and, for writes, every
-  `path:<branch>:<path>` it changes. A nil authorizer denies everything.
+  for one of six actions (`Read`, `Write`, `Commit`, `Merge`, `Manage`,
+  `Admin`) on `repo`, `branch:<name>`, `tag:<name>` and, for writes, every
+  `path:<branch>:<path>` it changes. A nil authorizer denies everything. A
+  protected branch is a policy: grant `Merge` and `Commit` on it and no
+  `Write`, and it takes merges and their commits but no direct writes.
 
 ## Packages
 
