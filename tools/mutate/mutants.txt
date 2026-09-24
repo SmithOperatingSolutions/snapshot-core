@@ -4502,3 +4502,17 @@ find: for _, a := range l.adapters {\n\t\tif rel == a {\n\t\t\treturn true\n\t\t
 replace: for range l.adapters {\n\t}
 pkg: ./tools/ci
 run: ^TestThresholdsFollowTheEngineSpec$
+
+id: contract-colliding-edits-must-conflict
+file: model/contract/contract.go
+find: if len(r.Conflicts) == 0 {\n\t\treturn errors.New("two edits the model says cannot combine merged with no conflict: the merge took a side in silence")\n\t}
+replace: if len(r.Conflicts) < 0 {\n\t\treturn errors.New("two edits the model says cannot combine merged with no conflict: the merge took a side in silence")\n\t}
+pkg: ./model/contract
+run: ^TestCollisionVerdict$
+
+id: contract-a-conflict-carries-a-reason
+file: model/contract/contract.go
+find: if c.Reason == "" {
+replace: if c.Reason == "" && false {
+pkg: ./model/contract
+run: ^TestCollisionVerdict$

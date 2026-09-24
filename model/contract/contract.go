@@ -180,9 +180,18 @@ func collidingEditsConflict(t *testing.T, s Subject) {
 	}
 }
 
-// collisionVerdict judges the merge of two colliding edits. (Stub.)
+// collisionVerdict judges the merge of two colliding edits: at least one
+// conflict, each with a reason.
 func collisionVerdict(r model.MergeResult) error {
-	return errors.New("collisionVerdict: not implemented")
+	if len(r.Conflicts) == 0 {
+		return errors.New("two edits the model says cannot combine merged with no conflict: the merge took a side in silence")
+	}
+	for _, c := range r.Conflicts {
+		if c.Reason == "" {
+			return fmt.Errorf("a conflict at %q carries no reason for the person resolving it", c.Location)
+		}
+	}
+	return nil
 }
 
 func validateRefusesGarbage(t *testing.T, s Subject) {
