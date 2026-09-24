@@ -111,6 +111,36 @@ Pure Go (`CGO_ENABLED=0`). Depends on
 [disknexus-engine](https://github.com/SmithOperatingSolutions/disknexus-engine)
 as a pinned, unmodified module, imported only by `core/dnx`.
 
+## Versioning and stability
+
+Releases are tags `vX.Y.Z` on `main`, cut after CI is green; every change
+lands through a squash-merged pull request, so a tag's history is the list
+of pull requests. Until `v1`, a minor version may change Go APIs and says so
+in its release notes; a patch version does not.
+
+What is promised from `v0.1.0` on:
+
+- **A later release opens a repository an earlier one wrote.** Every on-disk
+  structure carries a version and has a hand-written, bounds-checked decoder
+  (docs/DESIGN.md §5, the compatibility contract); a format that changes
+  gets a new version, and the reader for the old one stays.
+- **The data-model port is frozen.** A model written against `core/model`
+  and passing `model/contract` keeps working across minor versions; anything
+  added beside it (like `model.Walker`) is optional.
+- **Encryption is not optional** and never was: there is no plaintext mode
+  to remove.
+
+What a host imports: `core/repo` (open, create, GC), `core/vcs` (commits,
+branches, tags, working sets), `core/object` (namespaces), `core/model` and
+`model/contract` (own models), `core/seal` (keys), `core/auth`, a backend
+under `core/blob/` and the models under `model/`. The rest (`core/pack`,
+`core/dedup`, `core/cdc`, `core/prolly`, `core/stream`, `core/dnx`, anything
+under `internal`) is how those are built and may change in a minor version.
+
+Go 1.27 or later, `CGO_ENABLED=0`, no cgo anywhere; the one third-party
+engine dependency, disknexus-engine, is pinned by tag and upgraded only
+deliberately, in its own pull request.
+
 ## Developing
 
 ```
