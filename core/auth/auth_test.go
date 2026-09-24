@@ -12,7 +12,7 @@ import (
 var (
 	ctx   = context.Background()
 	alice = auth.Principal{ID: "user:alice"}
-	all   = []auth.Action{auth.Read, auth.Write, auth.Manage, auth.Admin}
+	all   = []auth.Action{auth.Read, auth.Write, auth.Manage, auth.Admin, auth.Commit, auth.Merge}
 )
 
 func TestDenyAllRefusesEveryCall(t *testing.T) {

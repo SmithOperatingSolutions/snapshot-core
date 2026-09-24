@@ -8,10 +8,10 @@ import (
 	"github.com/SmithOperatingSolutions/snapshot-core/core/auth"
 	"github.com/SmithOperatingSolutions/snapshot-core/core/chunk"
 	"github.com/SmithOperatingSolutions/snapshot-core/core/hash"
-	"github.com/SmithOperatingSolutions/snapshot-core/core/internal/wire"
 	"github.com/SmithOperatingSolutions/snapshot-core/core/merge"
 	"github.com/SmithOperatingSolutions/snapshot-core/core/model"
 	"github.com/SmithOperatingSolutions/snapshot-core/core/object"
+	"github.com/SmithOperatingSolutions/snapshot-core/core/wire"
 )
 
 // Chunk kinds (docs/DESIGN.md §8).

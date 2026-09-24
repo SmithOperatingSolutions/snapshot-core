@@ -7,7 +7,7 @@ import (
 	"math"
 	"testing"
 
-	"github.com/SmithOperatingSolutions/snapshot-core/core/internal/wire"
+	"github.com/SmithOperatingSolutions/snapshot-core/core/wire"
 )
 
 func TestRoundTripEveryFieldKind(t *testing.T) {

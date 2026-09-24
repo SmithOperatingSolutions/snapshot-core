@@ -90,14 +90,18 @@ default), so run it on a schedule.
   repository; if the disk holding the root is lost, `split.Recover` seeds a
   fresh root store from the copy.
 - **Authorize.** Every call takes a `Principal` and asks the `Authorizer`
-  about `repo`, `branch:<name>`, `tag:<name>` and, for writes, every
-  `path:<branch>:<path>` it changes. A nil authorizer denies everything.
+  for one of six actions (`Read`, `Write`, `Commit`, `Merge`, `Manage`,
+  `Admin`) on `repo`, `branch:<name>`, `tag:<name>` and, for writes, every
+  `path:<branch>:<path>` it changes. A nil authorizer denies everything. A
+  protected branch is a policy: grant `Merge` and `Commit` on it and no
+  `Write`, and it takes merges and their commits but no direct writes.
 
 ## Packages
 
 | Layer | Packages |
 | --- | --- |
 | Backends | `core/blob` (the port) · `core/blob/mem`, `core/blob/local`, `core/blob/multivol`, `core/blob/s3`, `core/blob/cache` · `core/blob/split` (objects on one store, the root on another) |
+| Primitives | `core/hash` · `core/wire` (bounded reader and writer for every record) · `core/auth` |
 | Crypto, chunking | `core/seal` (keys, key files, KMS wrapping) · `core/cdc` · `core/boundary` |
 | Chunk layer | `core/pack`, `core/dedup` · `core/chunk` (the port) · `core/chunk/packstore`, `core/chunk/memstore` |
 | Keyed data | `core/stream` (byte streams) · `core/prolly` (the ordered map) |
@@ -105,7 +109,7 @@ default), so run it on a schedule.
 | History | `core/vcs` (commits, branches, tags, working sets) · `core/merge` |
 | GC, entry point | `core/gc` · `core/repo` |
 | Access | `core/auth` (principals, the default-deny authorizer) |
-| Models | `model/blob` (files) · `model/tree` (folders) · `model/contract` (the suite every model passes) |
+| Models | `model/blob` (files) · `model/tree` (folders) · `model/contract` (the suite every model passes) · `model/mapobject` (what a map-shaped model needs beside the port) |
 
 Pure Go (`CGO_ENABLED=0`). Depends on
 [disknexus-engine](https://github.com/SmithOperatingSolutions/disknexus-engine)
@@ -133,7 +137,9 @@ What is promised from `v0.1.0` on:
 What a host imports: `core/repo` (open, create, GC), `core/vcs` (commits,
 branches, tags, working sets), `core/object` (namespaces), `core/model` and
 `model/contract` (own models), `core/seal` (keys), `core/auth`, a backend
-under `core/blob/` and the models under `model/`. The rest (`core/pack`,
+under `core/blob/` and the models under `model/`. A model outside the core
+also imports `model/mapobject` (the plumbing of a map-shaped model) and
+`core/wire` (the bounded reader and writer its record decoders are built on). The rest (`core/pack`,
 `core/dedup`, `core/cdc`, `core/prolly`, `core/stream`, `core/dnx`, anything
 under `internal`) is how those are built and may change in a minor version.
 

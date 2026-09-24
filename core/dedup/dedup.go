@@ -20,9 +20,9 @@ import (
 	"sort"
 
 	"github.com/SmithOperatingSolutions/snapshot-core/core/hash"
-	"github.com/SmithOperatingSolutions/snapshot-core/core/internal/wire"
 	"github.com/SmithOperatingSolutions/snapshot-core/core/pack"
 	"github.com/SmithOperatingSolutions/snapshot-core/core/seal"
+	"github.com/SmithOperatingSolutions/snapshot-core/core/wire"
 )
 
 // ErrCorrupt is returned for an index object that does not decode.

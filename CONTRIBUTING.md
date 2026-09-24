@@ -61,6 +61,11 @@ tool on every pull request. A change to a port's contract suite
 (`<pkg>/contract`) counts as a change to every Test function that calls it,
 so a contract that grows is red on each implementation it catches out.
 
+**Renames are not reds.** redcheck judges every test a `test:` commit
+changed, so a rename that touches an existing test file blocks the commit:
+those tests pass without the change. A rename goes in a `refactor:` commit
+of its own, before the red.
+
 **Backfills.** A test for behavior that already exists (a guard someone argued
 for but never tested, `docs/TESTING.md` §11) cannot fail against its parent.
 Its red is a mutant instead: add the mutant to `tools/mutate/mutants.txt` in

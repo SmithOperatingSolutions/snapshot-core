@@ -50,7 +50,7 @@ Lower rows never import higher rows.
 | Layer | Packages | Imports |
 | --- | --- | --- |
 | Adapter | `core/dnx` | disknexus-engine (the only importer), stdlib |
-| Primitives | `core/hash`, `core/auth`, `core/internal/wire` | `core/dnx` (hash only), stdlib |
+| Primitives | `core/hash`, `core/auth`, `core/wire` (the bounded reader and writer every record decoder is built on, public for models outside the core) | `core/dnx` (hash only), stdlib |
 | Crypto, chunking | `core/seal`, `core/cdc`, `core/boundary` | primitives, `core/dnx` (seal only) |
 | Backends | `core/blob`, `core/blob/{mem,local,multivol,s3,cache}` | stdlib, AWS SDK (s3 only) |
 | Packs | `core/pack`, `core/dedup` | seal, hash, zstd |
@@ -128,7 +128,7 @@ one, a repository keeps its objects there and its root elsewhere.
 
 ## 5. On-disk formats (a compatibility contract)
 
-All integers are little-endian; varints are minimal LEB128 (`core/internal/wire`,
+All integers are little-endian; varints are minimal LEB128 (`core/wire`,
 which refuses anything else). Every format has a hand-written decoder and a fuzz
 target; packs and index objects also have a checked-in v1 file that must read
 forever (`core/pack/testdata/pack_v1.bin`, `core/dedup/testdata/index_v1.bin`).
@@ -486,8 +486,17 @@ working set  0x05 · working [32] · staged [32] · merging u8 (0 or 1) ·
   root. A store error anywhere is the call's error, and leaves the refs as
   they were.
 - Every call takes a `Principal` and asks the `Authorizer` about exactly
-  what it does (read, write or manage a branch, read or manage a tag, admin
-  the repository), except `Namespace`: it opens what a hash names, and a host
+  what it does, in six actions: `Read` (refs, commits, objects), `Write` (a
+  branch's working set; asked per path too), `Commit` (record what is
+  staged), `Merge` (merge into a branch, resolve its conflicts, abandon its
+  merge), `Manage` (create or delete branches and tags) and `Admin` (GC,
+  config). `UpdateWorkingSet` asks for Write, `CommitWorkingSet` for Commit,
+  the one-publish `Commit` for Write and Commit, `Merge`, `ResolveConflict`
+  and `AbortMerge` for Merge. A *protected branch* is the authorizer's
+  policy, not a ref flag: grant Merge and Commit on `branch:main` and no
+  Write, and a direct write to main is refused while a merge from a feature
+  branch and its commit go through (`TestAProtectedBranchTakesMergesNotDirectWrites`).
+  The exception is `Namespace`: it opens what a hash names, and a host
   that has the hash has the chunk store it came from. Writes are also
   authorized per path (the spec's "per path prefix"): every write asks for
   write on each path it changes, `path:<branch>:<path>`. `UpdateWorkingSet`

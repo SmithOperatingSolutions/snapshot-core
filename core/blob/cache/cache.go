@@ -29,7 +29,7 @@ import (
 	"time"
 
 	"github.com/SmithOperatingSolutions/snapshot-core/core/blob"
-	"github.com/SmithOperatingSolutions/snapshot-core/core/internal/wire"
+	"github.com/SmithOperatingSolutions/snapshot-core/core/wire"
 )
 
 // DefaultMaxBytes is the Engine Spec's default.

@@ -30,7 +30,7 @@ import (
 	"github.com/SmithOperatingSolutions/snapshot-core/core/blob"
 	"github.com/SmithOperatingSolutions/snapshot-core/core/blob/internal/fsutil"
 	"github.com/SmithOperatingSolutions/snapshot-core/core/blob/local"
-	"github.com/SmithOperatingSolutions/snapshot-core/core/internal/wire"
+	"github.com/SmithOperatingSolutions/snapshot-core/core/wire"
 )
 
 // Errors.
