@@ -1607,8 +1607,8 @@ id: stream-negative-offset
 file: core/stream/stream.go
 find: if off < 0 {
 replace: if off < 0 && false {
-pkg: ./core/prolly
-run: ^TestStreamRefusesImpossibleRefsAndOffsets$
+pkg: ./core/stream
+run: ^TestRandomAccessMatchesTheSource$
 
 id: stream-write-validates-nodes
 file: core/stream/stream.go
@@ -4164,29 +4164,29 @@ id: stream-workers-surface-the-sources-error
 file: core/stream/stream.go
 find: if j.err != nil {\n\t\t\treturn Ref{}, j.err\n\t\t}\n\t\th, err := w.PutPrepared(b.ctx, j.p)
 replace: if j.err != nil && false {\n\t\t\treturn Ref{}, j.err\n\t\t}\n\t\th, err := w.PutPrepared(b.ctx, j.p)
-pkg: ./e2e
+pkg: ./core/stream
 run: ^TestAWorkersWriteSurfacesTheSourcesError$
 
 id: stream-workers-surface-the-stores-error
 file: core/stream/stream.go
 find: h, err := w.PutPrepared(b.ctx, j.p)\n\t\tif err != nil {\n\t\t\treturn Ref{}, err\n\t\t}
 replace: h, err := w.PutPrepared(b.ctx, j.p)\n\t\tif err != nil && false {\n\t\t\treturn Ref{}, err\n\t\t}
-pkg: ./e2e
+pkg: ./core/stream
 run: ^TestAWorkersWriteSurfacesTheStoresError$
 
 id: stream-workers-finish-at-eof
 file: core/stream/stream.go
 find: if errors.Is(j.err, io.EOF) {\n\t\t\treturn b.finish()\n\t\t}
 replace: if errors.Is(j.err, io.EOF) && false {\n\t\t\treturn b.finish()\n\t\t}
-pkg: ./e2e
-run: ^TestTheStreamIsTheSameAtAnyWorkerCount$
+pkg: ./core/stream
+run: ^TestWorkersWriteTheSerialPathsChunks$
 
 id: stream-workers-count-each-chunks-bytes
 file: core/stream/stream.go
 find: if err := b.add(1, entry{child: h, size: uint64(len(j.data))}); err != nil {
 replace: if err := b.add(1, entry{child: h, size: uint64(len(j.data)) + 1}); err != nil {
-pkg: ./e2e
-run: ^TestTheStreamIsTheSameAtAnyWorkerCount$
+pkg: ./core/stream
+run: ^TestWorkersWriteTheSerialPathsChunks$
 
 id: packstore-refuses-a-chunk-prepared-elsewhere
 file: core/chunk/packstore/packstore.go
