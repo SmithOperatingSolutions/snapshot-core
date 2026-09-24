@@ -74,6 +74,7 @@ type world struct {
 	t     tb
 	shut  []func()
 	blobs blob.BlobStore
+	clock *clocked // blobs, as what it is
 	keys  *seal.Keyring
 	reg   *model.Registry
 	s     *packstore.Store
@@ -82,12 +83,16 @@ type world struct {
 	skew  atomic.Int64 // the backend's clock, ahead of GC's, in nanoseconds
 }
 
-// clocked is a blob store that stamps each object by the backend's clock.
+// clocked is a blob store that stamps each object by the backend's clock,
+// and remembers the phase of the test each was written in, for a failure
+// to name.
 type clocked struct {
 	blob.BlobStore
 	now    func() time.Time
 	mu     sync.Mutex
 	stamps map[string]time.Time
+	phase  string
+	phases map[string]string
 }
 
 func (c *clocked) Put(ctx context.Context, name string, r io.Reader, size int64) error {
@@ -95,9 +100,29 @@ func (c *clocked) Put(ctx context.Context, name string, r io.Reader, size int64)
 	if err == nil {
 		c.mu.Lock()
 		c.stamps[name] = c.now()
+		if c.phases == nil {
+			c.phases = map[string]string{}
+		}
+		c.phases[name] = c.phase
 		c.mu.Unlock()
 	}
 	return err
+}
+
+// during names the phase of the test that follows: what a failure reports
+// about the objects written in it.
+func (c *clocked) during(phase string) {
+	c.mu.Lock()
+	c.phase = phase
+	c.mu.Unlock()
+}
+
+// written says when name was written: its phase, and its stamp against
+// the backend's clock now.
+func (c *clocked) written(name string) string {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return fmt.Sprintf("%s (written during %q, %v before now)", name, c.phases[name], c.now().Sub(c.stamps[name]).Round(time.Second))
 }
 
 func (c *clocked) stamped(i blob.Info) blob.Info {
@@ -142,8 +167,10 @@ func newWorld(t *testing.T) *world {
 func worldFor(t tb) *world {
 	t.Helper()
 	w := &world{t: t}
-	w.blobs = &clocked{BlobStore: mem.New(), stamps: map[string]time.Time{},
+	w.clock = &clocked{BlobStore: mem.New(), stamps: map[string]time.Time{}, phases: map[string]string{},
 		now: func() time.Time { return time.Now().Add(w.jumped() + w.skewed()) }}
+	w.blobs = w.clock
+	w.clock.during("opening the repository")
 	var err error
 	if w.keys, err = seal.NewKeyring(); err != nil {
 		t.Fatal(err)
@@ -349,7 +376,7 @@ func exists(t *testing.T, bs blob.BlobStore, name string) bool {
 	return true
 }
 
-func count(t *testing.T, bs blob.BlobStore, prefix string) int {
+func count(t tb, bs blob.BlobStore, prefix string) int {
 	t.Helper()
 	infos, err := bs.List(ctx, prefix, "", blob.MaxListPage)
 	if err != nil {
@@ -814,7 +841,7 @@ func TestGCLeavesNoProbeBehind(t *testing.T) {
 
 // waitForPacks waits for the store to hold n packs: a full pack is uploaded
 // beside the writer, and lands a moment after the put that filled it.
-func waitForPacks(t *testing.T, bs blob.BlobStore, n int) {
+func waitForPacks(t tb, bs blob.BlobStore, n int) {
 	t.Helper()
 	deadline := time.Now().Add(10 * time.Second)
 	for count(t, bs, "packs/") < n {
