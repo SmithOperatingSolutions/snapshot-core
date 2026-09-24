@@ -2167,8 +2167,8 @@ run: ^TestRefsNameOnlyStoredObjects$
 
 id: vcs-commit-message-bounded
 file: core/vcs/vcs.go
-find: func (r *Repo) CommitWorkingSet(ctx context.Context, p auth.Principal, branch, message string) (Commit, error) {\n\tif err := r.branchCheck(ctx, p, auth.Write, branch); err != nil {\n\t\treturn Commit{}, err\n\t}\n\tif len(message) > MaxMessageLen || !utf8.ValidString(message) {
-replace: func (r *Repo) CommitWorkingSet(ctx context.Context, p auth.Principal, branch, message string) (Commit, error) {\n\tif err := r.branchCheck(ctx, p, auth.Write, branch); err != nil {\n\t\treturn Commit{}, err\n\t}\n\tif (len(message) > MaxMessageLen || !utf8.ValidString(message)) && false {
+find: func (r *Repo) CommitWorkingSet(ctx context.Context, p auth.Principal, branch, message string) (Commit, error) {\n\tif err := r.branchCheck(ctx, p, auth.Commit, branch); err != nil {\n\t\treturn Commit{}, err\n\t}\n\tif len(message) > MaxMessageLen || !utf8.ValidString(message) {
+replace: func (r *Repo) CommitWorkingSet(ctx context.Context, p auth.Principal, branch, message string) (Commit, error) {\n\tif err := r.branchCheck(ctx, p, auth.Commit, branch); err != nil {\n\t\treturn Commit{}, err\n\t}\n\tif (len(message) > MaxMessageLen || !utf8.ValidString(message)) && false {
 pkg: ./core/vcs
 run: ^TestMessagesAreBoundedUTF8$
 
@@ -2307,15 +2307,15 @@ run: ^TestEveryCallIsAuthorized$
 
 id: vcs-merge-authorized
 file: core/vcs/vcs.go
-find: func (r *Repo) Merge(ctx context.Context, p auth.Principal, branch string, theirs hash.Hash) (merge.Result, error) {\n\tif err := r.branchCheck(ctx, p, auth.Write, branch); err != nil {
-replace: func (r *Repo) Merge(ctx context.Context, p auth.Principal, branch string, theirs hash.Hash) (merge.Result, error) {\n\tif err := r.branchCheck(ctx, p, auth.Write, branch); err != nil && false {
+find: func (r *Repo) Merge(ctx context.Context, p auth.Principal, branch string, theirs hash.Hash) (merge.Result, error) {\n\tif err := r.branchCheck(ctx, p, auth.Merge, branch); err != nil {
+replace: func (r *Repo) Merge(ctx context.Context, p auth.Principal, branch string, theirs hash.Hash) (merge.Result, error) {\n\tif err := r.branchCheck(ctx, p, auth.Merge, branch); err != nil && false {
 pkg: ./core/vcs
 run: ^TestEveryCallIsAuthorized$
 
 id: vcs-resolve-authorized
 file: core/vcs/vcs.go
-find: func (r *Repo) ResolveConflict(ctx context.Context, p auth.Principal, branch, path string, to *object.Ref) error {\n\tif err := r.branchCheck(ctx, p, auth.Write, branch); err != nil {
-replace: func (r *Repo) ResolveConflict(ctx context.Context, p auth.Principal, branch, path string, to *object.Ref) error {\n\tif err := r.branchCheck(ctx, p, auth.Write, branch); err != nil && false {
+find: func (r *Repo) ResolveConflict(ctx context.Context, p auth.Principal, branch, path string, to *object.Ref) error {\n\tif err := r.branchCheck(ctx, p, auth.Merge, branch); err != nil {
+replace: func (r *Repo) ResolveConflict(ctx context.Context, p auth.Principal, branch, path string, to *object.Ref) error {\n\tif err := r.branchCheck(ctx, p, auth.Merge, branch); err != nil && false {
 pkg: ./core/vcs
 run: ^(TestEveryCallIsAuthorized|TestAWriteNeedsTheBranchAsWellAsItsPaths)$
 
@@ -3231,8 +3231,8 @@ run: ^TestTagsAreListedAndReadBack$
 
 id: vcs-abort-authorized
 file: core/vcs/vcs.go
-find: func (r *Repo) AbortMerge(ctx context.Context, p auth.Principal, branch string) error {\n\tif err := r.branchCheck(ctx, p, auth.Write, branch); err != nil {
-replace: func (r *Repo) AbortMerge(ctx context.Context, p auth.Principal, branch string) error {\n\tif err := r.branchCheck(ctx, p, auth.Write, branch); err != nil && false {
+find: func (r *Repo) AbortMerge(ctx context.Context, p auth.Principal, branch string) error {\n\tif err := r.branchCheck(ctx, p, auth.Merge, branch); err != nil {
+replace: func (r *Repo) AbortMerge(ctx context.Context, p auth.Principal, branch string) error {\n\tif err := r.branchCheck(ctx, p, auth.Merge, branch); err != nil && false {
 pkg: ./core/vcs
 run: ^TestEveryCallIsAuthorized$
 
@@ -4400,8 +4400,8 @@ run: ^TestMutantsRunAtOnceOnWorkers$
 
 id: vcs-commit-bounds-the-message
 file: core/vcs/vcs.go
-find: func (r *Repo) Commit(ctx context.Context, p auth.Principal, branch string, prev WorkingSet, namespace hash.Hash, message string) (Commit, error) {\n\tif err := r.branchCheck(ctx, p, auth.Write, branch); err != nil {\n\t\treturn Commit{}, err\n\t}\n\tif len(message) > MaxMessageLen || !utf8.ValidString(message) {
-replace: func (r *Repo) Commit(ctx context.Context, p auth.Principal, branch string, prev WorkingSet, namespace hash.Hash, message string) (Commit, error) {\n\tif err := r.branchCheck(ctx, p, auth.Write, branch); err != nil {\n\t\treturn Commit{}, err\n\t}\n\tif (len(message) > MaxMessageLen || !utf8.ValidString(message)) && false {
+find: func (r *Repo) Commit(ctx context.Context, p auth.Principal, branch string, prev WorkingSet, namespace hash.Hash, message string) (Commit, error) {\n\tif err := r.branchCheck(ctx, p, auth.Write, branch); err != nil {\n\t\treturn Commit{}, err\n\t}\n\tif err := r.check(ctx, p, auth.Commit, "branch:"+branch); err != nil { // it writes the working set and commits it\n\t\treturn Commit{}, err\n\t}\n\tif len(message) > MaxMessageLen || !utf8.ValidString(message) {
+replace: func (r *Repo) Commit(ctx context.Context, p auth.Principal, branch string, prev WorkingSet, namespace hash.Hash, message string) (Commit, error) {\n\tif err := r.branchCheck(ctx, p, auth.Write, branch); err != nil {\n\t\treturn Commit{}, err\n\t}\n\tif err := r.check(ctx, p, auth.Commit, "branch:"+branch); err != nil { // it writes the working set and commits it\n\t\treturn Commit{}, err\n\t}\n\tif (len(message) > MaxMessageLen || !utf8.ValidString(message)) && false {
 pkg: ./core/vcs
 run: ^TestCommitRefusesWhatTheTwoStepsRefuse$
 
@@ -4558,3 +4558,39 @@ find: if c.Location == nil {\n\t\t\t\t\tc.Location = bytes.Clone(co.Key)\n\t\t\t
 replace: if c.Location == nil && false {\n\t\t\t\t\tc.Location = bytes.Clone(co.Key)\n\t\t\t\t}
 pkg: ./model/mapobject
 run: ^TestADeciderLocatesConflictsBelowTheKey$
+
+# auth actions
+id: vcs-committing-asks-for-commit
+file: core/vcs/vcs.go
+find: if err := r.branchCheck(ctx, p, auth.Commit, branch); err != nil {
+replace: if err := r.branchCheck(ctx, p, auth.Write, branch); err != nil {
+pkg: ./core/vcs
+run: ^TestCommittingIsItsOwnAction$
+
+id: vcs-one-publish-commit-asks-for-commit
+file: core/vcs/vcs.go
+find: if err := r.check(ctx, p, auth.Commit, "branch:"+branch); err != nil { // it writes the working set and commits it
+replace: if err := r.check(ctx, p, auth.Commit, "branch:"+branch); err != nil && false { // it writes the working set and commits it
+pkg: ./core/vcs
+run: ^TestCommittingIsItsOwnAction$
+
+id: vcs-merging-asks-for-merge
+file: core/vcs/vcs.go
+find: func (r *Repo) Merge(ctx context.Context, p auth.Principal, branch string, theirs hash.Hash) (merge.Result, error) {\n\tif err := r.branchCheck(ctx, p, auth.Merge, branch); err != nil {
+replace: func (r *Repo) Merge(ctx context.Context, p auth.Principal, branch string, theirs hash.Hash) (merge.Result, error) {\n\tif err := r.branchCheck(ctx, p, auth.Write, branch); err != nil {
+pkg: ./core/vcs
+run: ^TestMergingIsItsOwnAction$
+
+id: vcs-abandoning-asks-for-merge
+file: core/vcs/vcs.go
+find: func (r *Repo) AbortMerge(ctx context.Context, p auth.Principal, branch string) error {\n\tif err := r.branchCheck(ctx, p, auth.Merge, branch); err != nil {
+replace: func (r *Repo) AbortMerge(ctx context.Context, p auth.Principal, branch string) error {\n\tif err := r.branchCheck(ctx, p, auth.Write, branch); err != nil {
+pkg: ./core/vcs
+run: ^TestMergingIsItsOwnAction$
+
+id: vcs-resolving-asks-for-merge
+file: core/vcs/vcs.go
+find: func (r *Repo) ResolveConflict(ctx context.Context, p auth.Principal, branch, path string, to *object.Ref) error {\n\tif err := r.branchCheck(ctx, p, auth.Merge, branch); err != nil {
+replace: func (r *Repo) ResolveConflict(ctx context.Context, p auth.Principal, branch, path string, to *object.Ref) error {\n\tif err := r.branchCheck(ctx, p, auth.Write, branch); err != nil {
+pkg: ./core/vcs
+run: ^TestMergingIsItsOwnAction$
