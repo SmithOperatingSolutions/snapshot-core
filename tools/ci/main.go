@@ -260,6 +260,8 @@ func stepCrash(ctx context.Context, c *config) error {
 
 // stepSlow runs the scale guards behind -tags slow (the spec's 1 GiB file,
 // 1M-entry maps): too slow for every push, run weekly and by `mise run ci`.
+// One package at a time: these tests measure, and a measurement sharing
+// the machine with another package's is a measurement of the contention.
 func stepSlow(ctx context.Context, _ *config) error {
 	pkgs, err := productPackages(ctx)
 	if err != nil {
@@ -268,7 +270,7 @@ func stepSlow(ctx context.Context, _ *config) error {
 	if len(pkgs) == 0 {
 		return errSkip{"no core/ packages yet"}
 	}
-	args := append([]string{"test", "-count=1", "-tags", "slow", "-run", "Slow", "-timeout", "60m"}, pkgs...)
+	args := append([]string{"test", "-count=1", "-p", "1", "-tags", "slow", "-run", "Slow", "-timeout", "60m"}, pkgs...)
 	return stream(ctx, nil, "go", args...)
 }
 

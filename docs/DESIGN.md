@@ -20,7 +20,8 @@ exact commit the spec's package map was reviewed at. That is the pin.
 | D5 | `core/seal` and per-pack keys | `seal` owns the raw master key and derives every object key with stdlib HKDF-SHA-256. disknexus supplies the AEAD (`MasterKeyFromBytes(k).EncryptWithAAD`), Argon2id (`DeriveKEK`, `Argon2Params.Validate`) and X25519 wrapping (`WrapSecretAsymmetric`) | disknexus's `MasterKey` never exposes its bytes, so HKDF from it is impossible; its `KeyFile`/`WrapKey` seal the key with **no** domain tag, which the spec forbids. So we do not use `KeyFile`, `GenerateKeyFile`, `OpenMasterKey`, `Encrypt`/`Decrypt` (untagged) |
 | D6 | `core/hash` reuse | Routed through `core/dnx` as specified (`hasher.Sum(b).StrongHash`); the compat suite pins it equal to `crypto/sha256` | `hasher.Sum` is `sha256.Sum256` plus an xxHash filter hint. The reuse is nominal; the pin is what matters |
 | D7 | `core/cdc` geometry | `cdc` validates geometry before handing it to disknexus (min ≥ 64 B, max ≤ 1 MiB chunk limit, min < max, mask non-zero and of the form 2ⁿ−1) | `chunker.New` accepts `max = 0` (a chunk per byte) and `min > max` silently |
-| D8 | What "reuse" amounts to | chunker (geometry, rolling hash, table), hasher (identity), crypto (AEAD, Argon2id, X25519). Everything else is ours | Matches the spec's "hardest-won quarter" |
+| D8 | What "reuse" amounts to | hasher (identity), crypto (AEAD, Argon2id, X25519). The chunker was reused through `core/dnx` until #10; `core/cdc` now cuts disknexus's boundaries itself (D10). Everything else is ours | Matches the spec's "hardest-won quarter" |
+| D10 | The chunker (2026-09-23, #10) | `core/cdc` rolls disknexus's Buzhash and cut rules over each read buffer, byte for byte disknexus's boundaries; disknexus stays the oracle, imported in `core/dnx` and held to by `core/dnx/compat`'s goldens and a differential test. `cdc.Parallel` marks where the masks hit on many goroutines and places the cuts on one, since the hash at a byte depends on the 48 bytes before it alone: the same boundaries at 2.4 GB/s on sixteen threads | disknexus reads a byte at a time and bounds a write at about 200 MB/s on one core; ours cuts the same 8,531 chunks of 256 MiB at 750 MB/s serially. The spec's rule 3 allows a package of our own beside it |
 | D9 | Where the Engine Spec lives | Its L4 (tables) is implemented in a separate, consuming repository. Its L0–L3 rules apply here as below | Owner decision |
 
 ## 2. How the Engine Spec's L0–L3 land here
@@ -49,7 +50,7 @@ Lower rows never import higher rows.
 | --- | --- | --- |
 | Adapter | `core/dnx` | disknexus-engine (the only importer), stdlib |
 | Primitives | `core/hash`, `core/auth`, `core/internal/wire` | `core/dnx` (hash only), stdlib |
-| Crypto, chunking | `core/seal`, `core/cdc`, `core/boundary` | primitives, `core/dnx` |
+| Crypto, chunking | `core/seal`, `core/cdc`, `core/boundary` | primitives, `core/dnx` (seal only) |
 | Backends | `core/blob`, `core/blob/{mem,local,multivol,s3,cache}` | stdlib, AWS SDK (s3 only) |
 | Packs | `core/pack`, `core/dedup` | seal, hash, zstd |
 | Chunk layer | `core/chunk` (port), `core/chunk/{memstore,packstore}` | blob, pack, dedup, seal |
@@ -160,10 +161,50 @@ can refuse them) and a fuzz target.
 
 ## 6. The chunk layer protocol (`core/chunk/packstore`)
 
-- **Put** adds to an in-memory pack writer. A full pack is finished, added to
-  the in-memory index, and uploaded; until the upload is confirmed its bytes
-  stay readable from memory. A failed upload is kept and retried by the next
-  CompareAndSetRoot, which refuses to publish while any pack is unstored.
+- **Put** adds to an in-memory pack writer. A full pack is handed to a
+  finisher goroutine that names it, builds it and uploads it (#10); the
+  writer moves to a fresh pack at once. Until the pack is named its chunks
+  read and deduplicate from the unfinished writer, then from its bytes kept
+  in memory until the upload is confirmed. At most two packs are finishing
+  or uploading at once: a writer with a third full pack waits, so a slow
+  backend costs time, never memory. A failed upload is kept and retried by
+  the next CompareAndSetRoot, which waits for every finisher, finishes and
+  uploads the pending pack itself, and refuses to publish while any pack is
+  unstored. The packs a publish has to upload and the index objects that
+  list them are written together, each waiting on the backend and neither
+  on the other, then the root is swapped: one fsync latency for the two on
+  `blob/local` (a pack that fails leaves its index objects orphans, which
+  GC deletes). `Flush` (`chunk.Flusher`) hands the pending pack to a
+  finisher at once when it holds at least an eighth of a pack; `stream.Write`
+  flushes when a stream ends, so the pack holding a big file's last chunks
+  uploads beside the host's next work rather than inside the publish. A
+  smaller pending pack waits for the publish and shares its pack with what
+  comes next: a pack put costs one fsync latency (one round trip on S3)
+  whatever its size, so flushing it would save nothing and cost a pack, a
+  fsync and an index entry per file. A commit that follows a gibibyte's write by any
+  other work is one metadata pack, one index object and a swap: 37 ms here.
+  Put is two halves (`chunk.Preparer`, #10): **Prepare**, the hash and the
+  compression, on the caller's goroutine with no lock; **PutPrepared**, the
+  deduplication check and the seal into the pending pack, under the lock.
+  `stream.Write` uses the halves to hash and compress on `Config.Workers`
+  goroutines (GOMAXPROCS by default; 1 is the serial path) while
+  `cdc.Parallel` reads and marks the stream on its own goroutines and the
+  caller's places the cuts and stores in stream order, so the stream is
+  the same at any worker count; at most about 2×Workers chunks and a few
+  blocks are in flight. The pending pack's buffer is allocated at the
+  pack's size once. Measured on an i7-1360P (`TestSlowThroughputOnLocalDisk`,
+  the weekly run): a gibibyte of random data writes to `blob/local` at 262
+  MB/s where it wrote at 114, compressible text at 485 where it wrote at
+  188, a one-byte re-snapshot deduplicates at 322; in memory on sixteen
+  workers 830 MB/s where one worker does 300. Chunks are sealed on the
+  goroutine that prepares them, under the pending pack's keys, and sealed
+  again under the lock only if the pack rolled over meanwhile; the placer
+  copies a chunk out of its block once and recycles the block, compression
+  writes into a scratch buffer and keeps only a shorter result, and a pack
+  is built in its writer's own buffer. Reads 0.5–1.2 GB/s and commits about
+  100 ms are unchanged. On disk the backend's fsync'ed write bounds a
+  write, which more packs in flight do not raise (measured the same at two,
+  four and eight).
 - **CompareAndSetRoot(expected, next)** refuses a `next` that is not a stored
   chunk, uploads every pending pack, writes one index object for the session's
   packs, then swaps the manifest (root := next, index list += the session's
@@ -423,6 +464,9 @@ working set  0x05 · working [32] · staged [32] · merging u8 (0 or 1) ·
   commit. `UpdateWorkingSet` changes the namespaces only: the merge state
   it is handed must be the stored one (`ErrMergeState`), since only
   `Merge`, `ResolveConflict`, `CommitWorkingSet` and `AbortMerge` change it.
+  `Commit` is `UpdateWorkingSet` then `CommitWorkingSet` in one publish
+  (#10): a host that edits a namespace and commits it pays one swap, one
+  index object and one pack of metadata, not two of each.
 - **Abandoning a merge.** `Merge` merges into the working namespace as it
   is, uncommitted edits and all, so the merge state records the working and
   staged namespaces it started from. `AbortMerge` drops the merge state and
@@ -445,6 +489,8 @@ working set  0x05 · working [32] · staged [32] · merging u8 (0 or 1) ·
   diffs the working set stored under `prev`, never the caller's copy;
   `CommitWorkingSet` diffs the head against what is staged, so committing
   someone else's staged change needs the committer's own permission;
+  `Commit` diffs all three, the stored working and staged namespaces and
+  the head, against the namespace it commits;
   `Merge` diffs the working namespace against the result;
   `ResolveConflict` asks for its path. Reads stay per branch: a host holding
   the chunk store can read what it can open, so a per-path read rule belongs
@@ -590,7 +636,10 @@ is rewritten (#1): in a round, a kept pack whose live bytes are under half
 its size (`Repack.MaxLive`) is a candidate, and candidates are repacked
 emptiest first until the round has copied its budget (`Repack.Budget`, a
 GiB by default; `Repack.Off` turns it off). The round reads each candidate
-in one GET, opens its live frames and seals them into new packs, uploads
+in one GET, opens the live frames credited to it (a chunk two packs hold
+counts for the first listed and is copied from that pack alone, or the new
+pack would hold a chunk counted dead and be repacked again every round)
+and seals them into new packs, uploads
 those before its swap (a swap that loses leaves them orphans, which a later
 run deletes), lists them in its index objects, and records the old pack as
 repacked (condemned kind 5): a repacked pack is never reprieved by the

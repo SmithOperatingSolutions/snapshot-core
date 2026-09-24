@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -73,20 +74,25 @@ type world struct {
 	t     tb
 	shut  []func()
 	blobs blob.BlobStore
+	clock *clocked // blobs, as what it is
 	keys  *seal.Keyring
 	reg   *model.Registry
 	s     *packstore.Store
 	r     *vcs.Repo
-	jump  time.Duration // GC's clock, ahead of real time
-	skew  time.Duration // the backend's clock, ahead of GC's
+	jump  atomic.Int64 // GC's clock, ahead of real time, in nanoseconds
+	skew  atomic.Int64 // the backend's clock, ahead of GC's, in nanoseconds
 }
 
-// clocked is a blob store that stamps each object by the backend's clock.
+// clocked is a blob store that stamps each object by the backend's clock,
+// and remembers the phase of the test each was written in, for a failure
+// to name.
 type clocked struct {
 	blob.BlobStore
 	now    func() time.Time
 	mu     sync.Mutex
 	stamps map[string]time.Time
+	phase  string
+	phases map[string]string
 }
 
 func (c *clocked) Put(ctx context.Context, name string, r io.Reader, size int64) error {
@@ -94,9 +100,29 @@ func (c *clocked) Put(ctx context.Context, name string, r io.Reader, size int64)
 	if err == nil {
 		c.mu.Lock()
 		c.stamps[name] = c.now()
+		if c.phases == nil {
+			c.phases = map[string]string{}
+		}
+		c.phases[name] = c.phase
 		c.mu.Unlock()
 	}
 	return err
+}
+
+// during names the phase of the test that follows: what a failure reports
+// about the objects written in it.
+func (c *clocked) during(phase string) {
+	c.mu.Lock()
+	c.phase = phase
+	c.mu.Unlock()
+}
+
+// written says when name was written: its phase, and its stamp against
+// the backend's clock now.
+func (c *clocked) written(name string) string {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return fmt.Sprintf("%s (written during %q, %v before now)", name, c.phases[name], c.now().Sub(c.stamps[name]).Round(time.Second))
 }
 
 func (c *clocked) stamped(i blob.Info) blob.Info {
@@ -141,8 +167,10 @@ func newWorld(t *testing.T) *world {
 func worldFor(t tb) *world {
 	t.Helper()
 	w := &world{t: t}
-	w.blobs = &clocked{BlobStore: mem.New(), stamps: map[string]time.Time{},
-		now: func() time.Time { return time.Now().Add(w.jump + w.skew) }}
+	w.clock = &clocked{BlobStore: mem.New(), stamps: map[string]time.Time{}, phases: map[string]string{},
+		now: func() time.Time { return time.Now().Add(w.jumped() + w.skewed()) }}
+	w.blobs = w.clock
+	w.clock.during("opening the repository")
 	var err error
 	if w.keys, err = seal.NewKeyring(); err != nil {
 		t.Fatal(err)
@@ -180,7 +208,16 @@ func (w *world) vcs() vcs.Options {
 	return vcs.Options{Config: prolly.DefaultConfig(), Registry: w.reg, Authorizer: auth.AllowAll{}}
 }
 
-func (w *world) now() time.Time { return time.Now().Add(w.jump) }
+func (w *world) now() time.Time { return time.Now().Add(w.jumped()) }
+
+// The clocks' offsets are atomic: a finisher goroutine uploading a pack
+// reads the backend's clock while a test moves it (#10).
+func (w *world) jumped() time.Duration       { return time.Duration(w.jump.Load()) }
+func (w *world) skewed() time.Duration       { return time.Duration(w.skew.Load()) }
+func (w *world) setJump(d time.Duration)     { w.jump.Store(int64(d)) }
+func (w *world) addJump(d time.Duration)     { w.jump.Add(int64(d)) }
+func (w *world) setSkew(d time.Duration)     { w.skew.Store(int64(d)) }
+func (w *world) setClock(j, s time.Duration) { w.setJump(j); w.setSkew(s) }
 
 func (w *world) gc() (gc.Report, error) {
 	return gc.Run(ctx, gc.Options{Blobs: w.blobs, Keys: w.keys, Repo: repo, Config: prolly.DefaultConfig(),
@@ -339,7 +376,7 @@ func exists(t *testing.T, bs blob.BlobStore, name string) bool {
 	return true
 }
 
-func count(t *testing.T, bs blob.BlobStore, prefix string) int {
+func count(t tb, bs blob.BlobStore, prefix string) int {
 	t.Helper()
 	infos, err := bs.List(ctx, prefix, "", blob.MaxListPage)
 	if err != nil {
@@ -356,7 +393,7 @@ func count(t *testing.T, bs blob.BlobStore, prefix string) int {
 // own reckoning) while an object new by the backend's clock stays.
 func TestOrphanAgesAreTheBackendsClock(t *testing.T) {
 	w := newWorld(t)
-	w.skew = -10 * 24 * time.Hour
+	w.setSkew(-10 * 24 * time.Hour)
 	fresh := "packs/cd/cd" + strings.Repeat("0", 62)
 	if err := w.blobs.Put(ctx, fresh, strings.NewReader("just uploaded"), 13); err != nil {
 		t.Fatal(err)
@@ -379,7 +416,7 @@ func TestOrphanAgesAreTheBackendsClock(t *testing.T) {
 		t.Fatal(err)
 	}
 	packs := count(t, w.blobs, "packs/")
-	w.jump, w.skew = grace+time.Minute, -(grace + time.Minute) // GC's clock ahead, the backend's standing still
+	w.setClock(grace+time.Minute, -(grace + time.Minute)) // GC's clock ahead, the backend's standing still
 	second, err := w.gc()
 	if err != nil {
 		t.Fatal(err)
@@ -435,7 +472,7 @@ func TestGCKeepsWhatTheRefsReachAndDeletesTheRest(t *testing.T) {
 	}
 	want := w.readable()
 
-	w.jump = grace + time.Minute
+	w.setJump(grace + time.Minute)
 	second, err := w.gc()
 	if err != nil {
 		t.Fatalf("GC a grace window later: %v", err)
@@ -462,7 +499,7 @@ func TestGCKeepsWhatTheRefsReachAndDeletesTheRest(t *testing.T) {
 		t.Fatalf("an object only the deleted branch held reads as %v, want ErrNotFound", err)
 	}
 
-	w.jump = 2*grace + 2*time.Minute
+	w.setJump(2*grace + 2*time.Minute)
 	if _, err := w.gc(); err != nil {
 		t.Fatalf("GC two grace windows later: %v", err)
 	}
@@ -493,7 +530,7 @@ func TestADeletedTagsHistoryIsCollected(t *testing.T) {
 	}
 	only := hash.Sum([]byte("a note only the tag keeps"))
 	for _, jump := range []time.Duration{0, grace + time.Minute} {
-		w.jump = jump
+		w.setJump(jump)
 		if _, err := w.gc(); err != nil {
 			t.Fatalf("GC: %v", err)
 		}
@@ -505,7 +542,7 @@ func TestADeletedTagsHistoryIsCollected(t *testing.T) {
 		t.Fatalf("DeleteTag = %v", err)
 	}
 	for _, jump := range []time.Duration{grace + 2*time.Minute, 2*grace + 3*time.Minute} {
-		w.jump = jump
+		w.setJump(jump)
 		if _, err := w.gc(); err != nil {
 			t.Fatalf("GC after the tag was deleted: %v", err)
 		}
@@ -543,7 +580,7 @@ func TestAnAbandonedMergeIsCollected(t *testing.T) {
 		t.Fatalf("AbortMerge = %v", err)
 	}
 	for _, jump := range []time.Duration{0, grace + time.Minute} {
-		w.jump = jump
+		w.setJump(jump)
 		if _, err := w.gc(); err != nil {
 			t.Fatalf("GC: %v", err)
 		}
@@ -579,11 +616,12 @@ func TestAWriterCannotPublishAPackGCDeletedAsAnOrphan(t *testing.T) {
 	for _, n := range notes { // the third fills the pack holding the first two: uploaded, not published
 		refs = append(refs, w.note(7, n))
 	}
+	waitForPacks(t, w.blobs, packs+1) // the upload lands beside the writer
 	if n := count(t, w.blobs, "packs/"); n != packs+1 {
 		t.Fatalf("fixture: the writer left %d packs, want one more than the %d published", n, packs)
 	}
 	root := w.root()
-	w.jump = grace + time.Minute
+	w.setJump(grace + time.Minute)
 	rep, err := w.gc()
 	if err != nil {
 		t.Fatalf("GC: %v", err)
@@ -626,7 +664,7 @@ func TestGCRefusesWhatItCannotWalk(t *testing.T) {
 	w.commit(vcs.MainBranch, "not walkable")
 	packs := count(t, w.blobs, "packs/")
 	for _, jump := range []time.Duration{0, grace + time.Minute, 2*grace + 2*time.Minute} {
-		w.jump = jump
+		w.setJump(jump)
 		if _, err := w.gc(); !errors.Is(err, object.ErrNotWalkable) {
 			t.Fatalf("GC of a repository holding an object that cannot walk = %v, want ErrNotWalkable", err)
 		}
@@ -673,7 +711,7 @@ func TestGCTakesAnotherRoundWhenAWriterPublishes(t *testing.T) {
 	if report.Rounds != 2 {
 		t.Fatalf("GC took %d rounds with a writer publishing during the first, want 2", report.Rounds)
 	}
-	w.jump = grace + time.Minute
+	w.setJump(grace + time.Minute)
 	if _, err := w.gc(); err != nil {
 		t.Fatal(err)
 	}
@@ -744,7 +782,7 @@ func TestGCIsNotSteeredByAFileThatIsANode(t *testing.T) {
 	if _, err := w.gc(); err != nil {
 		t.Fatal(err)
 	}
-	w.jump = grace + time.Minute
+	w.setJump(grace + time.Minute)
 	if _, err := w.gc(); err != nil {
 		t.Fatal(err)
 	}
@@ -792,11 +830,24 @@ func TestGCLeavesNoProbeBehind(t *testing.T) {
 	if n := count(t, w.blobs, "gc/"); n != 1 {
 		t.Fatalf("after a run %d objects under gc/, want only the one a stopped run left", n)
 	}
-	w.jump = grace + time.Minute
+	w.setJump(grace + time.Minute)
 	if _, err := w.gc(); err != nil {
 		t.Fatal(err)
 	}
 	if n := count(t, w.blobs, "gc/"); n != 0 {
 		t.Fatalf("a grace window on, %d objects under gc/, want none", n)
+	}
+}
+
+// waitForPacks waits for the store to hold n packs: a full pack is uploaded
+// beside the writer, and lands a moment after the put that filled it.
+func waitForPacks(t tb, bs blob.BlobStore, n int) {
+	t.Helper()
+	deadline := time.Now().Add(10 * time.Second)
+	for count(t, bs, "packs/") < n {
+		if time.Now().After(deadline) {
+			t.Fatalf("ten seconds on, the store holds %d packs, want %d", count(t, bs, "packs/"), n)
+		}
+		time.Sleep(time.Millisecond)
 	}
 }

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"errors"
 	"io"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -270,9 +271,25 @@ func TestRepackingCopiesAChunkTwoPacksShareOnce(t *testing.T) {
 	if n := len(objects(t, bs, "packs/")); n != 2 {
 		t.Fatalf("fixture: %d packs, want one per writer", n)
 	}
+	before := objects(t, bs, "packs/")
 	out := repackRound(t, bs, kr, liveSet(hs[0], hs[1], ownHash), t0, packstore.Repack{})
 	if out.Repacked != 2 {
 		t.Fatalf("the round repacked %d packs, want both, which share a live chunk", out.Repacked)
+	}
+	copies := 0
+	for _, name := range newNames(before, objects(t, bs, "packs/")) {
+		entries, err := packstore.PackEntries(ctx, packstore.Options{Blobs: bs, Keys: kr, Repo: repo}, name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, h := range entries {
+			if h == hs[1] {
+				copies++
+			}
+		}
+	}
+	if copies != 1 {
+		t.Fatalf("the new packs hold the shared chunk %d times, want once", copies)
 	}
 	fresh := open(t, bs, kr)
 	for name, want := range map[string][]byte{"shared": shared, "b's own": own} {
@@ -391,4 +408,87 @@ func TestRepackingFillsSeveralPacksWhenTheyAreFull(t *testing.T) {
 			t.Fatalf("live chunk %d reads as %d bytes, %v after the repack", i, len(got), err)
 		}
 	}
+}
+
+// A repack copies the chunks the round credited to the pack it empties, not
+// every live chunk the pack holds: a chunk another pack in service holds
+// too counts for that pack (the first listed) and stays there. Were it
+// copied, the fresh pack would hold a chunk counted dead, look mostly dead
+// next window, and be repacked again, every window, for ever. Here two
+// writers stored the same chunk; the round credits it to the first pack
+// listed, whose chunks are all live, and repacks the other, mostly dead:
+// the fresh pack holds that pack's own live chunk alone. A window later
+// the repacked pack expires and nothing is repacked or condemned; the
+// index objects rewritten over it expire a window after that; and then
+// GC has nothing left to do.
+func TestARepackLeavesAChunkCreditedToAnotherPack(t *testing.T) {
+	for attempt := 0; attempt < 64; attempt++ {
+		bs, kr := mem.New(), keyring(t)
+		a, b := open(t, bs, kr), open(t, bs, kr)
+		shared, own := payload("shared", 2<<10), payload("b's own", 1<<10)
+		hs := packed(t, a, hash.Hash{}, []byte("the root"), shared) // a's pack: the root and the shared chunk, both live
+		var ownHash hash.Hash
+		for _, c := range [][]byte{shared, own, payload("dead b", 6<<10)} { // b's pack: the shared chunk again, its own, and a dead one
+			h, err := b.Put(ctx, c)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if bytes.Equal(c, own) {
+				ownHash = h
+			}
+		}
+		if _, err := b.Root(ctx); err != nil { // b learns of a's publish, its own pack already holding the shared chunk
+			t.Fatal(err)
+		}
+		if err := b.CompareAndSetRoot(ctx, hs[0], hs[0]); err != nil {
+			t.Fatal(err)
+		}
+		before := objects(t, bs, "packs/")
+		if len(before) != 2 {
+			t.Fatalf("fixture: %d packs, want one per writer", len(before))
+		}
+		o := packstore.Options{Blobs: bs, Keys: kr, Repo: repo}
+		order, err := packstore.PackOrder(ctx, o)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if aPack := locationOf(t, a, hs[0]); len(order) != 2 || order[0] != aPack {
+			continue // b's pack is listed first and credited the shared chunk; draw again
+		}
+		live := liveSet(hs[0], hs[1], ownHash)
+		out := repackRound(t, bs, kr, live, t0, packstore.Repack{})
+		if out.Repacked != 1 || out.Condemned != 0 {
+			t.Fatalf("fixture: the round repacked %d packs and condemned %d, want b's pack repacked alone", out.Repacked, out.Condemned)
+		}
+		fresh := newNames(before, objects(t, bs, "packs/"))
+		if len(fresh) != 1 {
+			t.Fatalf("fixture: the repack wrote %d packs, want one", len(fresh))
+		}
+		entries, err := packstore.PackEntries(ctx, o, fresh[0])
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(entries) != 1 || entries[0] != ownHash {
+			t.Fatalf("the fresh pack holds %d chunks, want b's own chunk alone: the shared chunk is credited to a's pack and stays there", len(entries))
+		}
+		window := time.Hour + time.Minute
+		out = repackRound(t, bs, kr, live, t0.Add(window), packstore.Repack{})
+		if out.Repacked != 0 || out.Condemned != 0 {
+			t.Fatalf("a window after the repack the round repacked %d packs and condemned %d, want neither: the fresh pack held a chunk credited elsewhere and looked mostly dead", out.Repacked, out.Condemned)
+		}
+		if !slices.Contains(out.Expired, order[1]) {
+			t.Fatalf("a window after the repack the round expired %v, want b's pack %s among them", out.Expired, order[1])
+		}
+		remove(t, bs, out.Expired)
+		out = repackRound(t, bs, kr, live, t0.Add(2*window), packstore.Repack{})
+		if out.Repacked != 0 || out.Condemned != 0 {
+			t.Fatalf("two windows after the repack the round repacked %d packs and condemned %d, want neither", out.Repacked, out.Condemned)
+		}
+		remove(t, bs, out.Expired)
+		if out = repackRound(t, bs, kr, live, t0.Add(3*window), packstore.Repack{}); out.Repacked != 0 || out.Condemned != 0 || out.Reprieved != 0 || len(out.Expired) != 0 {
+			t.Fatalf("three windows after the repack the round still repacked %d packs, condemned %d, reprieved %d and expired %v: GC does not converge", out.Repacked, out.Condemned, out.Reprieved, out.Expired)
+		}
+		return
+	}
+	t.Fatal("in 64 draws a's pack never came first in the index: the fixture cannot reach the order under test")
 }

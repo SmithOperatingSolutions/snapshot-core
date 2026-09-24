@@ -524,6 +524,76 @@ func (r *Repo) CommitWorkingSet(ctx context.Context, p auth.Principal, branch, m
 	return out, err
 }
 
+// Commit replaces a branch's working and staged namespaces with namespace
+// and commits it onto the branch's head, in one publish: the working set
+// must still be prev (ErrConflict otherwise) and carry the merge in
+// progress as stored, whose conflicts must be resolved; a merge adds its
+// second parent. It is UpdateWorkingSet then CommitWorkingSet, at one
+// swap's cost (#10).
+func (r *Repo) Commit(ctx context.Context, p auth.Principal, branch string, prev WorkingSet, namespace hash.Hash, message string) (Commit, error) {
+	if err := r.branchCheck(ctx, p, auth.Write, branch); err != nil {
+		return Commit{}, err
+	}
+	if len(message) > MaxMessageLen || !utf8.ValidString(message) {
+		return Commit{}, fmt.Errorf("vcs: a commit message must be UTF-8 of at most %d bytes", MaxMessageLen)
+	}
+	var out Commit
+	err := r.update(ctx, func(m *prolly.Map, e *prolly.Editor) error {
+		headHash, work, err := branchRefs(ctx, m, branch)
+		if err != nil {
+			return err
+		}
+		if work != prev.Hash {
+			return fmt.Errorf("%w: branch %s", ErrConflict, branch)
+		}
+		stored, err := r.readWorkingSet(ctx, work)
+		if err != nil {
+			return err
+		}
+		if !sameMerge(stored.Merge, prev.Merge) {
+			return fmt.Errorf("%w: branch %s", ErrMergeState, branch)
+		}
+		if n, err := r.conflictCount(ctx, stored); err != nil {
+			return err
+		} else if n > 0 {
+			return fmt.Errorf("%w: %d on %s", ErrUnresolvedConflicts, n, branch)
+		}
+		head, err := r.readCommit(ctx, headHash)
+		if err != nil {
+			return err
+		}
+		// The paths the working set changes, and the paths the commit changes.
+		for _, from := range []hash.Hash{stored.Working, stored.Staged, head.Namespace} {
+			if err := r.checkPaths(ctx, p, branch, from, namespace); err != nil {
+				return err
+			}
+		}
+		c := Commit{Parents: []hash.Hash{head.Hash}, Namespace: namespace, Height: head.Height + 1,
+			Time: r.o.Clock().UTC(), Author: p.ID, Message: message}
+		if stored.Merge != nil {
+			theirs, err := r.readCommit(ctx, stored.Merge.Theirs)
+			if err != nil {
+				return err
+			}
+			c.Parents = append(c.Parents, theirs.Hash)
+			c.Height = max(head.Height, theirs.Height) + 1
+		}
+		if c.Hash, err = r.s.Put(ctx, c.Encode()); err != nil {
+			return err
+		}
+		nextWS, err := r.s.Put(ctx, WorkingSet{Working: namespace, Staged: namespace}.encode())
+		if err != nil {
+			return err
+		}
+		out = c
+		if err := e.Put(headKey(branch), c.Hash[:]); err != nil {
+			return err
+		}
+		return e.Put(workKey(branch), nextWS[:])
+	})
+	return out, err
+}
+
 // CreateBranch names a new branch at a commit.
 func (r *Repo) CreateBranch(ctx context.Context, p auth.Principal, name string, at hash.Hash) error {
 	if err := r.branchCheck(ctx, p, auth.Manage, name); err != nil {
