@@ -278,7 +278,7 @@ func (r *Round) Apply(ctx context.Context, live Live, now time.Time, grace time.
 				// A pack whose every chunk is live has nothing to reclaim,
 				// whatever its overhead.
 				if share := float64(liveBytes[i]) / float64(p.size); liveCount[i] < p.entries && share < policy.MaxLive {
-					candidates = append(candidates, candidate{i: i, share: share})
+					candidates = append(candidates, candidate{i: i, share: share, live: liveBytes[i]})
 				}
 			}
 			keep[p.name] = true
@@ -460,6 +460,7 @@ func (p Repack) resolved() (Repack, error) {
 type candidate struct {
 	i     int     // into Round.packs
 	share float64 // its live bytes over its size
+	live  int64   // its live frames' bytes: what a repack copies
 }
 
 // packInfo reads a pack's entries again from the index object listing it.
@@ -498,6 +499,16 @@ func (r *Round) copyLive(ctx context.Context, candidates []candidate, live Live,
 	defer codec.Close()
 	var fresh []pack.Info
 	var w *pack.Writer
+	// The writer's buffer starts at what is left to copy, not at a pack
+	// (#14): a repack of a few live KiB costs those KiB, and only a copy
+	// past a pack's worth fills a pack-sized buffer.
+	var toCopy int64
+	for _, c := range candidates {
+		toCopy += c.live
+	}
+	newWriter := func() (*pack.Writer, error) {
+		return pack.NewWriterSized(r.o.Keys, r.o.Repo, codec, size, int(min(int64(size), toCopy-out.Copied)))
+	}
 	finish := func() error {
 		if w == nil || w.Count() == 0 {
 			return nil
@@ -562,7 +573,7 @@ func (r *Round) copyLive(ctx context.Context, candidates []candidate, live Live,
 				return nil, fmt.Errorf("%w: pack %s, chunk %s: %w", chunk.ErrCorrupt, c.Name, e.Hash.Short(), err)
 			}
 			if w == nil {
-				if w, err = pack.NewWriter(r.o.Keys, r.o.Repo, codec, size); err != nil {
+				if w, err = newWriter(); err != nil {
 					return nil, err
 				}
 			}
@@ -570,7 +581,7 @@ func (r *Round) copyLive(ctx context.Context, candidates []candidate, live Live,
 				if err = finish(); err != nil {
 					return nil, err
 				}
-				if w, err = pack.NewWriter(r.o.Keys, r.o.Repo, codec, size); err != nil {
+				if w, err = newWriter(); err != nil {
 					return nil, err
 				}
 				err = w.Add(e.Hash, data)

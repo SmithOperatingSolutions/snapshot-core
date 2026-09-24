@@ -4481,3 +4481,10 @@ find: size := min(max(expect+HeaderSize+TrailerSize, HeaderSize+TrailerSize), ma
 replace: size := max(expect+HeaderSize+TrailerSize, HeaderSize+TrailerSize)
 pkg: ./core/pack
 run: ^TestAWriterSizedToWhatItWillHoldGrowsToAPack$
+
+id: repack-writer-sized-to-its-copy
+file: core/chunk/packstore/gc.go
+find: return pack.NewWriterSized(r.o.Keys, r.o.Repo, codec, size, int(min(int64(size), toCopy-out.Copied)))
+replace: return pack.NewWriterSized(r.o.Keys, r.o.Repo, codec, size, size)
+pkg: ./core/chunk/packstore
+run: ^TestARepackAllocatesForWhatItCopies$
