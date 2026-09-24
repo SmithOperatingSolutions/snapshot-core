@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"errors"
 	"io"
+	"runtime"
 	"slices"
 	"strings"
 	"testing"
@@ -14,6 +15,7 @@ import (
 	"github.com/SmithOperatingSolutions/snapshot-core/core/chunk"
 	"github.com/SmithOperatingSolutions/snapshot-core/core/chunk/packstore"
 	"github.com/SmithOperatingSolutions/snapshot-core/core/hash"
+	"github.com/SmithOperatingSolutions/snapshot-core/core/pack"
 	"github.com/SmithOperatingSolutions/snapshot-core/core/seal"
 )
 
@@ -491,4 +493,41 @@ func TestARepackLeavesAChunkCreditedToAnotherPack(t *testing.T) {
 		return
 	}
 	t.Fatal("in 64 draws a's pack never came first in the index: the fixture cannot reach the order under test")
+}
+
+// #14: a repack allocates for what it copies, not for a pack: repacking a
+// pack whose live bytes are a few KiB costs its codec and little else,
+// where a writer's buffer sized at the pack cost 32 MiB whatever the copy.
+// The codec's own cost is measured here alongside, so the bound follows
+// the encoder rather than a number.
+func TestARepackAllocatesForWhatItCopies(t *testing.T) {
+	bs, kr := mem.New(), keyring(t)
+	s := open(t, bs, kr)
+	live := payload("live", 8<<10)
+	hs := packed(t, s, hash.Hash{}, []byte("the root"), live, payload("dead one", 64<<10), payload("dead two", 64<<10))
+	allocated := func(f func()) uint64 {
+		var before, after runtime.MemStats
+		runtime.GC()
+		runtime.ReadMemStats(&before)
+		f()
+		runtime.ReadMemStats(&after)
+		return after.TotalAlloc - before.TotalAlloc
+	}
+	codec := allocated(func() { // the encoder allocates its tables at its first use
+		c, err := pack.NewCodec()
+		if err != nil {
+			t.Fatal(err)
+		}
+		c.Compress(live)
+		c.Close()
+	})
+	var out packstore.Outcome
+	round := allocated(func() { out = repackRound(t, bs, kr, liveSet(hs[0], hs[1]), t0, packstore.Repack{}) })
+	if out.Repacked != 1 {
+		t.Fatalf("fixture: the round repacked %d packs, want the mostly dead one", out.Repacked)
+	}
+	const slack = 8 << 20 // the round's index, the pack read back, the new pack's few KiB; a pack-sized buffer is 32
+	if round > codec+slack {
+		t.Fatalf("repacking %d live bytes allocated %d bytes, the codec alone %d: over %d MiB beyond the codec, the writer's buffer is sized at the pack, not at what it copies", len(live), round, codec, slack>>20)
+	}
 }
