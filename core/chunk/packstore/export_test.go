@@ -2,6 +2,7 @@ package packstore
 
 import (
 	"context"
+	"fmt"
 	"sort"
 	"time"
 
@@ -102,6 +103,36 @@ func PackOrder(ctx context.Context, o Options) ([]string, error) {
 		}
 	}
 	return out, nil
+}
+
+// PackEntries lists the chunks the manifest's index objects say pack name
+// holds, in the pack's order.
+func PackEntries(ctx context.Context, o Options, name string) ([]hash.Hash, error) {
+	r, err := o.Blobs.Root(ctx)
+	if err != nil {
+		return nil, err
+	}
+	m, err := openManifest(r.Value, o.Keys, o.Repo)
+	if err != nil {
+		return nil, err
+	}
+	for _, sum := range m.indexes {
+		infos, err := loadIndex(ctx, o, sum)
+		if err != nil {
+			return nil, err
+		}
+		for _, p := range infos {
+			if p.Name != name {
+				continue
+			}
+			var out []hash.Hash
+			for _, e := range p.Entries {
+				out = append(out, e.Hash)
+			}
+			return out, nil
+		}
+	}
+	return nil, fmt.Errorf("no index object lists %s", name)
 }
 
 // ForgedSpilled is a spilled index over a table whose records were written
