@@ -470,7 +470,7 @@ func (r *Repo) conflictCount(ctx context.Context, ws WorkingSet) (uint64, error)
 // CommitWorkingSet commits what is staged on a branch, onto its head as it
 // is when the commit lands; a merge in progress adds its second parent.
 func (r *Repo) CommitWorkingSet(ctx context.Context, p auth.Principal, branch, message string) (Commit, error) {
-	if err := r.branchCheck(ctx, p, auth.Write, branch); err != nil {
+	if err := r.branchCheck(ctx, p, auth.Commit, branch); err != nil {
 		return Commit{}, err
 	}
 	if len(message) > MaxMessageLen || !utf8.ValidString(message) {
@@ -532,6 +532,9 @@ func (r *Repo) CommitWorkingSet(ctx context.Context, p auth.Principal, branch, m
 // swap's cost (#10).
 func (r *Repo) Commit(ctx context.Context, p auth.Principal, branch string, prev WorkingSet, namespace hash.Hash, message string) (Commit, error) {
 	if err := r.branchCheck(ctx, p, auth.Write, branch); err != nil {
+		return Commit{}, err
+	}
+	if err := r.check(ctx, p, auth.Commit, "branch:"+branch); err != nil { // it writes the working set and commits it
 		return Commit{}, err
 	}
 	if len(message) > MaxMessageLen || !utf8.ValidString(message) {
@@ -870,7 +873,7 @@ func (r *Repo) mergeBase(ctx context.Context, a, b hash.Hash) (hash.Hash, error)
 // there; a failed merge leaves the working set as it was, and so does
 // merging a commit the branch already holds (its head or an ancestor).
 func (r *Repo) Merge(ctx context.Context, p auth.Principal, branch string, theirs hash.Hash) (merge.Result, error) {
-	if err := r.branchCheck(ctx, p, auth.Write, branch); err != nil {
+	if err := r.branchCheck(ctx, p, auth.Merge, branch); err != nil {
 		return merge.Result{}, err
 	}
 	m, err := r.refs(ctx)
@@ -941,10 +944,10 @@ func (r *Repo) Merge(ctx context.Context, p auth.Principal, branch string, their
 // state and puts back the working and staged namespaces the merge started
 // from. What the merge brought in, its resolutions and every edit made
 // since it began are discarded; edits made before it began are not. It
-// needs write on the branch and on every path it changes, and with no
+// needs merge on the branch and write on every path it changes, and with no
 // merge in progress it is ErrNoMerge.
 func (r *Repo) AbortMerge(ctx context.Context, p auth.Principal, branch string) error {
-	if err := r.branchCheck(ctx, p, auth.Write, branch); err != nil {
+	if err := r.branchCheck(ctx, p, auth.Merge, branch); err != nil {
 		return err
 	}
 	return r.update(ctx, func(m *prolly.Map, e *prolly.Editor) error {
@@ -1004,7 +1007,7 @@ func (r *Repo) Conflicts(ctx context.Context, p auth.Principal, branch string) (
 // ResolveConflict settles a conflicting path (nil deletes it) in the working
 // and staged namespaces, and drops its conflict.
 func (r *Repo) ResolveConflict(ctx context.Context, p auth.Principal, branch, path string, to *object.Ref) error {
-	if err := r.branchCheck(ctx, p, auth.Write, branch); err != nil {
+	if err := r.branchCheck(ctx, p, auth.Merge, branch); err != nil {
 		return err
 	}
 	if err := r.check(ctx, p, auth.Write, pathResource(branch, path)); err != nil {

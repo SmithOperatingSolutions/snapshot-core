@@ -46,9 +46,11 @@ type Action uint8
 // Actions.
 const (
 	Read   Action = iota + 1 // read refs, commits and objects
-	Write                    // change a branch's working set, commit to it
+	Write                    // change a branch's working set; asked per path of every write
 	Manage                   // create or delete branches and tags
 	Admin                    // repository-wide operations (GC, config)
+	Commit                   // record a branch's staged namespace as a commit
+	Merge                    // merge into a branch, resolve its conflicts, abandon its merge
 )
 
 // Authorizer decides one call: nil allows it, an error wrapping ErrDenied

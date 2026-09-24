@@ -27,6 +27,10 @@ type Subject struct {
 	Generate func(seed uint64) []byte
 	// Mutate returns an edit of content, a pure function of seed, that differs from it.
 	Mutate func(content []byte, seed uint64) []byte
+	// Collide returns two edits of content, pure functions of seed, that the
+	// model cannot combine: the same place changed two ways. Merging them
+	// over content must report at least one conflict, each with a reason.
+	Collide func(content []byte, seed uint64) (ours, theirs []byte)
 	// Write stores content as an object; Read returns an object's content.
 	Write func(t *testing.T, content []byte) model.Root
 	Read  func(t *testing.T, root model.Root) []byte
@@ -44,6 +48,7 @@ func Run(t *testing.T, newSubject Factory) {
 	t.Run("Deterministic", func(t *testing.T) { deterministic(t, newSubject, newSubject(t)) })
 	t.Run("DiffMatchesEdits", func(t *testing.T) { diffMatchesEdits(t, newSubject(t)) })
 	t.Run("MergeIdentities", func(t *testing.T) { mergeIdentities(t, newSubject(t)) })
+	t.Run("CollidingEditsConflict", func(t *testing.T) { collidingEditsConflict(t, newSubject(t)) })
 	t.Run("ValidateRefusesGarbage", func(t *testing.T) { validateRefusesGarbage(t, newSubject(t)) })
 	t.Run("WalkHoldsTheObject", func(t *testing.T) { walkHoldsTheObject(t, newSubject(t)) })
 }
@@ -152,6 +157,41 @@ func mergeIdentities(t *testing.T, s Subject) {
 			t.Errorf("%s: root %+v with %d conflicts, want %+v and none", name, r.Root, len(r.Conflicts), tc.want)
 		}
 	}
+}
+
+// collidingEditsConflict: two edits the model says cannot combine merge to
+// conflicts, not to a silent choice of one side. The merge identities alone
+// never exercise a conflict, so a model that merged everything by taking
+// ours would pass them; this is where a model's conflict semantics are held.
+func collidingEditsConflict(t *testing.T, s Subject) {
+	if s.Collide == nil {
+		t.Fatal("the subject has no Collide: a model must say how two edits collide, or its conflicts are never proved")
+	}
+	for seed := uint64(1); seed <= 3; seed++ {
+		c := s.Generate(seed)
+		ours, theirs := s.Collide(c, seed)
+		base, o, th := s.Write(t, c), s.Write(t, ours), s.Write(t, theirs)
+		if base == o || base == th || o == th {
+			t.Fatalf("seed %d: Collide gave edits that do not both differ from the content and from each other (%+v, %+v, %+v)", seed, base, o, th)
+		}
+		if err := collisionVerdict(merge(t, s, base, o, th)); err != nil {
+			t.Errorf("seed %d: %v", seed, err)
+		}
+	}
+}
+
+// collisionVerdict judges the merge of two colliding edits: at least one
+// conflict, each with a reason.
+func collisionVerdict(r model.MergeResult) error {
+	if len(r.Conflicts) == 0 {
+		return errors.New("two edits the model says cannot combine merged with no conflict: the merge took a side in silence")
+	}
+	for _, c := range r.Conflicts {
+		if c.Reason == "" {
+			return fmt.Errorf("a conflict at %q carries no reason for the person resolving it", c.Location)
+		}
+	}
+	return nil
 }
 
 func validateRefusesGarbage(t *testing.T, s Subject) {

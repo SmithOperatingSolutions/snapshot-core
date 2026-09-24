@@ -67,6 +67,7 @@ linters:
           files:
             - "**/core/dnx/**"
             - "**/core/hash/**"
+            - "**/core/wire/**"
             - "**/core/auth/**"
             - "**/core/seal/**"
             - "**/core/cdc/**"

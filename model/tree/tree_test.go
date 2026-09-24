@@ -89,6 +89,12 @@ func subject(t *testing.T) contract.Subject {
 			}
 			return serialize(es)
 		},
+		Collide: func(c []byte, seed uint64) (ours, theirs []byte) { // one entry, two different files
+			o, th := parse(t, c), parse(t, c)
+			p := fmt.Sprintf("collide/file%d", seed)
+			o[p], th[p] = file(fmt.Sprintf("ours %d", seed)), file(fmt.Sprintf("theirs %d", seed))
+			return serialize(o), serialize(th)
+		},
 		Write: func(t *testing.T, c []byte) model.Root {
 			t.Helper()
 			r, err := tree.Write(ctx, s, cfg(), parse(t, c))

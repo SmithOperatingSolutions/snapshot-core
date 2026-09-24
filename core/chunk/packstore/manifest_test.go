@@ -11,8 +11,8 @@ import (
 	"testing"
 
 	"github.com/SmithOperatingSolutions/snapshot-core/core/hash"
-	"github.com/SmithOperatingSolutions/snapshot-core/core/internal/wire"
 	"github.com/SmithOperatingSolutions/snapshot-core/core/seal"
+	"github.com/SmithOperatingSolutions/snapshot-core/core/wire"
 )
 
 var update = flag.Bool("update", false, "rewrite testdata/manifest_v1.bin")

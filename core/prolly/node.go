@@ -7,8 +7,8 @@ import (
 
 	"github.com/SmithOperatingSolutions/snapshot-core/core/chunk"
 	"github.com/SmithOperatingSolutions/snapshot-core/core/hash"
-	"github.com/SmithOperatingSolutions/snapshot-core/core/internal/wire"
 	"github.com/SmithOperatingSolutions/snapshot-core/core/stream"
+	"github.com/SmithOperatingSolutions/snapshot-core/core/wire"
 )
 
 // Node: 0x01 · level u8 · count uvarint · entry × count (docs/DESIGN.md §7).

@@ -21,13 +21,13 @@ import (
 	"github.com/SmithOperatingSolutions/snapshot-core/core/chunk"
 	"github.com/SmithOperatingSolutions/snapshot-core/core/chunk/packstore"
 	"github.com/SmithOperatingSolutions/snapshot-core/core/gc"
-	"github.com/SmithOperatingSolutions/snapshot-core/core/internal/wire"
 	"github.com/SmithOperatingSolutions/snapshot-core/core/model"
 	"github.com/SmithOperatingSolutions/snapshot-core/core/pack"
 	"github.com/SmithOperatingSolutions/snapshot-core/core/prolly"
 	"github.com/SmithOperatingSolutions/snapshot-core/core/seal"
 	"github.com/SmithOperatingSolutions/snapshot-core/core/stream"
 	"github.com/SmithOperatingSolutions/snapshot-core/core/vcs"
+	"github.com/SmithOperatingSolutions/snapshot-core/core/wire"
 )
 
 // Errors.

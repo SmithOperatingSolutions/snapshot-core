@@ -118,31 +118,31 @@ pkg: ./core/cdc
 run: ^TestValidateRefusesUnusableGeometry$
 
 id: wire-varint-minimal
-file: core/internal/wire/wire.go
+file: core/wire/wire.go
 find: case n > 1 && r.b[r.off+n-1] == 0:
 replace: case n > 1 && r.b[r.off+n-1] == 0 && false:
-pkg: ./core/internal/wire
+pkg: ./core/wire
 run: ^TestVarintsMustBeMinimalAndBounded$
 
 id: wire-lenbytes-limit
-file: core/internal/wire/wire.go
+file: core/wire/wire.go
 find: if n > uint64(max) {
 replace: if n > uint64(max)+1 {
-pkg: ./core/internal/wire
+pkg: ./core/wire
 run: ^TestLenBytesHonorsTheCallersLimit$
 
 id: wire-done-refuses-trailing
-file: core/internal/wire/wire.go
+file: core/wire/wire.go
 find: if r.off != len(r.b) {
 replace: if r.off != len(r.b) && false {
-pkg: ./core/internal/wire
+pkg: ./core/wire
 run: ^TestDoneRefusesTrailingBytes$
 
 id: wire-errors-sticky
-file: core/internal/wire/wire.go
+file: core/wire/wire.go
 find: if r.err != nil {\n\t\treturn nil\n\t}\n\tif n < 0 {
 replace: if n < 0 {
-pkg: ./core/internal/wire
+pkg: ./core/wire
 run: ^TestErrorsAreSticky$
 
 id: seal-domain-validated
@@ -1765,28 +1765,28 @@ pkg: ./model/blob
 run: ^TestOpenRefusesAnotherFormat$
 
 id: tree-delete-against-edit-conflicts
-file: model/tree/tree.go
-find: case ours.Kind == prolly.Removed || theirs.Kind == prolly.Removed:\n\t\treturn "deleted on one side and changed on the other"
-replace: case ours.Kind == prolly.Removed || theirs.Kind == prolly.Removed:\n\t\treturn ""
+file: model/mapobject/mapobject.go
+find: case ours.Kind == prolly.Removed || theirs.Kind == prolly.Removed:\n\t\treturn nil, false, "deleted on one side and changed on the other"
+replace: case ours.Kind == prolly.Removed || theirs.Kind == prolly.Removed:\n\t\treturn nil, false, ""
 pkg: ./model/tree
 run: ^TestDeletingADirectoryAgainstAnEditIsAConflict$
 
 id: tree-applies-theirs
-file: model/tree/tree.go
-find: if err = apply(ed, ct); err == nil {
+file: model/mapobject/mapobject.go
+find: if err = s.apply(ed, ct); err == nil {
 replace: if err = error(nil); err == nil {
 pkg: ./model/tree
 run: ^TestChangesToDifferentEntriesCombine$
 
 id: tree-different-edits-conflict
-file: model/tree/tree.go
+file: model/mapobject/mapobject.go
 find: case bytes.Equal(ours.To, theirs.To):
 replace: case true:
 pkg: ./model/tree
 run: ^TestConflictsPerEntry$
 
 id: tree-root-count-checked
-file: model/tree/tree.go
+file: model/mapobject/mapobject.go
 find: if m.Count() != root.Size {
 replace: if m.Count() != root.Size && false {
 pkg: ./model/tree
@@ -2066,8 +2066,8 @@ pkg: ./core/repo
 run: ^TestHostsWriteObjectsThroughTheRepository$
 
 id: e2e-tree-applies-theirs
-file: model/tree/tree.go
-find: if err = apply(ed, ct); err == nil {
+file: model/mapobject/mapobject.go
+find: if err = s.apply(ed, ct); err == nil {
 replace: if err = error(nil); err == nil {
 pkg: ./e2e
 run: ^TestAFolderBranchesDiffsAndMerges$
@@ -2080,7 +2080,7 @@ pkg: ./e2e
 run: ^TestAFolderBranchesDiffsAndMerges$
 
 id: e2e-different-edits-conflict
-file: model/tree/tree.go
+file: model/mapobject/mapobject.go
 find: case bytes.Equal(ours.To, theirs.To):
 replace: case true:
 pkg: ./e2e
@@ -2167,8 +2167,8 @@ run: ^TestRefsNameOnlyStoredObjects$
 
 id: vcs-commit-message-bounded
 file: core/vcs/vcs.go
-find: func (r *Repo) CommitWorkingSet(ctx context.Context, p auth.Principal, branch, message string) (Commit, error) {\n\tif err := r.branchCheck(ctx, p, auth.Write, branch); err != nil {\n\t\treturn Commit{}, err\n\t}\n\tif len(message) > MaxMessageLen || !utf8.ValidString(message) {
-replace: func (r *Repo) CommitWorkingSet(ctx context.Context, p auth.Principal, branch, message string) (Commit, error) {\n\tif err := r.branchCheck(ctx, p, auth.Write, branch); err != nil {\n\t\treturn Commit{}, err\n\t}\n\tif (len(message) > MaxMessageLen || !utf8.ValidString(message)) && false {
+find: func (r *Repo) CommitWorkingSet(ctx context.Context, p auth.Principal, branch, message string) (Commit, error) {\n\tif err := r.branchCheck(ctx, p, auth.Commit, branch); err != nil {\n\t\treturn Commit{}, err\n\t}\n\tif len(message) > MaxMessageLen || !utf8.ValidString(message) {
+replace: func (r *Repo) CommitWorkingSet(ctx context.Context, p auth.Principal, branch, message string) (Commit, error) {\n\tif err := r.branchCheck(ctx, p, auth.Commit, branch); err != nil {\n\t\treturn Commit{}, err\n\t}\n\tif (len(message) > MaxMessageLen || !utf8.ValidString(message)) && false {
 pkg: ./core/vcs
 run: ^TestMessagesAreBoundedUTF8$
 
@@ -2307,15 +2307,15 @@ run: ^TestEveryCallIsAuthorized$
 
 id: vcs-merge-authorized
 file: core/vcs/vcs.go
-find: func (r *Repo) Merge(ctx context.Context, p auth.Principal, branch string, theirs hash.Hash) (merge.Result, error) {\n\tif err := r.branchCheck(ctx, p, auth.Write, branch); err != nil {
-replace: func (r *Repo) Merge(ctx context.Context, p auth.Principal, branch string, theirs hash.Hash) (merge.Result, error) {\n\tif err := r.branchCheck(ctx, p, auth.Write, branch); err != nil && false {
+find: func (r *Repo) Merge(ctx context.Context, p auth.Principal, branch string, theirs hash.Hash) (merge.Result, error) {\n\tif err := r.branchCheck(ctx, p, auth.Merge, branch); err != nil {
+replace: func (r *Repo) Merge(ctx context.Context, p auth.Principal, branch string, theirs hash.Hash) (merge.Result, error) {\n\tif err := r.branchCheck(ctx, p, auth.Merge, branch); err != nil && false {
 pkg: ./core/vcs
 run: ^TestEveryCallIsAuthorized$
 
 id: vcs-resolve-authorized
 file: core/vcs/vcs.go
-find: func (r *Repo) ResolveConflict(ctx context.Context, p auth.Principal, branch, path string, to *object.Ref) error {\n\tif err := r.branchCheck(ctx, p, auth.Write, branch); err != nil {
-replace: func (r *Repo) ResolveConflict(ctx context.Context, p auth.Principal, branch, path string, to *object.Ref) error {\n\tif err := r.branchCheck(ctx, p, auth.Write, branch); err != nil && false {
+find: func (r *Repo) ResolveConflict(ctx context.Context, p auth.Principal, branch, path string, to *object.Ref) error {\n\tif err := r.branchCheck(ctx, p, auth.Merge, branch); err != nil {
+replace: func (r *Repo) ResolveConflict(ctx context.Context, p auth.Principal, branch, path string, to *object.Ref) error {\n\tif err := r.branchCheck(ctx, p, auth.Merge, branch); err != nil && false {
 pkg: ./core/vcs
 run: ^(TestEveryCallIsAuthorized|TestAWriteNeedsTheBranchAsWellAsItsPaths)$
 
@@ -2411,9 +2411,9 @@ pkg: ./core/repo
 run: ^TestEveryStoreFailureIsSurvivable$
 
 id: tree-root-format-checked
-file: model/tree/tree.go
-find: if root.Format != Format {\n\t\treturn nil, fmt.Errorf(
-replace: if root.Format != Format && false {\n\t\treturn nil, fmt.Errorf(
+file: model/mapobject/mapobject.go
+find: if root.Format != s.Format {
+replace: if root.Format != s.Format && false {
 pkg: ./model/tree
 run: ^TestTreesRefuseWhatTheyCannotServe$
 
@@ -2425,11 +2425,11 @@ pkg: ./model/tree
 run: ^TestTreesRefuseWhatTheyCannotServe$
 
 id: tree-read-only-refuses-writes
-file: model/tree/tree.go
-find: return hash.Hash{}, errors.New("tree: this store is read-only")
+file: model/mapobject/mapobject.go
+find: return hash.Hash{}, errors.New("mapobject: this store is read-only")
 replace: return hash.Hash{}, errors.Unwrap(nil)
-pkg: ./model/tree
-run: ^TestTheReadOnlyStoreRefusesWrites$
+pkg: ./model/mapobject
+run: ^TestStoreFailuresSurface$
 
 id: tree-read-surfaces-iteration-errors
 file: model/tree/tree.go
@@ -2439,14 +2439,14 @@ pkg: ./model/tree
 run: ^TestStoreErrorsSurfaceAtEveryPoint$
 
 id: tree-merge-surfaces-diff-errors
-file: model/tree/tree.go
+file: model/mapobject/mapobject.go
 find: if err != nil {\n\t\treturn model.MergeResult{}, err\n\t}\n\tif len(conflicts) > 0 {
 replace: if err != nil && false {\n\t\treturn model.MergeResult{}, err\n\t}\n\tif len(conflicts) > 0 {
 pkg: ./model/tree
 run: ^TestStoreErrorsSurfaceAtEveryPoint$
 
 id: tree-diff-surfaces-iteration-errors
-file: model/tree/tree.go
+file: model/mapobject/mapobject.go
 find: if err != nil || !ok {\n\t\treturn model.Change{}, false, err
 replace: if err != nil || !ok {\n\t\treturn model.Change{}, false, nil
 pkg: ./model/tree
@@ -2656,16 +2656,16 @@ pkg: ./model/blob
 run: ^TestABlobWalksToEveryChunk$
 
 id: tree-walk-checks-the-format
-file: model/tree/tree.go
-find: if root.Format != Format {\n\t\treturn fmt.Errorf(
-replace: if root.Format != Format && false {\n\t\treturn fmt.Errorf(
+file: model/mapobject/mapobject.go
+find: if root.Format != s.Format {
+replace: if root.Format != s.Format && false {
 pkg: ./model/tree
 run: ^TestATreeWalksToItsEntriesContents$
 
 id: tree-walk-checks-the-depth
-file: model/tree/tree.go
-find: if root.Depth != 0 {\n\t\treturn fmt.Errorf(
-replace: if root.Depth != 0 && false {\n\t\treturn fmt.Errorf(
+file: model/mapobject/mapobject.go
+find: if root.Depth != 0 {
+replace: if root.Depth != 0 && false {
 pkg: ./model/tree
 run: ^TestATreeWalksToItsEntriesContents$
 
@@ -2698,9 +2698,9 @@ pkg: ./model/blob
 run: ^TestContract$
 
 id: contract-tree-walk-names-its-map
-file: model/tree/tree.go
-find: return prolly.Walk(ctx, r, m.Config, root.Hash, visit, func(
-replace: return prolly.Walk(ctx, r, m.Config, root.Hash, func(hash.Hash, bool) (bool, error) { return false, nil }, func(
+file: model/mapobject/mapobject.go
+find: return prolly.Walk(ctx, r, s.Config, root.Hash, visit, each)
+replace: return prolly.Walk(ctx, r, s.Config, root.Hash, func(hash.Hash, bool) (bool, error) { return false, nil }, each)
 pkg: ./model/tree
 run: ^TestContract$
 
@@ -3231,8 +3231,8 @@ run: ^TestTagsAreListedAndReadBack$
 
 id: vcs-abort-authorized
 file: core/vcs/vcs.go
-find: func (r *Repo) AbortMerge(ctx context.Context, p auth.Principal, branch string) error {\n\tif err := r.branchCheck(ctx, p, auth.Write, branch); err != nil {
-replace: func (r *Repo) AbortMerge(ctx context.Context, p auth.Principal, branch string) error {\n\tif err := r.branchCheck(ctx, p, auth.Write, branch); err != nil && false {
+find: func (r *Repo) AbortMerge(ctx context.Context, p auth.Principal, branch string) error {\n\tif err := r.branchCheck(ctx, p, auth.Merge, branch); err != nil {
+replace: func (r *Repo) AbortMerge(ctx context.Context, p auth.Principal, branch string) error {\n\tif err := r.branchCheck(ctx, p, auth.Merge, branch); err != nil && false {
 pkg: ./core/vcs
 run: ^TestEveryCallIsAuthorized$
 
@@ -4400,8 +4400,8 @@ run: ^TestMutantsRunAtOnceOnWorkers$
 
 id: vcs-commit-bounds-the-message
 file: core/vcs/vcs.go
-find: func (r *Repo) Commit(ctx context.Context, p auth.Principal, branch string, prev WorkingSet, namespace hash.Hash, message string) (Commit, error) {\n\tif err := r.branchCheck(ctx, p, auth.Write, branch); err != nil {\n\t\treturn Commit{}, err\n\t}\n\tif len(message) > MaxMessageLen || !utf8.ValidString(message) {
-replace: func (r *Repo) Commit(ctx context.Context, p auth.Principal, branch string, prev WorkingSet, namespace hash.Hash, message string) (Commit, error) {\n\tif err := r.branchCheck(ctx, p, auth.Write, branch); err != nil {\n\t\treturn Commit{}, err\n\t}\n\tif (len(message) > MaxMessageLen || !utf8.ValidString(message)) && false {
+find: func (r *Repo) Commit(ctx context.Context, p auth.Principal, branch string, prev WorkingSet, namespace hash.Hash, message string) (Commit, error) {\n\tif err := r.branchCheck(ctx, p, auth.Write, branch); err != nil {\n\t\treturn Commit{}, err\n\t}\n\tif err := r.check(ctx, p, auth.Commit, "branch:"+branch); err != nil { // it writes the working set and commits it\n\t\treturn Commit{}, err\n\t}\n\tif len(message) > MaxMessageLen || !utf8.ValidString(message) {
+replace: func (r *Repo) Commit(ctx context.Context, p auth.Principal, branch string, prev WorkingSet, namespace hash.Hash, message string) (Commit, error) {\n\tif err := r.branchCheck(ctx, p, auth.Write, branch); err != nil {\n\t\treturn Commit{}, err\n\t}\n\tif err := r.check(ctx, p, auth.Commit, "branch:"+branch); err != nil { // it writes the working set and commits it\n\t\treturn Commit{}, err\n\t}\n\tif (len(message) > MaxMessageLen || !utf8.ValidString(message)) && false {
 pkg: ./core/vcs
 run: ^TestCommitRefusesWhatTheTwoStepsRefuse$
 
@@ -4502,3 +4502,95 @@ find: for _, a := range l.adapters {\n\t\tif rel == a {\n\t\t\treturn true\n\t\t
 replace: for range l.adapters {\n\t}
 pkg: ./tools/ci
 run: ^TestThresholdsFollowTheEngineSpec$
+
+id: contract-colliding-edits-must-conflict
+file: model/contract/contract.go
+find: if len(r.Conflicts) == 0 {\n\t\treturn errors.New("two edits the model says cannot combine merged with no conflict: the merge took a side in silence")\n\t}
+replace: if len(r.Conflicts) < 0 {\n\t\treturn errors.New("two edits the model says cannot combine merged with no conflict: the merge took a side in silence")\n\t}
+pkg: ./model/contract
+run: ^TestCollisionVerdict$
+
+id: contract-a-conflict-carries-a-reason
+file: model/contract/contract.go
+find: if c.Reason == "" {
+replace: if c.Reason == "" && false {
+pkg: ./model/contract
+run: ^TestCollisionVerdict$
+
+id: mapobject-put-checks-the-record
+file: model/mapobject/mapobject.go
+find: if err := s.Check(key, value); err != nil {\n\t\treturn err\n\t}\n\treturn ed.Put(key, value)
+replace: return ed.Put(key, value)
+pkg: ./model/mapobject
+run: ^TestAResolverCombinesBothSides$
+
+id: mapobject-validate-checks-every-record
+file: model/mapobject/mapobject.go
+find: if err := s.Check(k, v); err != nil {\n\t\t\treturn err\n\t\t}
+replace: if err := s.Check(k, v); err != nil && false {\n\t\t\treturn err\n\t\t}
+pkg: ./model/mapobject
+run: ^TestValidateRunsCheckOnEveryRecord$
+
+id: mapobject-added-differently-conflicts
+file: model/mapobject/mapobject.go
+find: case ours.Kind == prolly.Added:\n\t\treturn nil, false, "added differently on both sides"
+replace: case ours.Kind == prolly.Added:\n\t\treturn nil, false, ""
+pkg: ./model/mapobject
+run: ^TestMergePerKey$
+
+id: mapobject-a-resolvers-value-is-stored
+file: model/mapobject/mapobject.go
+find: if d.Put { // with any conflict the merge is ours and this edit is discarded\n\t\t\t\terr = s.put(ed, co.Key, d.Value)
+replace: if d.Put && false { // with any conflict the merge is ours and this edit is discarded\n\t\t\t\terr = s.put(ed, co.Key, d.Value)
+pkg: ./model/mapobject
+run: ^TestAResolverCombinesBothSides$
+
+id: mapobject-a-deciders-error-aborts-the-merge
+file: model/mapobject/mapobject.go
+find: if d, err = decide(co.Key, co, ct); err != nil {\n\t\t\t\tbreak\n\t\t\t}
+replace: if d, _ = decide(co.Key, co, ct); err != nil {\n\t\t\t\tbreak\n\t\t\t}
+pkg: ./model/mapobject
+run: ^TestADecidersErrorAbortsTheMerge$
+
+id: mapobject-a-conflict-without-a-location-is-at-the-key
+file: model/mapobject/mapobject.go
+find: if c.Location == nil {\n\t\t\t\t\tc.Location = bytes.Clone(co.Key)\n\t\t\t\t}
+replace: if c.Location == nil && false {\n\t\t\t\t\tc.Location = bytes.Clone(co.Key)\n\t\t\t\t}
+pkg: ./model/mapobject
+run: ^TestADeciderLocatesConflictsBelowTheKey$
+
+# auth actions
+id: vcs-committing-asks-for-commit
+file: core/vcs/vcs.go
+find: if err := r.branchCheck(ctx, p, auth.Commit, branch); err != nil {
+replace: if err := r.branchCheck(ctx, p, auth.Write, branch); err != nil {
+pkg: ./core/vcs
+run: ^TestCommittingIsItsOwnAction$
+
+id: vcs-one-publish-commit-asks-for-commit
+file: core/vcs/vcs.go
+find: if err := r.check(ctx, p, auth.Commit, "branch:"+branch); err != nil { // it writes the working set and commits it
+replace: if err := r.check(ctx, p, auth.Commit, "branch:"+branch); err != nil && false { // it writes the working set and commits it
+pkg: ./core/vcs
+run: ^TestCommittingIsItsOwnAction$
+
+id: vcs-merging-asks-for-merge
+file: core/vcs/vcs.go
+find: func (r *Repo) Merge(ctx context.Context, p auth.Principal, branch string, theirs hash.Hash) (merge.Result, error) {\n\tif err := r.branchCheck(ctx, p, auth.Merge, branch); err != nil {
+replace: func (r *Repo) Merge(ctx context.Context, p auth.Principal, branch string, theirs hash.Hash) (merge.Result, error) {\n\tif err := r.branchCheck(ctx, p, auth.Write, branch); err != nil {
+pkg: ./core/vcs
+run: ^TestMergingIsItsOwnAction$
+
+id: vcs-abandoning-asks-for-merge
+file: core/vcs/vcs.go
+find: func (r *Repo) AbortMerge(ctx context.Context, p auth.Principal, branch string) error {\n\tif err := r.branchCheck(ctx, p, auth.Merge, branch); err != nil {
+replace: func (r *Repo) AbortMerge(ctx context.Context, p auth.Principal, branch string) error {\n\tif err := r.branchCheck(ctx, p, auth.Write, branch); err != nil {
+pkg: ./core/vcs
+run: ^TestMergingIsItsOwnAction$
+
+id: vcs-resolving-asks-for-merge
+file: core/vcs/vcs.go
+find: func (r *Repo) ResolveConflict(ctx context.Context, p auth.Principal, branch, path string, to *object.Ref) error {\n\tif err := r.branchCheck(ctx, p, auth.Merge, branch); err != nil {
+replace: func (r *Repo) ResolveConflict(ctx context.Context, p auth.Principal, branch, path string, to *object.Ref) error {\n\tif err := r.branchCheck(ctx, p, auth.Write, branch); err != nil {
+pkg: ./core/vcs
+run: ^TestMergingIsItsOwnAction$
