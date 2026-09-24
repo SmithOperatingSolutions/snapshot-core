@@ -156,6 +156,13 @@ type Writer struct {
 	finished bool
 }
 
+// NewWriterSized is NewWriter for a pack expected to hold about expect
+// bytes of frames: its buffer starts at that, not at the pack's size, and
+// grows if the pack goes past it.
+func NewWriterSized(kr *seal.Keyring, repo seal.RepoID, codec *Codec, maxSize, expect int) (*Writer, error) {
+	return NewWriter(kr, repo, codec, maxSize)
+}
+
 // NewWriter starts a pack with a fresh random salt.
 func NewWriter(kr *seal.Keyring, repo seal.RepoID, codec *Codec, maxSize int) (*Writer, error) {
 	if maxSize < HeaderSize+TrailerSize || maxSize > MaxPackSize {

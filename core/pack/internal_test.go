@@ -256,3 +256,73 @@ func TestDecompressionIsBoundedInMemory(t *testing.T) {
 		t.Fatalf("opening a 64 MiB decompression bomb allocated %d MiB: the decoder is not bounded", grew>>20)
 	}
 }
+
+// #14: a writer told what its pack will hold starts with a buffer of about
+// that, not the pack's size: GC repacks a few KiB of live chunks without
+// 32 MiB for them. It still takes a full pack, growing as it goes, and the
+// pack it finishes reads like any other. A writer told nothing keeps the
+// buffer at the pack's size (#10: the store never grows and copies it),
+// and one told more than the pack takes gets the pack's size.
+func TestAWriterSizedToWhatItWillHoldGrowsToAPack(t *testing.T) {
+	kr, err := seal.NewKeyring()
+	if err != nil {
+		t.Fatal(err)
+	}
+	codec, err := NewCodec()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer codec.Close()
+	repo := seal.RepoID{0x5e}
+	const size = 4 << 20
+	full, err := NewWriter(kr, repo, codec, size)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cap(full.buf) != size {
+		t.Fatalf("positive control: a writer told nothing holds a %d-byte buffer, want the pack's %d", cap(full.buf), size)
+	}
+	w, err := NewWriterSized(kr, repo, codec, size, 8<<10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cap(w.buf) > 64<<10 {
+		t.Fatalf("a writer told it will hold 8 KiB starts with a %d-byte buffer, want under 64 KiB: it is sized at the pack, not at what it will hold", cap(w.buf))
+	}
+	var hs []hash.Hash
+	for i := 0; ; i++ {
+		data := make([]byte, 8<<10)
+		binary.LittleEndian.PutUint64(data, uint64(i))
+		for j := 8; j < len(data); j += 8 {
+			binary.LittleEndian.PutUint64(data[j:], uint64(i)*1_000_003+uint64(j)) // incompressible enough
+		}
+		h := hash.Sum(data)
+		if err := w.Add(h, data); errors.Is(err, ErrFull) {
+			break
+		} else if err != nil {
+			t.Fatalf("chunk %d: %v", i, err)
+		}
+		hs = append(hs, h)
+	}
+	if len(hs) < 400 {
+		t.Fatalf("the writer took %d 8 KiB chunks before the pack was full, want a pack's worth: it stopped at its starting buffer", len(hs))
+	}
+	b, err := w.Finish()
+	if err != nil {
+		t.Fatal(err)
+	}
+	info, err := ReadInfo(b.Name, b.Bytes, kr, repo)
+	if err != nil {
+		t.Fatalf("the pack a grown writer finished does not read: %v", err)
+	}
+	if len(info.Entries) != len(hs) {
+		t.Fatalf("the pack lists %d chunks, %d were added", len(info.Entries), len(hs))
+	}
+	over, err := NewWriterSized(kr, repo, codec, size, 3*size)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cap(over.buf) != size {
+		t.Fatalf("a writer told more than a pack takes holds a %d-byte buffer, want the pack's %d", cap(over.buf), size)
+	}
+}
