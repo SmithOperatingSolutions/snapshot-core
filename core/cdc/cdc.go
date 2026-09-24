@@ -202,29 +202,3 @@ func (c *Chunker) fill() error {
 	}
 	return nil
 }
-
-// Parallel cuts one stream with its hashing spread over workers goroutines
-// (#10): the Buzhash at a byte depends on the 48 bytes before it alone, so
-// the workers mark where each mask hits while one goroutine places the
-// cuts by the rules, in order. The boundaries are the Chunker's byte for
-// byte. Close stops the goroutines; a Parallel abandoned without Close
-// leaks them.
-type Parallel struct {
-	c *Chunker
-}
-
-// NewParallel returns a parallel chunker over r with workers goroutines
-// hashing (0: runtime.GOMAXPROCS(0)). It refuses an invalid geometry.
-func NewParallel(r io.Reader, g Geometry, workers int) (*Parallel, error) {
-	c, err := New(r, g)
-	if err != nil {
-		return nil, err
-	}
-	return &Parallel{c: c}, nil
-}
-
-// Next returns the next chunk's bytes, owned by the caller, or io.EOF.
-func (p *Parallel) Next() ([]byte, error) { return p.c.Next() }
-
-// Close stops the goroutines; the stream is left where it was.
-func (p *Parallel) Close() {}

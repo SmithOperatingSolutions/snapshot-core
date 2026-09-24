@@ -77,11 +77,12 @@ func Write(ctx context.Context, w chunk.Writer, r io.Reader, c Config) (Ref, err
 	if pw, ok := w.(chunk.Preparer); ok && workers > 1 {
 		stop := make(chan struct{}) // the write is over: every goroutine winds down
 		defer close(stop)
-		ahead, err := cdc.New(readAhead(r, stop), c.CDC)
+		par, err := cdc.NewParallel(r, c.CDC, workers)
 		if err != nil {
 			return Ref{}, err
 		}
-		return b.parallel(ahead, pw, workers, stop)
+		defer par.Close()
+		return b.parallel(par, pw, workers, stop)
 	}
 	for {
 		data, err := cut.Next()
@@ -110,16 +111,22 @@ type job struct {
 	done chan struct{}
 }
 
+// cutter is what parallel cuts with: cdc.Parallel, whose own goroutines
+// read the stream and hash it (cdc.Chunker in tests).
+type cutter interface {
+	Next() ([]byte, error)
+}
+
 // parallel is Write with the chunks hashed and compressed on workers
-// goroutines (#10): one goroutine reads ahead, one cuts, the workers
-// prepare, and this goroutine stores each prepared chunk in stream order
-// and grows the index. At most 2*workers chunks and a few read buffers are
-// in flight, so memory is bounded by about 2*workers*MaxChunkSize whatever
-// the stream's size. The stream is the same as the serial path's: the
+// goroutines (#10): the cutter's goroutines read and hash the stream and
+// its caller places the cuts, the workers prepare, and this goroutine
+// stores each prepared chunk in stream order and grows the index. At most
+// 2*workers chunks and a few read blocks are in flight, so memory is
+// bounded by about 2*workers*MaxChunkSize whatever the stream's size. The stream is the same as the serial path's: the
 // cutter is the same and stores happen in its order, so every chunk, hash
 // and node is identical. stop, closed by the caller when the write is
 // over, winds every goroutine down.
-func (b *builder) parallel(cut *cdc.Chunker, w chunk.Preparer, workers int, stop chan struct{}) (Ref, error) {
+func (b *builder) parallel(cut cutter, w chunk.Preparer, workers int, stop chan struct{}) (Ref, error) {
 	work := make(chan *job, workers) // cut, to be prepared
 	order := make(chan *job, workers)
 	go func() {
@@ -469,67 +476,4 @@ func ReadAll(ctx context.Context, rd chunk.Reader, ref Ref) ([]byte, error) {
 		return nil, err
 	}
 	return buf.Bytes(), nil
-}
-
-// readAhead reads r on its own goroutine, a few buffers ahead of the
-// cutter, so the source's latency and the cut overlap; it serves the bytes,
-// then the error, in the order they came, and stops when stop closes.
-func readAhead(r io.Reader, stop <-chan struct{}) io.Reader {
-	const bufSize, ahead = 64 << 10, 4
-	ra := &aheadReader{filled: make(chan aheadBuf, ahead), stop: stop}
-	go func() {
-		defer close(ra.filled)
-		for {
-			buf := make([]byte, bufSize)
-			n, err := r.Read(buf)
-			select {
-			case ra.filled <- aheadBuf{buf[:n], err}:
-			case <-stop:
-				return
-			}
-			if err != nil {
-				return
-			}
-		}
-	}()
-	return ra
-}
-
-type aheadBuf struct {
-	data []byte
-	err  error
-}
-
-type aheadReader struct {
-	filled chan aheadBuf
-	stop   <-chan struct{}
-	cur    aheadBuf
-	err    error
-}
-
-// Read serves the buffers in order; a read that returned bytes with its
-// error is served as the bytes, then the error, as the cutter expects.
-func (ra *aheadReader) Read(p []byte) (int, error) {
-	for len(ra.cur.data) == 0 {
-		if ra.cur.err != nil {
-			err := ra.cur.err
-			ra.cur.err = nil
-			return 0, err
-		}
-		if ra.err != nil {
-			return 0, ra.err
-		}
-		next, ok := <-ra.filled
-		if !ok {
-			ra.err = io.EOF
-			return 0, io.EOF
-		}
-		ra.cur = next
-		if len(ra.cur.data) == 0 && ra.cur.err == nil {
-			return 0, nil // a (0, nil) read, passed on as such
-		}
-	}
-	n := copy(p, ra.cur.data)
-	ra.cur.data = ra.cur.data[n:]
-	return n, nil
 }

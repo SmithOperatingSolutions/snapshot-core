@@ -4188,13 +4188,6 @@ replace: if err := b.add(1, entry{child: h, size: uint64(len(j.data)) + 1}); err
 pkg: ./e2e
 run: ^TestTheStreamIsTheSameAtAnyWorkerCount$
 
-id: stream-read-ahead-serves-the-error-after-the-bytes
-file: core/stream/stream.go
-find: if ra.cur.err != nil {\n\t\t\terr := ra.cur.err\n\t\t\tra.cur.err = nil\n\t\t\treturn 0, err\n\t\t}
-replace: if ra.cur.err != nil {\n\t\t\tra.cur.err = nil\n\t\t\treturn 0, io.EOF\n\t\t}
-pkg: ./e2e
-run: ^TestAWorkersWriteSurfacesTheSourcesError$
-
 id: packstore-refuses-a-chunk-prepared-elsewhere
 file: core/chunk/packstore/packstore.go
 find: p, ok := cp.(*prepared)\n\tif !ok {
@@ -4229,3 +4222,66 @@ find: go func() {\n\t\tdefer s.finishers.Done()\n\t\tdefer func() { <-s.slots }(
 replace: func() {\n\t\tdefer s.finishers.Done()\n\t\tdefer func() { <-s.slots }()\n\t\ts.finish(context.WithoutCancel(ctx), w)\n\t}()
 pkg: ./core/chunk/packstore
 run: ^TestAnUploadDoesNotHoldUpTheWriter$
+
+id: cdc-parallel-warms-the-window-with-the-bytes-before
+file: core/cdc/parallel.go
+find: for _, b := range prev {\n\t\thash = bits.RotateLeft64(hash, 1) ^ outTable[0] ^ table[b]\n\t}
+replace: for range prev {\n\t}
+pkg: ./core/cdc
+run: ^TestTheParallelChunkerCutsWhereTheChunkerCuts$
+
+id: cdc-parallel-the-leaving-byte-comes-from-before-the-block
+file: core/cdc/parallel.go
+find: out = hist[i]
+replace: out = 0
+pkg: ./core/cdc
+run: ^TestTheParallelChunkerCutsWhereTheChunkerCuts$
+
+id: cdc-parallel-marks-the-hard-mask
+file: core/cdc/parallel.go
+find: if hash&hmask == 0 {\n\t\t\thard[i>>6] |= 1 << (i & 63)
+replace: if hash&emask == 0 && hmask != 0 {\n\t\t\thard[i>>6] |= 1 << (i & 63)
+pkg: ./core/cdc
+run: ^TestTheParallelChunkerCutsWhereTheChunkerCuts$
+
+id: cdc-parallel-first-set-stays-within-to
+file: core/cdc/parallel.go
+find: if i < to {\n\t\t\t\treturn i\n\t\t\t}\n\t\t\treturn -1
+replace: if i < to || true {\n\t\t\t\treturn i\n\t\t\t}\n\t\t\treturn -1
+pkg: ./core/cdc
+run: ^TestFirstSetStaysWithinItsBounds$
+
+id: cdc-parallel-hard-mask-under-min
+file: core/cdc/parallel.go
+find: if need := p.g.Min - p.n - 1; need > 0 {
+replace: if need := p.g.Min - p.n; need > 0 {
+pkg: ./core/cdc
+run: ^TestTheParallelChunkerCutsWhereTheChunkerCuts$
+
+id: cdc-parallel-cuts-at-max
+file: core/cdc/parallel.go
+find: if need := p.g.Max - p.n - 1; need > 0 {
+replace: if need := p.g.Max - p.n; need > 0 {
+pkg: ./core/cdc
+run: ^TestTheParallelChunkerCutsWhereTheChunkerCuts$
+
+id: cdc-parallel-returns-the-rest-at-eof
+file: core/cdc/parallel.go
+find: if errors.Is(b.err, io.EOF) && len(p.buf) > 0 {
+replace: if false {
+pkg: ./core/cdc
+run: ^TestTheParallelChunkerCutsWhereTheChunkerCuts$
+
+id: cdc-parallel-close-stops-the-reader
+file: core/cdc/parallel.go
+find: case p.order <- b:\n\t\tcase <-p.stop:\n\t\t\treturn\n\t\t}
+replace: case p.order <- b:\n\t\t}
+pkg: ./core/cdc
+run: ^TestCloseStopsAParallelChunkerNobodyReads$
+
+id: cdc-parallel-gives-up-on-no-progress
+file: core/cdc/parallel.go
+find: if empty++; empty >= maxConsecutiveEmptyReads {
+replace: if empty++; false {
+pkg: ./core/cdc
+run: ^TestTheParallelChunkerCutsWhereTheChunkerCuts$
