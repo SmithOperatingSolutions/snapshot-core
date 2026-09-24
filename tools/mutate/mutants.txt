@@ -4467,3 +4467,17 @@ find: if missing {\n\t\tif err := s.refresh(ctx); err != nil {
 replace: if missing && false {\n\t\tif err := s.refresh(ctx); err != nil {
 pkg: ./core/chunk/packstore
 run: ^TestAMissSeesAnotherStoresPublish$
+
+id: pack-writer-sized-at-what-it-will-hold
+file: core/pack/pack.go
+find: size := min(max(expect+HeaderSize+TrailerSize, HeaderSize+TrailerSize), maxSize)
+replace: size := maxSize
+pkg: ./core/pack
+run: ^TestAWriterSizedToWhatItWillHoldGrowsToAPack$
+
+id: pack-writer-size-capped-at-the-pack
+file: core/pack/pack.go
+find: size := min(max(expect+HeaderSize+TrailerSize, HeaderSize+TrailerSize), maxSize)
+replace: size := max(expect+HeaderSize+TrailerSize, HeaderSize+TrailerSize)
+pkg: ./core/pack
+run: ^TestAWriterSizedToWhatItWillHoldGrowsToAPack$
