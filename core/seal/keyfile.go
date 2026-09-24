@@ -23,13 +23,15 @@ func DefaultArgon2Params() Argon2Params {
 }
 
 // Bounds on Argon2id costs. The floor is OWASP's (19 MiB, 2 passes); the
-// ceiling stops a crafted key file from being a way to exhaust memory or CPU,
-// and is checked before any derivation.
+// ceiling, a gibibyte and ten passes, is what a host derives in seconds
+// (disknexus writes 64 MiB and three), so a crafted key file is not a way
+// to exhaust memory or CPU: a file over it is refused before any
+// derivation (#13; at 4 GiB and 64 passes the fuzzer hung the process).
 const (
 	minArgonTime   = 2
-	maxArgonTime   = 64
+	maxArgonTime   = 10
 	minArgonMemory = 19 * 1024
-	maxArgonMemory = 4 * 1024 * 1024
+	maxArgonMemory = 1024 * 1024
 	maxArgonThread = 64
 	maxPassphrase  = 1024
 )

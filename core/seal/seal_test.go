@@ -344,8 +344,8 @@ func TestKeyFileParameterBounds(t *testing.T) {
 		"time 1":             {Time: 1, Memory: fast.Memory, Threads: 1},
 		"memory under 19MiB": {Time: 2, Memory: 19*1024 - 1, Threads: 1},
 		"threads 0":          {Time: 2, Memory: fast.Memory, Threads: 0},
-		"memory over 4GiB":   {Time: 2, Memory: 4*1024*1024 + 1, Threads: 1},
-		"time over 64":       {Time: 65, Memory: fast.Memory, Threads: 1},
+		"memory over 1GiB":   {Time: 2, Memory: 1024*1024 + 1, Threads: 1},
+		"time over 10":       {Time: 11, Memory: fast.Memory, Threads: 1},
 	} {
 		if _, err := seal.NewKeyFile(kr, []byte("passphrase"), p); !errors.Is(err, seal.ErrParams) {
 			t.Errorf("%s: NewKeyFile accepted %+v (err=%v)", name, p, err)
@@ -360,9 +360,25 @@ func TestKeyFileParameterBounds(t *testing.T) {
 	if len(f) != keyFileLen {
 		t.Fatalf("key file is %d bytes, want %d", len(f), keyFileLen)
 	}
+	pristine := append([]byte(nil), f...)
 	binary.LittleEndian.PutUint32(f[offMemory:], 0xFFFFFFFF)
 	if _, err := seal.OpenKeyFile(f, []byte("passphrase")); !errors.Is(err, seal.ErrParams) {
 		t.Errorf("a key file demanding 4 TiB of Argon2 memory: %v, want ErrParams", err)
+	}
+	// #13: the ceiling is what a host derives in seconds, a gibibyte and
+	// ten passes (disknexus writes 64 MiB and three); found by the weekly
+	// fuzzer, a file just inside the old 4 GiB and 64 passes hung the
+	// process. A file a byte over either bound is refused before deriving:
+	// derived, it would fail to authenticate instead, minutes later.
+	over := append([]byte(nil), pristine...)
+	binary.LittleEndian.PutUint32(over[offMemory:], 1024*1024+1)
+	if _, err := seal.OpenKeyFile(over, []byte("passphrase")); !errors.Is(err, seal.ErrParams) {
+		t.Errorf("a key file demanding a gibibyte and a kibibyte of Argon2 memory: %v, want ErrParams before any derivation", err)
+	}
+	over = append([]byte(nil), pristine...)
+	binary.LittleEndian.PutUint32(over[offTime:], 11)
+	if _, err := seal.OpenKeyFile(over, []byte("passphrase")); !errors.Is(err, seal.ErrParams) {
+		t.Errorf("a key file demanding eleven Argon2 passes: %v, want ErrParams before any derivation", err)
 	}
 	if d := seal.DefaultArgon2Params(); d != (seal.Argon2Params{Time: 3, Memory: 64 * 1024, Threads: 4}) {
 		t.Errorf("default params %+v, want disknexus's 3 / 64 MiB / 4", d)
