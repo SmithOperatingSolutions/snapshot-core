@@ -21,11 +21,11 @@ func (l layout) Threshold(pkg string) float64 {
 	segs := strings.Split(pkg, "/")
 	last := segs[len(segs)-1]
 	switch {
-	case segs[0] != "core" && segs[0] != "model":
+	case !l.isProduct(pkg):
 		return 0 // tools and anything outside the product
 	case last == "contract" || strings.HasSuffix(last, "fake") || strings.HasSuffix(last, "test"):
 		return 0 // test suites and test infrastructure, exercised by their callers
-	case pkg == "core/dnx" || pkg == "core/blob/s3":
+	case l.isAdapter(pkg):
 		return 80 // adapters over a third-party API
 	default:
 		return 90
@@ -117,19 +117,4 @@ func (l layout) CoverageFromProfile(profile string) []PackageCoverage {
 		out = append(out, PackageCoverage{Pkg: p, Percent: pct})
 	}
 	return out
-}
-
-// The runner's own module, until the layout comes from flags.
-const (
-	coreModule   = "github.com/SmithOperatingSolutions/snapshot-core"
-	modulePrefix = coreModule + "/"
-)
-
-// Threshold, GateCoverage and CoverageFromProfile over the core's layout.
-func Threshold(pkg string) float64 { return coreLayout(coreModule).Threshold(pkg) }
-func GateCoverage(cs []PackageCoverage) []CoverFailure {
-	return coreLayout(coreModule).GateCoverage(cs)
-}
-func CoverageFromProfile(profile string) []PackageCoverage {
-	return coreLayout(coreModule).CoverageFromProfile(profile)
 }

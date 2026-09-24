@@ -3,6 +3,7 @@ package main
 import "testing"
 
 func TestThresholdsFollowTheEngineSpec(t *testing.T) {
+	l := coreLayout("github.com/SmithOperatingSolutions/snapshot-core")
 	for pkg, want := range map[string]float64{
 		"core/prolly":         90,
 		"model/tree":          90,
@@ -13,14 +14,14 @@ func TestThresholdsFollowTheEngineSpec(t *testing.T) {
 		"core/blob/s3/s3fake": 0, // test infrastructure
 		"model/contract":      0,
 	} {
-		if got := Threshold(pkg); got != want {
+		if got := l.Threshold(pkg); got != want {
 			t.Errorf("Threshold(%q) = %v, want %v", pkg, got, want)
 		}
 	}
 }
 
 func TestGateFailsLowCoverageAndUnreachedCorePackages(t *testing.T) {
-	fs := GateCoverage([]PackageCoverage{
+	fs := coreLayout("github.com/SmithOperatingSolutions/snapshot-core").GateCoverage([]PackageCoverage{
 		{Pkg: "core/blob/mem", Percent: 97.1},
 		{Pkg: "core/prolly", Percent: 88.9},
 		{Pkg: "core/limits", Percent: 0}, // no test reaches it
@@ -62,7 +63,7 @@ github.com/SmithOperatingSolutions/snapshot-core/core/hash/hash.go:11.1,13.2 6 0
 
 func TestCoverageFromProfileMergesBlocksAcrossTestBinaries(t *testing.T) {
 	got := map[string]float64{}
-	for _, c := range CoverageFromProfile(profile) {
+	for _, c := range coreLayout("github.com/SmithOperatingSolutions/snapshot-core").CoverageFromProfile(profile) {
 		got[c.Pkg] = c.Percent
 	}
 	// core/dnx: both blocks covered by the second binary -> 10/10.

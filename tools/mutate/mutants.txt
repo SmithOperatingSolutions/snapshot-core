@@ -4488,3 +4488,17 @@ find: return pack.NewWriterSized(r.o.Keys, r.o.Repo, codec, size, int(min(int64(
 replace: return pack.NewWriterSized(r.o.Keys, r.o.Repo, codec, size, size)
 pkg: ./core/chunk/packstore
 run: ^TestARepackAllocatesForWhatItCopies$
+
+id: ci-product-matches-the-directory-itself
+file: tools/ci/layout.go
+find: if rel == strings.TrimSuffix(p, "/") || strings.HasPrefix(rel, p) {
+replace: if strings.HasPrefix(rel, p) {
+pkg: ./tools/ci
+run: ^TestTheRunnerTakesTheModulesLayout$
+
+id: ci-adapters-get-the-lower-gate
+file: tools/ci/layout.go
+find: for _, a := range l.adapters {\n\t\tif rel == a {\n\t\t\treturn true\n\t\t}\n\t}
+replace: for range l.adapters {\n\t}
+pkg: ./tools/ci
+run: ^TestThresholdsFollowTheEngineSpec$
