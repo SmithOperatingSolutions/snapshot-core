@@ -19,6 +19,11 @@ mise run ci:quick   # fmt, vet, lint, race suite
 
 `mise run ci` is `go run ./tools/ci`. It needs nothing but Go: the S3 backend
 runs its contract suite against an in-process S3 server (`core/blob/s3/s3fake`).
+The runner gates this module's layout by default (`core/` and `model/` are the
+product; `core/dnx` and `core/blob/s3` adapt third-party APIs); another module
+that takes the core as a dependency runs it as a Go tool told its own layout
+with `-product` and `-adapters`, and its `redcheck` and `mutate` steps run the
+core's tools the same way.
 A run against a real S3 server is an extra tier (`mise run s3`, SeaweedFS in Docker) that CI requires.
 
 ## The loop for every change
