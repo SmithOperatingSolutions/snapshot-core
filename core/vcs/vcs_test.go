@@ -520,7 +520,15 @@ func TestEveryCallIsAuthorized(t *testing.T) {
 		{"user:bob 1 repo", func(r *vcs.Repo) error { _, err := r.Log(ctx, bob, head, 1); return err }},
 		{"user:bob 1 repo", func(r *vcs.Repo) error { _, err := r.MergeBase(ctx, bob, head, theirs); return err }},
 		{"user:bob 2 branch:main", func(r *vcs.Repo) error { _, err := r.UpdateWorkingSet(ctx, bob, "main", ws, ws); return err }},
-		{"user:bob 2 branch:main", func(r *vcs.Repo) error { _, err := r.CommitWorkingSet(ctx, bob, "main", "m"); return err }},
+		{"user:bob 5 branch:main", func(r *vcs.Repo) error { _, err := r.CommitWorkingSet(ctx, bob, "main", "m"); return err }},
+		{"user:bob 2 branch:main", func(r *vcs.Repo) error {
+			cur, err := f.r.WorkingSet(ctx, alice, "main") // read through the unrecorded repository
+			if err != nil {
+				return err
+			}
+			_, err = r.Commit(ctx, bob, "main", cur, cur.Working, "one publish")
+			return err
+		}},
 		{"user:bob 3 branch:feature", func(r *vcs.Repo) error { return r.CreateBranch(ctx, bob, "feature", head) }},
 		{"user:bob 1 branch:feature", func(r *vcs.Repo) error {
 			sess, err := r.Checkout(ctx, bob, "feature")
@@ -534,10 +542,10 @@ func TestEveryCallIsAuthorized(t *testing.T) {
 		{"user:bob 1 tag:v1", func(r *vcs.Repo) error { _, err := r.Tag(ctx, bob, "v1"); return err }},
 		{"user:bob 1 repo", func(r *vcs.Repo) error { _, err := r.Tags(ctx, bob); return err }},
 		{"user:bob 3 tag:v1", func(r *vcs.Repo) error { return r.DeleteTag(ctx, bob, "v1") }},
-		{"user:bob 2 branch:main", func(r *vcs.Repo) error { _, err := r.Merge(ctx, bob, "main", theirs); return err }},
+		{"user:bob 6 branch:main", func(r *vcs.Repo) error { _, err := r.Merge(ctx, bob, "main", theirs); return err }},
 		{"user:bob 1 branch:main", func(r *vcs.Repo) error { _, err := r.Conflicts(ctx, bob, "main"); return err }},
-		{"user:bob 2 branch:main", func(r *vcs.Repo) error { return r.ResolveConflict(ctx, bob, "main", "doc", &resolved) }},
-		{"user:bob 2 branch:main", func(r *vcs.Repo) error { return r.AbortMerge(ctx, bob, "main") }},
+		{"user:bob 6 branch:main", func(r *vcs.Repo) error { return r.ResolveConflict(ctx, bob, "main", "doc", &resolved) }},
+		{"user:bob 6 branch:main", func(r *vcs.Repo) error { return r.AbortMerge(ctx, bob, "main") }},
 	}
 	for _, c := range calls {
 		rec.calls = nil
