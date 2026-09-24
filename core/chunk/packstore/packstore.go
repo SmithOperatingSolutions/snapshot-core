@@ -534,14 +534,26 @@ var (
 	_ chunk.Flusher  = (*Store)(nil)
 )
 
-// Flush implements chunk.Flusher: the pending pack, if it holds anything,
-// goes to a finisher now, so its upload runs beside whatever the caller
-// does next instead of inside the next publish.
+// flushShare is the share of a pack the pending pack must hold for Flush
+// to upload it: a pack put costs one fsync latency (one round trip, on
+// S3) whatever its size, so flushing a small pack saves nothing at the
+// publish and costs a pack, a fsync and an index entry.
+const flushShare = 8
+
+// Flush implements chunk.Flusher: the pending pack, if it holds at least
+// a flushShare'th of a pack, goes to a finisher now, so its upload runs
+// beside whatever the caller does next instead of inside the next
+// publish; a smaller one waits for the publish and shares its pack with
+// what comes next.
 func (s *Store) Flush(ctx context.Context) error {
 	s.mu.Lock()
 	if s.closed {
 		s.mu.Unlock()
 		return chunk.ErrClosed
+	}
+	if s.pending == nil || s.pending.Size() < s.o.PackSize/flushShare {
+		s.mu.Unlock()
+		return nil
 	}
 	w := s.takePendingLocked()
 	s.mu.Unlock()

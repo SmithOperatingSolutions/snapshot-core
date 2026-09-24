@@ -175,9 +175,13 @@ can refuse them) and a fuzz target.
   on the other, then the root is swapped: one fsync latency for the two on
   `blob/local` (a pack that fails leaves its index objects orphans, which
   GC deletes). `Flush` (`chunk.Flusher`) hands the pending pack to a
-  finisher at once; `stream.Write` flushes when a stream ends, so the pack
-  holding a file's last chunks uploads beside the host's next work rather
-  than inside the publish. A commit that follows a gibibyte's write by any
+  finisher at once when it holds at least an eighth of a pack; `stream.Write`
+  flushes when a stream ends, so the pack holding a big file's last chunks
+  uploads beside the host's next work rather than inside the publish. A
+  smaller pending pack waits for the publish and shares its pack with what
+  comes next: a pack put costs one fsync latency (one round trip on S3)
+  whatever its size, so flushing it would save nothing and cost a pack, a
+  fsync and an index entry per file. A commit that follows a gibibyte's write by any
   other work is one metadata pack, one index object and a swap: 37 ms here.
   Put is two halves (`chunk.Preparer`, #10): **Prepare**, the hash and the
   compression, on the caller's goroutine with no lock; **PutPrepared**, the

@@ -407,7 +407,7 @@ them, each tracked as an issue:
    commit is one publish (`Repo.Commit`, `TestACommitIsOnePublish`) whose
    packs and index objects are written together
    (`TestAPublishWritesItsPackAndIndexObjectTogether`), the stream's last
-   pack having uploaded when the stream ended
-   (`TestAStreamsLastPackIsUploadedWhenTheStreamEnds`): 81 / 39 / 33 ms
+   pack having uploaded when the stream ended if it held at least an eighth
+   of a pack (`TestAStreamsLastPackIsUploadedWhenTheStreamEnds`): 81 / 39 / 33 ms
    for the three files, from 125–142 / 80 / 86; 37 ms when any work
    separates the write from the commit.

@@ -4362,3 +4362,17 @@ find: if f, ok := w.(chunk.Flusher); ok {
 replace: if f, ok := w.(chunk.Flusher); ok && false {
 pkg: ./e2e
 run: ^TestAStreamsLastPackIsUploadedWhenTheStreamEnds$
+
+id: flush-waits-under-an-eighth-of-a-pack
+file: core/chunk/packstore/packstore.go
+find: if s.pending == nil || s.pending.Size() < s.o.PackSize/flushShare {
+replace: if s.pending == nil {
+pkg: ./e2e
+run: ^TestAStreamsLastPackIsUploadedWhenTheStreamEnds$
+
+id: flush-uploads-from-an-eighth-of-a-pack
+file: core/chunk/packstore/packstore.go
+find: if s.pending == nil || s.pending.Size() < s.o.PackSize/flushShare {
+replace: if s.pending == nil || s.pending.Size() < s.o.PackSize {
+pkg: ./e2e
+run: ^TestAStreamsLastPackIsUploadedWhenTheStreamEnds$
