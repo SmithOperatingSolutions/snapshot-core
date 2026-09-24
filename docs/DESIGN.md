@@ -170,7 +170,15 @@ can refuse them) and a fuzz target.
   backend costs time, never memory. A failed upload is kept and retried by
   the next CompareAndSetRoot, which waits for every finisher, finishes and
   uploads the pending pack itself, and refuses to publish while any pack is
-  unstored.
+  unstored. The packs a publish has to upload and the index objects that
+  list them are written together, each waiting on the backend and neither
+  on the other, then the root is swapped: one fsync latency for the two on
+  `blob/local` (a pack that fails leaves its index objects orphans, which
+  GC deletes). `Flush` (`chunk.Flusher`) hands the pending pack to a
+  finisher at once; `stream.Write` flushes when a stream ends, so the pack
+  holding a file's last chunks uploads beside the host's next work rather
+  than inside the publish. A commit that follows a gibibyte's write by any
+  other work is one metadata pack, one index object and a swap: 37 ms here.
   Put is two halves (`chunk.Preparer`, #10): **Prepare**, the hash and the
   compression, on the caller's goroutine with no lock; **PutPrepared**, the
   deduplication check and the seal into the pending pack, under the lock.
@@ -452,6 +460,9 @@ working set  0x05 · working [32] · staged [32] · merging u8 (0 or 1) ·
   commit. `UpdateWorkingSet` changes the namespaces only: the merge state
   it is handed must be the stored one (`ErrMergeState`), since only
   `Merge`, `ResolveConflict`, `CommitWorkingSet` and `AbortMerge` change it.
+  `Commit` is `UpdateWorkingSet` then `CommitWorkingSet` in one publish
+  (#10): a host that edits a namespace and commits it pays one swap, one
+  index object and one pack of metadata, not two of each.
 - **Abandoning a merge.** `Merge` merges into the working namespace as it
   is, uncommitted edits and all, so the merge state records the working and
   staged namespaces it started from. `AbortMerge` drops the merge state and
@@ -474,6 +485,8 @@ working set  0x05 · working [32] · staged [32] · merging u8 (0 or 1) ·
   diffs the working set stored under `prev`, never the caller's copy;
   `CommitWorkingSet` diffs the head against what is staged, so committing
   someone else's staged change needs the committer's own permission;
+  `Commit` diffs all three, the stored working and staged namespaces and
+  the head, against the namespace it commits;
   `Merge` diffs the working namespace against the result;
   `ResolveConflict` asks for its path. Reads stay per branch: a host holding
   the chunk store can read what it can open, so a per-path read rule belongs

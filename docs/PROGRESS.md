@@ -338,6 +338,7 @@ Beyond the list: merging what a branch already holds changes nothing (`TestMergi
 | the parallel chunker's tests (#10) | Two mutants survived at first: a bit set past the search's end within its last word, which random data never places, and a reader blocked handing over a block, which the differential test's reader never was | A unit test of the bit search's bounds; a reader that fills every slot ahead and then blocks, closed with nobody reading |
 | the race detector, on the finisher (#10) | The GC property test's clock offsets were plain fields, written by the test and now read by a finisher goroutine uploading a pack | Atomic offsets, set and read through methods |
 | the write path's profile, a fifth time (#10) | With the storer trivial the wall did not move: a 256 MiB write allocated 3.4 GB, and both measurement tests were bounded by their own sources (a byte-at-a-time text generator, then a ChaCha8 stream at 700 MB/s) | One copy per chunk, recycled blocks, a compression scratch, packs built in place; the tests generate their data once beforehand |
+| the commit's trace (#10) | A commit was two publishes, each a pack, an index object and a root swap written one after the other, six fsyncs on this disk at about 11 ms each whatever the pack's size, plus the file's last pack still pending | One publish per commit; the packs and the index objects written together; the last pack flushed when the stream ends |
 | (redcheck on this branch) | Build-tagged tests unjudged; `TestMain` judged; pairs not matched by scope; contract changes invisible; environment-bound callers refused; no `main` in a new clone; a tagged backfill's mutants built without its tag; fuzz targets not counted as tests | Tool fixed each time, with a red test |
 
 ### Batch 2 (in progress)
@@ -402,4 +403,11 @@ them, each tracked as an issue:
    `TestTheParallelChunkerCutsWhereTheChunkerCuts`); chunks are sealed on
    the preparing goroutine (`TestAChunkPreparedForOnePackStoresInTheNext`)
    and the path copies each chunk once. On disk the fsync'ed write bounds
-   it; more packs in flight measured the same at two, four and eight.
+   it; more packs in flight measured the same at two, four and eight. A
+   commit is one publish (`Repo.Commit`, `TestACommitIsOnePublish`) whose
+   packs and index objects are written together
+   (`TestAPublishWritesItsPackAndIndexObjectTogether`), the stream's last
+   pack having uploaded when the stream ended
+   (`TestAStreamsLastPackIsUploadedWhenTheStreamEnds`): 81 / 39 / 33 ms
+   for the three files, from 125–142 / 80 / 86; 37 ms when any work
+   separates the write from the commit.
