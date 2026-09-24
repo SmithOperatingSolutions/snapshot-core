@@ -39,7 +39,21 @@ type Options struct {
 	// so racing puts of one name need no single winner; every name a
 	// repository writes is unique.
 	ObjectsOnly bool
+	// ListOrder is the order the backend lists in: ByteOrder (the default,
+	// S3's and every backend's here) or AnyTotalOrder, for an endpoint that
+	// lists a directory's children right after the directory (SeaweedFS):
+	// then the suite requires a total order kept across pages, prefixes
+	// and after, and not byte order.
+	ListOrder Order
 }
+
+// Order is what a backend promises about the order it lists in.
+type Order int
+
+const (
+	ByteOrder     Order = iota // ascending byte order of names
+	AnyTotalOrder              // one order, the same for every page, prefix and after
+)
 
 // Run runs the whole contract.
 func Run(t *testing.T, newStore Factory, opts Options) {
@@ -57,7 +71,7 @@ func Run(t *testing.T, newStore Factory, opts Options) {
 	t.Run("PutIsAtomic", func(t *testing.T) { putIsAtomic(t, newStore(t)) })
 	t.Run("InvalidNamesRefused", func(t *testing.T) { invalidNames(t, newStore(t)) })
 	t.Run("Stat", func(t *testing.T) { stat(t, newStore(t)) })
-	t.Run("ListPaging", func(t *testing.T) { listPaging(t, newStore(t)) })
+	t.Run("ListPaging", func(t *testing.T) { listPaging(t, newStore(t), opts.ListOrder) })
 	t.Run("ListLimits", func(t *testing.T) { listLimits(t, newStore(t)) })
 	t.Run("Delete", func(t *testing.T) { deleteObject(t, newStore(t)) })
 	if opts.ObjectsOnly {
@@ -361,15 +375,17 @@ func listAll(t *testing.T, s blob.BlobStore, prefix string, limit int) []string 
 	}
 }
 
-func listPaging(t *testing.T, s blob.BlobStore) {
+func listPaging(t *testing.T, s blob.BlobStore, order Order) {
 	for _, n := range listNames {
 		put(t, s, n, []byte(n))
 	}
-	want := append([]string(nil), listNames...)
-	sort.Strings(want)
-	for _, limit := range []int{1, 2, 3, 7, blob.MaxListPage} {
-		if got := listAll(t, s, "", limit); strings.Join(got, ",") != strings.Join(want, ",") {
-			t.Errorf("paging with limit %d gave\n  %v\nwant (byte order)\n  %v", limit, got, want)
+	full := listAll(t, s, "", blob.MaxListPage)
+	if err := orderVerdict(order, full, listNames); err != nil {
+		t.Errorf("List of everything: %v", err)
+	}
+	for _, limit := range []int{1, 2, 3, 7} {
+		if got := listAll(t, s, "", limit); strings.Join(got, ",") != strings.Join(full, ",") {
+			t.Errorf("paging with limit %d gave\n  %v\nwant the one-page listing\n  %v", limit, got, full)
 		}
 	}
 	for prefix, wantP := range map[string][]string{
@@ -381,12 +397,12 @@ func listPaging(t *testing.T, s blob.BlobStore) {
 		"nothing/": nil,
 	} {
 		got := listAll(t, s, prefix, 2)
-		if strings.Join(got, ",") != strings.Join(wantP, ",") {
-			t.Errorf("List(prefix %q) = %v, want %v", prefix, got, wantP)
+		if err := prefixVerdict(order, full, prefix, got, wantP); err != nil {
+			t.Errorf("List(prefix %q): %v", prefix, err)
 		}
 	}
 	// after is exclusive, and need not name an existing object.
-	infos, err := s.List(ctx, "", "a/b", 3)
+	infos, err := s.List(ctx, "", full[1], 3)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -394,8 +410,8 @@ func listPaging(t *testing.T, s blob.BlobStore) {
 	for _, in := range infos {
 		got = append(got, in.Name)
 	}
-	if strings.Join(got, ",") != "a/b/c,a/c,a0" {
-		t.Errorf("List(after a/b) = %v, want [a/b/c a/c a0]", got)
+	if want := full[2:5]; strings.Join(got, ",") != strings.Join(want, ",") {
+		t.Errorf("List(after %s) = %v, want the next three of the listing %v", full[1], got, want)
 	}
 	infos, err = s.List(ctx, "packs/", "packs/05", 10)
 	if err != nil {
@@ -409,6 +425,45 @@ func listPaging(t *testing.T, s blob.BlobStore) {
 			t.Errorf("List reports %s as %d bytes, want %d", in.Name, in.Size, len(in.Name))
 		}
 	}
+}
+
+// orderVerdict judges a listing of everything against the names stored:
+// in ByteOrder it is the names sorted; in AnyTotalOrder it is the names,
+// each once, in any order.
+func orderVerdict(order Order, got, stored []string) error {
+	want := append([]string(nil), stored...)
+	sort.Strings(want)
+	if order == ByteOrder {
+		if strings.Join(got, ",") != strings.Join(want, ",") {
+			return fmt.Errorf("listed\n  %v\nwant (byte order)\n  %v", got, want)
+		}
+		return nil
+	}
+	sorted := append([]string(nil), got...)
+	sort.Strings(sorted)
+	if strings.Join(sorted, ",") != strings.Join(want, ",") {
+		return fmt.Errorf("listed\n  %v\nwant every stored name once, in the backend's order:\n  %v", got, want)
+	}
+	return nil
+}
+
+// prefixVerdict judges a listing under prefix: the names with that prefix
+// in byte order, or, in AnyTotalOrder, in the order the listing of
+// everything gave them.
+func prefixVerdict(order Order, full []string, prefix string, got, wantBytes []string) error {
+	want := wantBytes
+	if order == AnyTotalOrder {
+		want = nil
+		for _, n := range full {
+			if strings.HasPrefix(n, prefix) {
+				want = append(want, n)
+			}
+		}
+	}
+	if strings.Join(got, ",") != strings.Join(want, ",") {
+		return fmt.Errorf("listed %v, want %v", got, want)
+	}
+	return nil
 }
 
 func listLimits(t *testing.T, s blob.BlobStore) {

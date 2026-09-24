@@ -52,19 +52,26 @@ func realS3(t *testing.T) (*awss3.Client, string) {
 	return c, b
 }
 
-// The Storage Core Spec's "MinIO in CI" tier: the full contract, 50 racing
-// swappers included, against a real S3-compatible server. Passing the probe
-// at Open is part of it. With SNAPSHOT_S3_OBJECTS_ONLY=1 (the weekly run on
-// a provider that ignores conditional writes, #4) the store opens objects
-// only and the contract runs for objects.
+// The Storage Core Spec's S3-in-CI tier (MinIO in the spec's words; SeaweedFS
+// since MinIO ended its distribution): the full contract, 50 racing swappers
+// included, against a real S3-compatible server. Passing the probe at Open is
+// part of it. With SNAPSHOT_S3_OBJECTS_ONLY=1 (the weekly run on a provider
+// that ignores conditional writes, #4) the store opens objects only and the
+// contract runs for objects. SNAPSHOT_S3_LIST_ORDER=tree says the server
+// lists a directory's children right after the directory (SeaweedFS): the
+// contract then requires one total order, not byte order.
 func TestContractAgainstRealS3(t *testing.T) {
 	c, b := realS3(t)
 	objectsOnly := os.Getenv("SNAPSHOT_S3_OBJECTS_ONLY") == "1"
+	order := contract.ByteOrder
+	if os.Getenv("SNAPSHOT_S3_LIST_ORDER") == "tree" {
+		order = contract.AnyTotalOrder
+	}
 	contract.Run(t, func(t *testing.T) blob.BlobStore {
 		st, err := s3.Open(ctx, s3.Options{Client: c, Bucket: b, Prefix: randomPrefix(t), AllowHTTP: true, ObjectsOnly: objectsOnly})
 		if err != nil {
 			t.Fatalf("Open against the real server: %v", err)
 		}
 		return st
-	}, contract.Options{Swappers: 50, ObjectsOnly: objectsOnly})
+	}, contract.Options{Swappers: 50, ObjectsOnly: objectsOnly, ListOrder: order})
 }
