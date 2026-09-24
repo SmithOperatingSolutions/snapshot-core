@@ -21,7 +21,7 @@ exact commit the spec's package map was reviewed at. That is the pin.
 | D6 | `core/hash` reuse | Routed through `core/dnx` as specified (`hasher.Sum(b).StrongHash`); the compat suite pins it equal to `crypto/sha256` | `hasher.Sum` is `sha256.Sum256` plus an xxHash filter hint. The reuse is nominal; the pin is what matters |
 | D7 | `core/cdc` geometry | `cdc` validates geometry before handing it to disknexus (min ≥ 64 B, max ≤ 1 MiB chunk limit, min < max, mask non-zero and of the form 2ⁿ−1) | `chunker.New` accepts `max = 0` (a chunk per byte) and `min > max` silently |
 | D8 | What "reuse" amounts to | hasher (identity), crypto (AEAD, Argon2id, X25519). The chunker was reused through `core/dnx` until #10; `core/cdc` now cuts disknexus's boundaries itself (D10). Everything else is ours | Matches the spec's "hardest-won quarter" |
-| D10 | The chunker (2026-09-23, #10) | `core/cdc` rolls disknexus's Buzhash and cut rules over each read buffer, byte for byte disknexus's boundaries; disknexus stays the oracle, imported in `core/dnx` and held to by `core/dnx/compat`'s goldens and a differential test | disknexus reads a byte at a time and bounds a write at about 200 MB/s on one core; ours cuts the same 8,531 chunks of 256 MiB at over 800 MB/s. The spec's rule 3 allows a package of our own beside it |
+| D10 | The chunker (2026-09-23, #10) | `core/cdc` rolls disknexus's Buzhash and cut rules over each read buffer, byte for byte disknexus's boundaries; disknexus stays the oracle, imported in `core/dnx` and held to by `core/dnx/compat`'s goldens and a differential test. `cdc.Parallel` marks where the masks hit on many goroutines and places the cuts on one, since the hash at a byte depends on the 48 bytes before it alone: the same boundaries at 2.4 GB/s on sixteen threads | disknexus reads a byte at a time and bounds a write at about 200 MB/s on one core; ours cuts the same 8,531 chunks of 256 MiB at 750 MB/s serially. The spec's rule 3 allows a package of our own beside it |
 | D9 | Where the Engine Spec lives | Its L4 (tables) is implemented in a separate, consuming repository. Its L0–L3 rules apply here as below | Owner decision |
 
 ## 2. How the Engine Spec's L0–L3 land here
@@ -175,18 +175,20 @@ can refuse them) and a fuzz target.
   compression, on the caller's goroutine with no lock; **PutPrepared**, the
   deduplication check and the seal into the pending pack, under the lock.
   `stream.Write` uses the halves to hash and compress on `Config.Workers`
-  goroutines (GOMAXPROCS by default; 1 is the serial path) while one reads
-  ahead, one cuts and the caller's stores in stream order, so the stream is
-  the same at any worker count; at most about 2×Workers chunks and four
-  read buffers are in flight. The pending pack's buffer is allocated at the
+  goroutines (GOMAXPROCS by default; 1 is the serial path) while
+  `cdc.Parallel` reads and marks the stream on its own goroutines and the
+  caller's places the cuts and stores in stream order, so the stream is
+  the same at any worker count; at most about 2×Workers chunks and a few
+  blocks are in flight. The pending pack's buffer is allocated at the
   pack's size once. Measured on an i7-1360P (`TestSlowThroughputOnLocalDisk`,
   the weekly run): a gibibyte of random data writes to `blob/local` at 262
   MB/s where it wrote at 114, compressible text at 485 where it wrote at
   188, a one-byte re-snapshot deduplicates at 322; in memory on sixteen
-  workers 441 MB/s where one worker does 238. Reads 0.5–1.2 GB/s and
-  commits about 100 ms are unchanged. What bounds a write now is the cutter
-  (about 800 MB/s, one goroutine by nature) and, on disk, the backend's
-  write; the storer is under half the wall.
+  workers 639 MB/s where one worker does 230. Reads 0.5–1.2 GB/s and
+  commits about 100 ms are unchanged. What bounds a write now is the
+  storer (the seal and the pack's bytes on one goroutine, about 0.3 s per
+  256 MiB) and, on disk, the backend's fsync'ed write, which more packs in
+  flight do not raise (measured the same at two, four and eight).
 - **CompareAndSetRoot(expected, next)** refuses a `next` that is not a stored
   chunk, uploads every pending pack, writes one index object for the session's
   packs, then swaps the manifest (root := next, index list += the session's

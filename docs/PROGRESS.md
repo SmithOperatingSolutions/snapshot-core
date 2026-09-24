@@ -334,6 +334,9 @@ Beyond the list: merging what a branch already holds changes nothing (`TestMergi
 | the write path's profile, a third time (#10) | With the chunker fast the storer did the per-pack work on the per-chunk path: naming (SHA-256 of 32 MiB), building and uploading each full pack, half its time | Full packs are finished and uploaded beside the writer, two at a time |
 | the throughput measurement (#10) | The compressible figure stopped moving at 330 MB/s: the test's text generator wrote a byte at a time through a modulo and had become the source being measured | It copies from a page of the pattern |
 | the finisher's tests (#10) | The publish-waits test judged the order of what landed before the held pack had landed at all, so a publish that did not wait passed; the finishing-pack read test read a pack already named and held at its upload, where the ordinary path serves it | Every pack is waited for before the order is judged; a hold seam stops a finisher before it names its pack |
+| the write path's profile, a fourth time (#10) | With packs finished beside the writer, the cutter bounded the write at about 800 MB/s: a Buzhash rolls a byte at a time, and the serial dependency looked like the end of it | The hash at a byte depends on the 48 bytes before it alone, so the masks' hits are marked in parallel and only the cut placement is serial: 2.4 GB/s |
+| the parallel chunker's tests (#10) | Two mutants survived at first: a bit set past the search's end within its last word, which random data never places, and a reader blocked handing over a block, which the differential test's reader never was | A unit test of the bit search's bounds; a reader that fills every slot ahead and then blocks, closed with nobody reading |
+| the race detector, on the finisher (#10) | The GC property test's clock offsets were plain fields, written by the test and now read by a finisher goroutine uploading a pack | Atomic offsets, set and read through methods |
 | (redcheck on this branch) | Build-tagged tests unjudged; `TestMain` judged; pairs not matched by scope; contract changes invisible; environment-bound callers refused; no `main` in a new clone; a tagged backfill's mutants built without its tag; fuzz targets not counted as tests | Tool fixed each time, with a red test |
 
 ### Batch 2 (in progress)
@@ -386,11 +389,15 @@ them, each tracked as an issue:
    (`TestSlowWorkersOutrunOneWorker`, `TestTheStreamIsTheSameAtAnyWorkerCount`),
    and `core/cdc` cuts disknexus's boundaries itself three times as fast
    (`TestSlowTheChunkerOutrunsDisknexus`). On the same laptop over
-   `blob/local`: 262 MB/s writing random data (from 114), 485 compressible
-   (from 188), 322 re-snapshotting (from 203); in memory 441 on sixteen
-   workers against 238 on one; reads and commits unchanged
+   `blob/local`: 260 MB/s writing random data (from 114), 484 compressible
+   (from 188), 320 re-snapshotting (from 203); in memory 639 on sixteen
+   workers against 230 on one; reads and commits unchanged
    (`TestSlowThroughputOnLocalDisk`, weekly). Full packs are finished and
    uploaded beside the writer, at most two at once
    (`TestAnUploadDoesNotHoldUpTheWriter`, `TestAtMostTwoPacksAreInFlight`,
-   `TestAPublishWaitsForItsUploads`). The cutter, one goroutine by nature at
-   about 800 MB/s, and the backend's write bound it now.
+   `TestAPublishWaitsForItsUploads`); `cdc.Parallel` marks the masks' hits
+   on every core and places the cuts on one, 2.4 GB/s against 750 serial
+   (`TestSlowParallelCuttingOutrunsTheChunker`,
+   `TestTheParallelChunkerCutsWhereTheChunkerCuts`). The storer and, on
+   disk, the fsync'ed write bound it now; more packs in flight measured the
+   same at two, four and eight.
