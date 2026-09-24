@@ -5,7 +5,7 @@ every "first failing test" checkbox in both specs. Updated at each milestone
 boundary and whenever a checklist item turns green; the evidence for each item
 is the named test, and the commit that added it carries its red.
 
-**Updated 2026-09-23** · red-check clean · every checked-in mutant killed ·
+**Updated 2026-09-24** · red-check clean · every checked-in mutant killed ·
 lint clean · every package at or above its coverage gate
 
 ## Milestones
@@ -13,7 +13,7 @@ lint clean · every package at or above its coverage gate
 | Milestone | Status | Delivered | Exit criteria |
 | --- | --- | --- | --- |
 | **C0 Foundations** | ✅ Done | Repo, `mise.toml` (Go 1.27), CI (static, race on Linux+macOS, S3 tier on SeaweedFS, red-check; weekly fuzz/crash/slow/mutants), `tools/ci` run-all, `tools/redcheck`, `tools/mutate`, `core/dnx` + `core/dnx/compat` | Compat suite green against the pinned disknexus tag ✅ |
-| **C1 Blobs and chunks** | ✅ Done | `core/hash`, `core/internal/wire`, `core/cdc`, `core/seal` (per-object HKDF keys, key files, KMS port + contract); `core/blob` port + contract, `blob/mem`, `blob/local`, `blob/multivol`, `blob/s3` (pure-Go in-process S3 server `s3fake`, startup probe, MinIO tier), `blob/cache`; `core/pack`, `core/dedup`; `core/chunk` port + contract, `chunk/memstore`, `chunk/packstore` | Blob contract green on all backends ✅ (mem, local, multivol, s3 in-process and MinIO, and through the cache); crash harness passes ✅ (local and multivol at the blob layer, packstore at the chunk layer) |
+| **C1 Blobs and chunks** | ✅ Done | `core/hash`, `core/internal/wire`, `core/cdc`, `core/seal` (per-object HKDF keys, key files, KMS port + contract); `core/blob` port + contract, `blob/mem`, `blob/local`, `blob/multivol`, `blob/s3` (pure-Go in-process S3 server `s3fake`, startup probe, the S3 tier against a real server), `blob/cache`; `core/pack`, `core/dedup`; `core/chunk` port + contract, `chunk/memstore`, `chunk/packstore` | Blob contract green on all backends ✅ (mem, local, multivol, s3 in-process and against a real server, SeaweedFS since 2026-09-24 and MinIO before, and through the cache); crash harness passes ✅ (local and multivol at the blob layer, packstore at the chunk layer) |
 | **C2 Keyed data** | ✅ Done | `core/boundary` (the integer split rule), `core/stream` (CDC byte streams under a content-defined index tree), `core/prolly` (Map, Editor with incremental Flush, Diff) | Determinism and bounded-diff properties hold on 1M entries ✅ (`-tags slow`, about 9 s) |
 | **C3 History and models** | ✅ Done | `core/auth` (Principal, default-deny Authorizer), `core/model` (the port, frozen, and the registry), `core/object` (46-byte object references, the path grammar, namespaces and their diff), `model/contract`, `model/blob`, `model/tree`, `core/merge` (the zipped three-way driver), `core/vcs` (refs, commits, tags, working sets, merge base, log, merge and conflicts), `core/repo` (Init and Open over the sealed config object) | A folder of files branches, diffs and merges end to end ✅ (`TestAFolderBranchesDiffsAndMerges`, on a local disk store through encrypted packs); model interface frozen ✅ (`core/model`, port version 1) |
 | **C4 GC and hardening** | ✅ Done | Walks: `stream.Walk`, `prolly.Walk`, `object.Walk`, `vcs.Walk`, and `model.Walker` (optional, beside the frozen port) in `model/blob` and `model/tree`; packstore's GC rounds (condemn, reprieve, expire, compact) and the writer's fence (a lost session, `chunk.ErrSessionLost`, since #3); `core/gc` (mark, apply, delete, orphans by the backend's clock); `repo.GC`; the repository on `NoDelete`; writes authorized per path; fuzz targets for every decoder | GC safety property holds ✅ (`TestGCSafetyProperty` over random histories; `TestAFoldersHistoryComesThroughGC` end to end); security table fully verified ✅ (below) |
@@ -235,7 +235,7 @@ Beyond the list: merging what a branch already holds changes nothing (`TestMergi
 - **The chunk layer publishes by manifest swap**: packs and one index object per commit are durable before the sealed manifest names the new root; a swap that loses only to a manifest change is retried (at most 10), a moved root is the caller's conflict at once.
 - **A closed chunk store refuses every call** (`ErrClosed`), so a caller holding one past `Close` fails loudly instead of reaching a released backend.
 - **Backfills carry a `Red-Check: mutants` trailer**: a test for behavior that already exists proves itself with a mutant it kills.
-- **redcheck judges a contract change on the tests that run the contract**; a caller that skips for want of an environment (the MinIO tier) is not judged, but a change every caller skipped is refused. With no base named it checks from `main`, else the root commit. A backfill's mutants are built with the tags of the tests that prove them. A fuzz target counts as a test; in a red commit one that passes against the stub stands beside the failing tests, but alone it shows nothing failing.
+- **redcheck judges a contract change on the tests that run the contract**; a caller that skips for want of an environment (the S3 tier) is not judged, but a change every caller skipped is refused. With no base named it checks from `main`, else the root commit. A backfill's mutants are built with the tags of the tests that prove them. A fuzz target counts as a test; in a red commit one that passes against the stub stands beside the failing tests, but alone it shows nothing failing.
 - **Coverage is measured over the merged `-coverpkg` profile**, so `core/dnx` counts its compat suite.
 - **The 1 GiB CDC property runs under `-tags slow`**; the normal suite checks it at 16 MiB.
 - **Not mutation-provable here:** removing an `fsync`. kill -9 keeps the page cache, so only a power cut would show it.
@@ -376,11 +376,11 @@ them, each tracked as an issue:
    `TestReadingAPromisedChunkThatIsGoneLosesTheSession`; end to end,
    `TestAWriterCannotPublishAPackGCDeletedAsAnOrphan`; slow writers in
    `TestGCSafetyProperty`).
-4. **Real S3 in the weekly run** (#4): the job is written
-   (`real-provider`: `TestContractAgainstRealS3` objects only and
-   `TestARepositoryRunsOnTheRealProvider`, on Backblaze B2 or iDrive e2 with
-   the root on the runner's disk); it fails until an admin adds the
-   `SNAPSHOT_S3_*` secrets, then the item closes on its first green night.
+4. ✅ **Real S3 in the weekly run** (#4): the `real-provider` job runs
+   `TestContractAgainstRealS3` objects only and
+   `TestARepositoryRunsOnTheRealProvider` against the real provider with the
+   root on the runner's disk; green in the weekly run of 2026-09-23, once
+   the endpoint given as a bare host was taken as HTTPS.
 5. ✅ **Abandoning a merge** (#5): `AbortMerge` puts back the working and
    staged namespaces the merge started from
    (`TestAnAbandonedMergeLeavesTheBranchAsItWas`,
@@ -390,9 +390,9 @@ them, each tracked as an issue:
    `TestAnAbandonedMergeIsCollected`).
 6. ✅ **The index in memory** (#6): the index past a bound, the mark and
    the round's own index are tables on disk; a million chunks with 64 Ki
-   in memory open in 16 KiB and collect in a 31 MiB peak, against 117 MiB
-   and 371 MiB before, and two million in 20 KiB and 34 MiB
-   (`TestSlowMemoryPerChunkOn1MChunks`).
+   in memory open in 21 KiB and collect in a 30 MiB peak, against 117 MiB
+   and 371 MiB before, and two million in 25 KiB and 34 MiB
+   (`TestSlowMemoryPerChunkOn1MChunks`; 54 MiB for a while after #10, #14).
 7. ✅ **The write path was single-threaded** (#10): chunks are hashed and
    compressed on `stream.Config.Workers` goroutines and stored in order
    (`TestSlowWorkersOutrunOneWorker`, `TestTheStreamIsTheSameAtAnyWorkerCount`),
@@ -418,3 +418,13 @@ them, each tracked as an issue:
    of a pack (`TestAStreamsLastPackIsUploadedWhenTheStreamEnds`): 81 / 39 / 33 ms
    for the three files, from 125–142 / 80 / 86; 37 ms when any work
    separates the write from the commit.
+8. ✅ **GC's repack writer** (#14): sized to what is left to copy, not to
+   a pack, so a collection that repacks a few KiB no longer holds 32 MiB
+   for it (`TestARepackAllocatesForWhatItCopies`,
+   `TestAWriterSizedToWhatItWillHoldGrowsToAPack`); the memory guard's bound
+   came down from 96 to 48 MiB.
+9. ✅ **A key file's Argon2 ceiling** (#13): a gibibyte and ten passes,
+   refused before any derivation, where a file inside the old 4 GiB and 64
+   passes hung the weekly fuzzer (`TestKeyFileParameterBounds`,
+   `TestSlowAKeyFileAtTheCeilingOpens`); the fuzz job keeps a finding's
+   input as an artifact.
