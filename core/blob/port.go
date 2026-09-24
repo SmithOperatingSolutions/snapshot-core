@@ -78,8 +78,13 @@ type BlobStore interface {
 	Get(ctx context.Context, name string, off, n int64) (io.ReadCloser, error)
 	// Stat describes name.
 	Stat(ctx context.Context, name string) (Info, error)
-	// List returns up to limit objects whose names start with prefix and sort
-	// strictly after after, in ascending byte order. limit must be
+	// List returns up to limit objects whose names start with prefix and
+	// come strictly after after in the backend's listing order: a total
+	// order it keeps across pages and prefixes, so after continues a
+	// listing. Every backend here lists in ascending byte order; an S3
+	// endpoint that lists a directory's children after the directory
+	// (SeaweedFS) keeps a total order of its own, which no caller in the
+	// core depends on (contract.AnyTotalOrder). limit must be
 	// 1..MaxListPage. A page shorter than limit is the last.
 	List(ctx context.Context, prefix, after string, limit int) ([]Info, error)
 	// Delete removes name; deleting an absent name is not an error. Only the

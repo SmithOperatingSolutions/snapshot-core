@@ -45,18 +45,19 @@ jobs:
         with: { go-version-file: go.mod, cache: true }
       - run: go run ./tools/ci -only race,cover
 
-  minio:
-    # The spec's "MinIO in CI" tier: the S3 backend's contract, concurrent-CAS
-    # and probe suites against a real S3-compatible server. REQUIRED=1 turns a
+  s3:
+    # The spec's S3-in-CI tier (MinIO in its words; SeaweedFS since MinIO
+    # ended its distribution): the S3 backend's contract, concurrent-CAS and
+    # probe suites against a real S3-compatible server. REQUIRED=1 turns a
     # missing endpoint into a failure, never a skip (docs/TESTING.md §7).
-    name: S3 suites / MinIO
+    name: S3 suites / SeaweedFS
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
         with: { go-version-file: go.mod, cache: true }
-      - run: go run ./tools/ci -only minio
+      - run: go run ./tools/ci -only s3
 
   redcheck:
     # Every `test:` commit in the PR must fail, on an assertion, without the

@@ -13,7 +13,7 @@ go = "1.27"
 CGO_ENABLED = "0"
 
 [tasks.ci]
-description = "Local run-all: fmt, vet (3 OSes), mod verify, lint, vuln, race suite, coverage gate, red-check, crash harness, scale guards, fuzz, mutants, MinIO"
+description = "Local run-all: fmt, vet (3 OSes), mod verify, lint, vuln, race suite, coverage gate, red-check, crash harness, scale guards, fuzz, mutants, SeaweedFS"
 run = "go run ./tools/ci"
 
 [tasks."ci:quick"]
@@ -56,6 +56,6 @@ run = "go run ./tools/ci -only slow"
 description = "Every fuzz target for FUZZTIME each (default 30s; the weekly CI run uses 10m)"
 run = "go run ./tools/ci -only fuzz"
 
-[tasks.minio]
-description = "S3 contract + concurrency suites against a real MinIO in Docker (optional locally; required in CI)"
-run = "go run ./tools/ci -only minio"
+[tasks.s3]
+description = "S3 contract + concurrency suites against a real S3 server, SeaweedFS in Docker (optional locally; required in CI)"
+run = "go run ./tools/ci -only s3"
