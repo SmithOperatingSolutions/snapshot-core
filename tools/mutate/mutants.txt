@@ -4327,3 +4327,31 @@ find: c := Commit{Parents: []hash.Hash{head.Hash}, Namespace: namespace, Height:
 replace: c := Commit{Parents: nil, Namespace: namespace, Height: head.Height + 1,
 pkg: ./core/vcs
 run: ^TestACommitIsOnePublish$
+
+id: publish-writes-the-index-with-the-uploads
+file: core/chunk/packstore/packstore.go
+find: go func() { uploaded <- s.uploadPacks(ctx, toUpload, false) }()
+replace: func() { uploaded <- s.uploadPacks(ctx, toUpload, false) }()
+pkg: ./core/chunk/packstore
+run: ^TestAPublishWritesItsPackAndIndexObjectTogether$
+
+id: publish-fails-when-a-pack-fails
+file: core/chunk/packstore/packstore.go
+find: if uerr := <-uploaded; uerr != nil {\n\t\treturn uerr\n\t}
+replace: <-uploaded
+pkg: ./core/chunk/packstore
+run: ^TestFailedUploadStaysReadableAndIsRetried$
+
+id: publish-indexes-the-packs-it-uploads
+file: core/chunk/packstore/packstore.go
+find: for _, b := range uploading {\n\t\tif err := w.add(b.Info); err != nil {\n\t\t\treturn nil, err\n\t\t}\n\t}
+replace: for range uploading {\n\t}
+pkg: ./core/chunk/packstore
+run: ^TestAPublishWritesItsPackAndIndexObjectTogether$
+
+id: flush-hands-the-pending-pack-over
+file: core/chunk/packstore/packstore.go
+find: w := s.takePendingLocked()\n\ts.mu.Unlock()\n\ts.startFinisher(ctx, w)\n\treturn nil
+replace: s.mu.Unlock()\n\treturn nil
+pkg: ./e2e
+run: ^TestAStreamsLastPackIsUploadedWhenTheStreamEnds$

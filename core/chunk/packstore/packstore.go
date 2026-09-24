@@ -484,6 +484,13 @@ func (s *Store) finishingHasLocked(h hash.Hash) bool {
 // every failure kept for the next CAS: a pack dropped here would be a chunk
 // the next root reaches that nothing durable holds.
 func (s *Store) upload(ctx context.Context, packs []pack.Built) error {
+	return s.uploadPacks(ctx, packs, true)
+}
+
+// uploadPacks is upload; with toSession false the packs are not queued
+// for the next publish's index objects, the publish under way writing
+// them itself.
+func (s *Store) uploadPacks(ctx context.Context, packs []pack.Built, toSession bool) error {
 	var first error
 	for _, b := range packs {
 		err := s.o.Blobs.Put(ctx, b.Name, bytes.NewReader(b.Bytes), int64(len(b.Bytes)))
@@ -493,7 +500,9 @@ func (s *Store) upload(ctx context.Context, packs []pack.Built) error {
 		s.mu.Lock()
 		if err == nil {
 			delete(s.inflight, b.Name)
-			s.session = append(s.session, b.Info)
+			if toSession {
+				s.session = append(s.session, b.Info)
+			}
 			s.uploaded[b.Name] = s.o.Clock()
 		} else {
 			s.unuploaded = append(s.unuploaded, b)
@@ -520,7 +529,25 @@ type prepared struct {
 func (p *prepared) Hash() hash.Hash { return p.h }
 func (p *prepared) Len() int        { return p.n }
 
-var _ chunk.Preparer = (*Store)(nil)
+var (
+	_ chunk.Preparer = (*Store)(nil)
+	_ chunk.Flusher  = (*Store)(nil)
+)
+
+// Flush implements chunk.Flusher: the pending pack, if it holds anything,
+// goes to a finisher now, so its upload runs beside whatever the caller
+// does next instead of inside the next publish.
+func (s *Store) Flush(ctx context.Context) error {
+	s.mu.Lock()
+	if s.closed {
+		s.mu.Unlock()
+		return chunk.ErrClosed
+	}
+	w := s.takePendingLocked()
+	s.mu.Unlock()
+	s.startFinisher(ctx, w)
+	return nil
+}
 
 // Prepare implements chunk.Preparer: the hash, the compression and the
 // seal, on the caller's goroutine, the lock taken only to learn which pack
@@ -862,13 +889,20 @@ func (s *Store) CompareAndSetRoot(ctx context.Context, expected, next hash.Hash)
 	}
 	s.mu.Unlock()
 
-	// Every chunk the new root can reach is durable before the manifest names it.
-	if err := s.upload(ctx, toUpload); err != nil {
+	// Every chunk the new root can reach is durable before the manifest
+	// names it. The packs and the index objects listing them are written
+	// together, each waiting on the backend and neither on the other (#10);
+	// a pack that fails leaves its index objects orphans, which GC deletes.
+	uploaded := make(chan error, 1)
+	go func() { uploaded <- s.uploadPacks(ctx, toUpload, false) }()
+	written, err := s.writeSessionIndex(ctx, toUpload)
+	if uerr := <-uploaded; uerr != nil {
+		return uerr
+	}
+	if err != nil {
 		return err
 	}
-	if err := s.writeSessionIndex(ctx); err != nil {
-		return err
-	}
+	s.recordSessionIndex(written)
 	if err := s.stillStored(ctx); err != nil {
 		return err
 	}
@@ -984,26 +1018,39 @@ func (s *Store) Close() error {
 	return err
 }
 
-func (s *Store) writeSessionIndex(ctx context.Context) error {
+// writeSessionIndex writes the index objects for the session's uploaded
+// packs and the packs being uploaded by this publish, in objects of at most
+// maxIndexObject each (an object is decoded whole by every store that opens
+// it), and returns them for recordSessionIndex once every pack has landed.
+func (s *Store) writeSessionIndex(ctx context.Context, uploading []pack.Built) (*indexWriter, error) {
 	s.mu.Lock()
 	session := append([]pack.Info(nil), s.session...)
 	s.mu.Unlock()
-	if len(session) == 0 {
-		return nil
-	}
-	// In objects of at most maxIndexObject each: an object is decoded
-	// whole by every store that opens it.
-	w := &indexWriter{ctx: ctx, o: s.o}
+	w := &indexWriter{ctx: ctx, o: s.o, session: len(session)}
 	for _, p := range session {
 		if err := w.add(p); err != nil {
-			return err
+			return nil, err
 		}
 	}
-	if _, err := w.finish(); err != nil {
-		return err
+	for _, b := range uploading {
+		if err := w.add(b.Info); err != nil {
+			return nil, err
+		}
 	}
+	if len(w.batch) == 0 && len(w.written) == 0 {
+		return w, nil
+	}
+	if _, err := w.finish(); err != nil {
+		return nil, err
+	}
+	return w, nil
+}
+
+// recordSessionIndex takes the index objects a publish wrote as this
+// session's, pending in the manifest.
+func (s *Store) recordSessionIndex(w *indexWriter) {
 	s.mu.Lock()
-	s.session = s.session[len(session):]
+	s.session = s.session[w.session:]
 	for _, obj := range w.written {
 		s.sessionIdx = append(s.sessionIdx, obj.sum)
 		s.loaded[obj.sum] = true
@@ -1011,7 +1058,6 @@ func (s *Store) writeSessionIndex(ctx context.Context) error {
 		s.uploaded[indexName(obj.sum)] = s.o.Clock()
 	}
 	s.mu.Unlock()
-	return nil
 }
 
 // lostLocked ends the store's session: GC deleted what it had written and

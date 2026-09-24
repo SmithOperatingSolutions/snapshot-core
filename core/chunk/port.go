@@ -57,6 +57,14 @@ type Prepared interface {
 	Len() int // the chunk's bytes
 }
 
+// Flusher is a Writer that can be told a stream of puts is over (#10): it
+// may start storing what it holds unstored, beside the caller's next work
+// rather than at the next publish. Flush never waits for the storing.
+type Flusher interface {
+	Writer
+	Flush(ctx context.Context) error
+}
+
 // Preparer is a Writer whose per-chunk work (hashing, compression) can be
 // done on any goroutine, apart from storing: Prepare on many goroutines
 // at once, then PutPrepared in the order the caller needs (#10). Prepare

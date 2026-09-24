@@ -679,6 +679,7 @@ type indexWriter struct {
 	size    int
 	sums    [][32]byte
 	written []indexObject // each object written, with the packs it lists
+	session int           // packstore's publish: the session packs taken from the queue
 }
 
 // indexObject is one index object written and the packs it lists.
