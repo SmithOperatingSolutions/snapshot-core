@@ -18,10 +18,10 @@ import (
 // #10: writing hashes, compresses and seals every chunk, and on one
 // goroutine that is what bounds a write, not the disk. With the store's
 // cores put to work the same write goes at least one and a half times as
-// fast as on one worker, and produces the same stream: the same root hash,
-// so the same chunks, cut and hashed the same way whatever the worker
-// count. Measured on the same machine in the same run, so the verdict
-// does not depend on the machine.
+// fast as on one worker (three times with eight threads or more), and
+// produces the same stream: the same root hash, so the same chunks, cut
+// and hashed the same way whatever the worker count. Measured on the same
+// machine in the same run, so the verdict does not depend on the machine.
 func TestSlowWorkersOutrunOneWorker(t *testing.T) {
 	if n := runtime.GOMAXPROCS(0); n < 4 {
 		t.Fatalf("this machine gives Go %d threads; the comparison needs at least 4", n)
@@ -56,5 +56,11 @@ func TestSlowWorkersOutrunOneWorker(t *testing.T) {
 	}
 	if many*3 > one*2 {
 		t.Fatalf("%d workers wrote 256 MiB in %v against %v on one: under one and a half times as fast, the cores are not at work", runtime.GOMAXPROCS(0), many.Round(time.Millisecond), one.Round(time.Millisecond))
+	}
+	// With eight threads or more, three times: the storer's goroutine does
+	// no per-chunk work but the append, the seal having moved to the
+	// workers with the pack's keys (#10, B).
+	if runtime.GOMAXPROCS(0) >= 8 && many*3 > one {
+		t.Fatalf("%d workers wrote 256 MiB in %v against %v on one: under three times as fast, the storer still seals", runtime.GOMAXPROCS(0), many.Round(time.Millisecond), one.Round(time.Millisecond))
 	}
 }
