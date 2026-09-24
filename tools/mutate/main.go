@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
+	"runtime"
 	"strings"
 
 	"github.com/SmithOperatingSolutions/snapshot-core/tools/internal/mutation"
@@ -18,6 +19,7 @@ func main() { os.Exit(run()) }
 func run() int {
 	file := flag.String("f", "tools/mutate/mutants.txt", "mutants file")
 	only := flag.String("only", "", "comma-separated mutant IDs to run (default: all)")
+	workers := flag.Int("j", max(1, runtime.GOMAXPROCS(0)/2), "mutants run at once, each in a copy of its own; a mutant that times out among the others is run again alone")
 	flag.Parse()
 
 	f, err := os.Open(*file)
@@ -47,7 +49,7 @@ func run() int {
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
 	defer stop()
-	outs, err := mutation.Run(ctx, mutation.Options{Root: ".", Log: os.Stderr}, ms)
+	outs, err := mutation.Run(ctx, mutation.Options{Root: ".", Log: os.Stderr, Workers: *workers}, ms)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "mutate:", err)
 		return 2

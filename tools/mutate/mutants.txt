@@ -4376,3 +4376,17 @@ find: if s.pending == nil || s.pending.Size() < s.o.PackSize/flushShare {
 replace: if s.pending == nil || s.pending.Size() < s.o.PackSize {
 pkg: ./e2e
 run: ^TestAStreamsLastPackIsUploadedWhenTheStreamEnds$
+
+id: mutate-runs-a-hang-again-alone
+file: tools/internal/mutation/mutation.go
+find: if !out.TimedOut {\n\t\t\tcontinue\n\t\t}
+replace: if !out.TimedOut || true {\n\t\t\tcontinue\n\t\t}
+pkg: ./tools/internal/mutation
+run: ^TestAHangUnderLoadIsRunAgainAlone$
+
+id: mutate-workers-run-at-once
+file: tools/internal/mutation/mutation.go
+find: workers := max(1, min(o.Workers, len(ms)))
+replace: workers := 1
+pkg: ./tools/internal/mutation
+run: ^TestMutantsRunAtOnceOnWorkers$
