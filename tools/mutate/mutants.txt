@@ -4355,3 +4355,10 @@ find: w := s.takePendingLocked()\n\ts.mu.Unlock()\n\ts.startFinisher(ctx, w)\n\t
 replace: s.mu.Unlock()\n\treturn nil
 pkg: ./e2e
 run: ^TestAStreamsLastPackIsUploadedWhenTheStreamEnds$
+
+id: stream-flushes-when-the-stream-ends
+file: core/stream/stream.go
+find: if f, ok := w.(chunk.Flusher); ok {
+replace: if f, ok := w.(chunk.Flusher); ok && false {
+pkg: ./e2e
+run: ^TestAStreamsLastPackIsUploadedWhenTheStreamEnds$

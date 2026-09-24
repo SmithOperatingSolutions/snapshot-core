@@ -70,6 +70,11 @@ func Write(ctx context.Context, w chunk.Writer, r io.Reader, c Config) (Ref, err
 		return Ref{}, err
 	}
 	b := &builder{ctx: ctx, w: w, rule: rule}
+	defer func() { // the stream is over: what it left pending may be stored now (#10)
+		if f, ok := w.(chunk.Flusher); ok {
+			_ = f.Flush(ctx) // a failure to start storing surfaces at the publish
+		}
+	}()
 	workers := c.Workers
 	if workers == 0 {
 		workers = runtime.GOMAXPROCS(0)
