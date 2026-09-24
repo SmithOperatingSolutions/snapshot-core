@@ -99,13 +99,14 @@ func heap() int64 {
 // #6: the memory a repository costs to open (the chunk index) and to
 // collect (the index again, plus the mark) does not grow with it. Under a
 // bound of 64 Ki chunks in memory, a million chunks open in under 16 MiB
-// and collect in a peak under 96 MiB (which a million at the old 117 and
-// 371 bytes each would be far over), and two million peak no higher than a
-// quarter over that: whatever grows per chunk is on disk. docs/DESIGN.md §6
+// and collect in a peak under 48 MiB (which a million at the old 117 and
+// 371 bytes each would be far over; measured 30 MiB, most of it the
+// codec's encoder), and two million peak no higher than a quarter over
+// that: whatever grows per chunk is on disk. docs/DESIGN.md §6
 // states the figures, and this is where they come from.
 func TestSlowMemoryPerChunkOn1MChunks(t *testing.T) {
 	const inMemory = 1 << 16
-	const openBound, collectBound = 16 << 20, 96 << 20
+	const openBound, collectBound = 16 << 20, 48 << 20
 	open1, peak1 := measureMemory(t, 1_000_000, inMemory)
 	if open1 > openBound {
 		t.Fatalf("opening a repository of a million chunks with %d indexed in memory costs %d bytes, want under %d: the index past the bound belongs on disk", inMemory, open1, openBound)
