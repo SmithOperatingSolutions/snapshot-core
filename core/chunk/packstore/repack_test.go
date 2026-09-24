@@ -271,9 +271,25 @@ func TestRepackingCopiesAChunkTwoPacksShareOnce(t *testing.T) {
 	if n := len(objects(t, bs, "packs/")); n != 2 {
 		t.Fatalf("fixture: %d packs, want one per writer", n)
 	}
+	before := objects(t, bs, "packs/")
 	out := repackRound(t, bs, kr, liveSet(hs[0], hs[1], ownHash), t0, packstore.Repack{})
 	if out.Repacked != 2 {
 		t.Fatalf("the round repacked %d packs, want both, which share a live chunk", out.Repacked)
+	}
+	copies := 0
+	for _, name := range newNames(before, objects(t, bs, "packs/")) {
+		entries, err := packstore.PackEntries(ctx, packstore.Options{Blobs: bs, Keys: kr, Repo: repo}, name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, h := range entries {
+			if h == hs[1] {
+				copies++
+			}
+		}
+	}
+	if copies != 1 {
+		t.Fatalf("the new packs hold the shared chunk %d times, want once", copies)
 	}
 	fresh := open(t, bs, kr)
 	for name, want := range map[string][]byte{"shared": shared, "b's own": own} {

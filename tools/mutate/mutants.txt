@@ -3775,10 +3775,17 @@ replace: if gone > 0 {
 pkg: ./core/chunk/packstore
 run: ^TestARoundRepacksAPackThatIsMostlyDead$
 
+id: repack-copies-the-chunks-credited-to-the-pack
+file: core/chunk/packstore/gc.go
+find: } else if !credited {\n\t\t\t\tcontinue\n\t\t\t}
+replace: } else if !credited && false {\n\t\t\t\tcontinue\n\t\t\t}
+pkg: ./core/chunk/packstore
+run: ^TestARepackLeavesAChunkCreditedToAnotherPack$
+
 id: repack-copies-a-shared-chunk-once
 file: core/chunk/packstore/gc.go
-find: if moved[e.Hash] {\n\t\t\t\tcontinue\n\t\t\t}
-replace: if false {\n\t\t\t\tcontinue\n\t\t\t}
+find: return binary.LittleEndian.Uint32(v[0:]) == uint32(pi), nil
+replace: return true, nil
 pkg: ./core/chunk/packstore
 run: ^TestRepackingCopiesAChunkTwoPacksShareOnce$
 

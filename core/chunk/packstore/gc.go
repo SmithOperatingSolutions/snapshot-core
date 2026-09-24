@@ -513,7 +513,6 @@ func (r *Round) copyLive(ctx context.Context, candidates []candidate, live Live,
 		fresh = append(fresh, b.Info)
 		return nil
 	}
-	moved := map[hash.Hash]bool{} // copied this round, from an emptier pack
 	for _, cand := range candidates {
 		if out.Copied >= budget {
 			break
@@ -522,11 +521,17 @@ func (r *Round) copyLive(ctx context.Context, candidates []candidate, live Live,
 		if err != nil {
 			return nil, err
 		}
-		// The live frames, in the order they lie in the pack, read from
-		// one GET as a stream: a pack is never whole in memory.
+		// The live frames credited to this pack, in the order they lie in
+		// it, read from one GET as a stream: a pack is never whole in
+		// memory. A chunk another pack holds too counts for that pack
+		// (join) and stays there: copied here, the fresh pack would hold a
+		// chunk counted dead, look mostly dead next round, and be repacked
+		// again, every round.
 		var frames []pack.Entry
 		for _, e := range c.Entries {
-			if moved[e.Hash] {
+			if credited, err := r.creditedTo(e.Hash, cand.i); err != nil {
+				return nil, err
+			} else if !credited {
 				continue
 			}
 			if ok, err := live.Has(e.Hash); err != nil {
@@ -574,7 +579,6 @@ func (r *Round) copyLive(ctx context.Context, candidates []candidate, live Live,
 				_ = rc.Close()
 				return nil, err
 			}
-			moved[e.Hash] = true
 			out.Copied += int64(e.StoredLen)
 		}
 		if err := body.finish(); err != nil {
@@ -586,6 +590,20 @@ func (r *Round) copyLive(ctx context.Context, candidates []candidate, live Live,
 		return nil, err
 	}
 	return fresh, nil
+}
+
+// creditedTo reports whether the round's index credits h to pack pi: the
+// join counts a chunk two packs hold for the first listed, and a repack
+// copies a chunk from the pack it is counted for.
+func (r *Round) creditedTo(h hash.Hash, pi int) (bool, error) {
+	v, ok, err := r.index.table.Lookup(h)
+	if err != nil || !ok {
+		return false, err
+	}
+	if len(v) != locLen {
+		return false, fmt.Errorf("%w: round index record of %d bytes", chunk.ErrCorrupt, len(v))
+	}
+	return binary.LittleEndian.Uint32(v[0:]) == uint32(pi), nil
 }
 
 // packBody streams a pack's bytes and hands out its frames in offset

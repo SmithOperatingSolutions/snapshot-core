@@ -636,7 +636,10 @@ is rewritten (#1): in a round, a kept pack whose live bytes are under half
 its size (`Repack.MaxLive`) is a candidate, and candidates are repacked
 emptiest first until the round has copied its budget (`Repack.Budget`, a
 GiB by default; `Repack.Off` turns it off). The round reads each candidate
-in one GET, opens its live frames and seals them into new packs, uploads
+in one GET, opens the live frames credited to it (a chunk two packs hold
+counts for the first listed and is copied from that pack alone, or the new
+pack would hold a chunk counted dead and be repacked again every round)
+and seals them into new packs, uploads
 those before its swap (a swap that loses leaves them orphans, which a later
 run deletes), lists them in its index objects, and records the old pack as
 repacked (condemned kind 5): a repacked pack is never reprieved by the
