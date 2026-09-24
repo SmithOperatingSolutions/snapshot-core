@@ -162,7 +162,7 @@ func (h *history) step(rt *rapid.T) {
 		}
 		h.tags = append(h.tags, tag)
 	case 10:
-		h.w.jump += rapid.SampledFrom([]time.Duration{0, grace / 2, grace + time.Minute}).Draw(rt, "wait")
+		h.w.addJump(rapid.SampledFrom([]time.Duration{0, grace / 2, grace + time.Minute}).Draw(rt, "wait"))
 		h.collect()
 	case 12:
 		h.diverge(rt, b)
@@ -181,7 +181,7 @@ func (h *history) step(rt *rapid.T) {
 			}
 			if first {
 				first = false
-				h.w.jump += grace + time.Minute
+				h.w.addJump(grace + time.Minute)
 				h.collect()
 			}
 			return e.Put(path, ref)
@@ -196,7 +196,7 @@ func (h *history) step(rt *rapid.T) {
 			if first {
 				first = false
 				for range 2 {
-					h.w.jump += grace + time.Minute
+					h.w.addJump(grace + time.Minute)
 					h.collect()
 				}
 			}
@@ -374,10 +374,10 @@ func TestGCSafetyProperty(t *testing.T) {
 			h.step(rt)
 		}
 		for range 3 {
-			w.jump += grace + time.Minute
+			w.addJump(grace + time.Minute)
 			h.collect()
 		}
-		w.jump += grace + time.Minute
+		w.addJump(grace + time.Minute)
 		if last := h.collect(); last.condemned != 0 || last.deleted != 0 {
 			rt.Fatalf("grace windows after the last write, GC still condemned %d packs and deleted %d objects", last.condemned, last.deleted)
 		}

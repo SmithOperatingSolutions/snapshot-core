@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -77,8 +78,8 @@ type world struct {
 	reg   *model.Registry
 	s     *packstore.Store
 	r     *vcs.Repo
-	jump  time.Duration // GC's clock, ahead of real time
-	skew  time.Duration // the backend's clock, ahead of GC's
+	jump  atomic.Int64 // GC's clock, ahead of real time, in nanoseconds
+	skew  atomic.Int64 // the backend's clock, ahead of GC's, in nanoseconds
 }
 
 // clocked is a blob store that stamps each object by the backend's clock.
@@ -142,7 +143,7 @@ func worldFor(t tb) *world {
 	t.Helper()
 	w := &world{t: t}
 	w.blobs = &clocked{BlobStore: mem.New(), stamps: map[string]time.Time{},
-		now: func() time.Time { return time.Now().Add(w.jump + w.skew) }}
+		now: func() time.Time { return time.Now().Add(w.jumped() + w.skewed()) }}
 	var err error
 	if w.keys, err = seal.NewKeyring(); err != nil {
 		t.Fatal(err)
@@ -180,7 +181,16 @@ func (w *world) vcs() vcs.Options {
 	return vcs.Options{Config: prolly.DefaultConfig(), Registry: w.reg, Authorizer: auth.AllowAll{}}
 }
 
-func (w *world) now() time.Time { return time.Now().Add(w.jump) }
+func (w *world) now() time.Time { return time.Now().Add(w.jumped()) }
+
+// The clocks' offsets are atomic: a finisher goroutine uploading a pack
+// reads the backend's clock while a test moves it (#10).
+func (w *world) jumped() time.Duration       { return time.Duration(w.jump.Load()) }
+func (w *world) skewed() time.Duration       { return time.Duration(w.skew.Load()) }
+func (w *world) setJump(d time.Duration)     { w.jump.Store(int64(d)) }
+func (w *world) addJump(d time.Duration)     { w.jump.Add(int64(d)) }
+func (w *world) setSkew(d time.Duration)     { w.skew.Store(int64(d)) }
+func (w *world) setClock(j, s time.Duration) { w.setJump(j); w.setSkew(s) }
 
 func (w *world) gc() (gc.Report, error) {
 	return gc.Run(ctx, gc.Options{Blobs: w.blobs, Keys: w.keys, Repo: repo, Config: prolly.DefaultConfig(),
@@ -356,7 +366,7 @@ func count(t *testing.T, bs blob.BlobStore, prefix string) int {
 // own reckoning) while an object new by the backend's clock stays.
 func TestOrphanAgesAreTheBackendsClock(t *testing.T) {
 	w := newWorld(t)
-	w.skew = -10 * 24 * time.Hour
+	w.setSkew(-10 * 24 * time.Hour)
 	fresh := "packs/cd/cd" + strings.Repeat("0", 62)
 	if err := w.blobs.Put(ctx, fresh, strings.NewReader("just uploaded"), 13); err != nil {
 		t.Fatal(err)
@@ -379,7 +389,7 @@ func TestOrphanAgesAreTheBackendsClock(t *testing.T) {
 		t.Fatal(err)
 	}
 	packs := count(t, w.blobs, "packs/")
-	w.jump, w.skew = grace+time.Minute, -(grace + time.Minute) // GC's clock ahead, the backend's standing still
+	w.setClock(grace+time.Minute, -(grace + time.Minute)) // GC's clock ahead, the backend's standing still
 	second, err := w.gc()
 	if err != nil {
 		t.Fatal(err)
@@ -435,7 +445,7 @@ func TestGCKeepsWhatTheRefsReachAndDeletesTheRest(t *testing.T) {
 	}
 	want := w.readable()
 
-	w.jump = grace + time.Minute
+	w.setJump(grace + time.Minute)
 	second, err := w.gc()
 	if err != nil {
 		t.Fatalf("GC a grace window later: %v", err)
@@ -462,7 +472,7 @@ func TestGCKeepsWhatTheRefsReachAndDeletesTheRest(t *testing.T) {
 		t.Fatalf("an object only the deleted branch held reads as %v, want ErrNotFound", err)
 	}
 
-	w.jump = 2*grace + 2*time.Minute
+	w.setJump(2*grace + 2*time.Minute)
 	if _, err := w.gc(); err != nil {
 		t.Fatalf("GC two grace windows later: %v", err)
 	}
@@ -493,7 +503,7 @@ func TestADeletedTagsHistoryIsCollected(t *testing.T) {
 	}
 	only := hash.Sum([]byte("a note only the tag keeps"))
 	for _, jump := range []time.Duration{0, grace + time.Minute} {
-		w.jump = jump
+		w.setJump(jump)
 		if _, err := w.gc(); err != nil {
 			t.Fatalf("GC: %v", err)
 		}
@@ -505,7 +515,7 @@ func TestADeletedTagsHistoryIsCollected(t *testing.T) {
 		t.Fatalf("DeleteTag = %v", err)
 	}
 	for _, jump := range []time.Duration{grace + 2*time.Minute, 2*grace + 3*time.Minute} {
-		w.jump = jump
+		w.setJump(jump)
 		if _, err := w.gc(); err != nil {
 			t.Fatalf("GC after the tag was deleted: %v", err)
 		}
@@ -543,7 +553,7 @@ func TestAnAbandonedMergeIsCollected(t *testing.T) {
 		t.Fatalf("AbortMerge = %v", err)
 	}
 	for _, jump := range []time.Duration{0, grace + time.Minute} {
-		w.jump = jump
+		w.setJump(jump)
 		if _, err := w.gc(); err != nil {
 			t.Fatalf("GC: %v", err)
 		}
@@ -584,7 +594,7 @@ func TestAWriterCannotPublishAPackGCDeletedAsAnOrphan(t *testing.T) {
 		t.Fatalf("fixture: the writer left %d packs, want one more than the %d published", n, packs)
 	}
 	root := w.root()
-	w.jump = grace + time.Minute
+	w.setJump(grace + time.Minute)
 	rep, err := w.gc()
 	if err != nil {
 		t.Fatalf("GC: %v", err)
@@ -627,7 +637,7 @@ func TestGCRefusesWhatItCannotWalk(t *testing.T) {
 	w.commit(vcs.MainBranch, "not walkable")
 	packs := count(t, w.blobs, "packs/")
 	for _, jump := range []time.Duration{0, grace + time.Minute, 2*grace + 2*time.Minute} {
-		w.jump = jump
+		w.setJump(jump)
 		if _, err := w.gc(); !errors.Is(err, object.ErrNotWalkable) {
 			t.Fatalf("GC of a repository holding an object that cannot walk = %v, want ErrNotWalkable", err)
 		}
@@ -674,7 +684,7 @@ func TestGCTakesAnotherRoundWhenAWriterPublishes(t *testing.T) {
 	if report.Rounds != 2 {
 		t.Fatalf("GC took %d rounds with a writer publishing during the first, want 2", report.Rounds)
 	}
-	w.jump = grace + time.Minute
+	w.setJump(grace + time.Minute)
 	if _, err := w.gc(); err != nil {
 		t.Fatal(err)
 	}
@@ -745,7 +755,7 @@ func TestGCIsNotSteeredByAFileThatIsANode(t *testing.T) {
 	if _, err := w.gc(); err != nil {
 		t.Fatal(err)
 	}
-	w.jump = grace + time.Minute
+	w.setJump(grace + time.Minute)
 	if _, err := w.gc(); err != nil {
 		t.Fatal(err)
 	}
@@ -793,7 +803,7 @@ func TestGCLeavesNoProbeBehind(t *testing.T) {
 	if n := count(t, w.blobs, "gc/"); n != 1 {
 		t.Fatalf("after a run %d objects under gc/, want only the one a stopped run left", n)
 	}
-	w.jump = grace + time.Minute
+	w.setJump(grace + time.Minute)
 	if _, err := w.gc(); err != nil {
 		t.Fatal(err)
 	}
