@@ -9,16 +9,15 @@ import (
 // measures statement coverage, not branch coverage; statements are what the
 // gate holds.
 
-const modulePrefix = "github.com/SmithOperatingSolutions/snapshot-core/"
-
 // PackageCoverage is one package's statement coverage.
 type PackageCoverage struct {
 	Pkg     string
 	Percent float64
 }
 
-// Threshold is the minimum statement coverage a package must reach.
-func Threshold(pkg string) float64 {
+// Threshold is the minimum statement coverage a package (relative to the
+// module) must reach.
+func (l layout) Threshold(pkg string) float64 {
 	segs := strings.Split(pkg, "/")
 	last := segs[len(segs)-1]
 	switch {
@@ -42,10 +41,10 @@ type CoverFailure struct {
 
 // GateCoverage returns the packages below their threshold. A package no test
 // reaches is in the profile at 0% and fails: zero is not "not applicable".
-func GateCoverage(cs []PackageCoverage) []CoverFailure {
+func (l layout) GateCoverage(cs []PackageCoverage) []CoverFailure {
 	var fs []CoverFailure
 	for _, c := range cs {
-		th := Threshold(c.Pkg)
+		th := l.Threshold(c.Pkg)
 		if th == 0 {
 			continue
 		}
@@ -60,7 +59,7 @@ func GateCoverage(cs []PackageCoverage) []CoverFailure {
 // -coverpkg profile: a statement counts as covered if ANY test binary covered
 // it, so a package exercised only by another package's tests (core/dnx by its
 // compat suite, a contract suite by its backends) is measured as it is.
-func CoverageFromProfile(profile string) []PackageCoverage {
+func (l layout) CoverageFromProfile(profile string) []PackageCoverage {
 	type block struct {
 		pkg     string
 		stmts   int
@@ -86,7 +85,7 @@ func CoverageFromProfile(profile string) []PackageCoverage {
 		b, seen := blocks[fields[0]]
 		if !seen {
 			dir := file[:max(strings.LastIndex(file, "/"), 0)]
-			b = &block{pkg: strings.TrimPrefix(dir, modulePrefix), stmts: stmts}
+			b = &block{pkg: l.rel(dir), stmts: stmts}
 			blocks[fields[0]] = b
 			order = append(order, fields[0])
 		}
@@ -118,4 +117,19 @@ func CoverageFromProfile(profile string) []PackageCoverage {
 		out = append(out, PackageCoverage{Pkg: p, Percent: pct})
 	}
 	return out
+}
+
+// The runner's own module, until the layout comes from flags.
+const (
+	coreModule   = "github.com/SmithOperatingSolutions/snapshot-core"
+	modulePrefix = coreModule + "/"
+)
+
+// Threshold, GateCoverage and CoverageFromProfile over the core's layout.
+func Threshold(pkg string) float64 { return coreLayout(coreModule).Threshold(pkg) }
+func GateCoverage(cs []PackageCoverage) []CoverFailure {
+	return coreLayout(coreModule).GateCoverage(cs)
+}
+func CoverageFromProfile(profile string) []PackageCoverage {
+	return coreLayout(coreModule).CoverageFromProfile(profile)
 }
