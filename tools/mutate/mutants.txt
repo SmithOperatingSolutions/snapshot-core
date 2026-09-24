@@ -4353,8 +4353,8 @@ id: flush-hands-the-pending-pack-over
 file: core/chunk/packstore/packstore.go
 find: w := s.takePendingLocked()\n\ts.mu.Unlock()\n\ts.startFinisher(ctx, w)\n\treturn nil
 replace: s.mu.Unlock()\n\treturn nil
-pkg: ./e2e
-run: ^TestAStreamsLastPackIsUploadedWhenTheStreamEnds$
+pkg: ./core/chunk/packstore
+run: ^TestFlushUploadsAPackWorthAnUpload$
 
 id: stream-flushes-when-the-stream-ends
 file: core/stream/stream.go
@@ -4367,15 +4367,15 @@ id: flush-waits-under-an-eighth-of-a-pack
 file: core/chunk/packstore/packstore.go
 find: if s.pending == nil || s.pending.Size() < s.o.PackSize/flushShare {
 replace: if s.pending == nil {
-pkg: ./e2e
-run: ^TestAStreamsLastPackIsUploadedWhenTheStreamEnds$
+pkg: ./core/chunk/packstore
+run: ^TestFlushUploadsAPackWorthAnUpload$
 
 id: flush-uploads-from-an-eighth-of-a-pack
 file: core/chunk/packstore/packstore.go
 find: if s.pending == nil || s.pending.Size() < s.o.PackSize/flushShare {
 replace: if s.pending == nil || s.pending.Size() < s.o.PackSize {
-pkg: ./e2e
-run: ^TestAStreamsLastPackIsUploadedWhenTheStreamEnds$
+pkg: ./core/chunk/packstore
+run: ^TestFlushUploadsAPackWorthAnUpload$
 
 id: mutate-runs-a-hang-again-alone
 file: tools/internal/mutation/mutation.go
@@ -4418,3 +4418,45 @@ find: theirs, err := r.readCommit(ctx, stored.Merge.Theirs)\n\t\t\tif err != nil
 replace: theirs, err := r.readCommit(ctx, stored.Merge.Theirs)\n\t\t\tif err != nil {\n\t\t\t\treturn err\n\t\t\t}\n\t\t\t_ = theirs.Hash
 pkg: ./core/vcs
 run: ^TestCommitRefusesWhatTheTwoStepsRefuse$
+
+id: open-refuses-a-negative-index-bound
+file: core/chunk/packstore/packstore.go
+find: if o.IndexInMemory < 0 {
+replace: if o.IndexInMemory < 0 && false {
+pkg: ./core/chunk/packstore
+run: ^TestOpenRefusesANegativeIndexBound$
+
+id: stats-count-the-packs-being-finished
+file: core/chunk/packstore/packstore.go
+find: for _, w := range s.finishing {\n\t\tn += int64(w.Count())\n\t}
+replace: for range s.finishing {\n\t}
+pkg: ./core/chunk/packstore
+run: ^TestStatsCountAPackBeingFinished$
+
+id: prepared-knows-its-hash
+file: core/chunk/packstore/packstore.go
+find: func (p *prepared) Hash() hash.Hash { return p.h }
+replace: func (p *prepared) Hash() hash.Hash { return hash.Hash{} }
+pkg: ./core/chunk/packstore
+run: ^TestAPreparedChunkKnowsItsHashAndLength$
+
+id: prepared-knows-its-length
+file: core/chunk/packstore/packstore.go
+find: func (p *prepared) Len() int        { return p.n }
+replace: func (p *prepared) Len() int        { return 0 }
+pkg: ./core/chunk/packstore
+run: ^TestAPreparedChunkKnowsItsHashAndLength$
+
+id: refresh-keeps-the-unpublished-packs
+file: core/chunk/packstore/packstore.go
+find: s.loaded[sum] = true\n\t\t}\n\t\tfor _, info := range s.unpublished {\n\t\t\ts.mem.Add(info)\n\t\t}
+replace: s.loaded[sum] = true\n\t\t}
+pkg: ./core/chunk/packstore
+run: ^TestUnpublishedPacksSurviveARefresh$
+
+id: has-refreshes-on-a-miss
+file: core/chunk/packstore/packstore.go
+find: if missing {\n\t\tif err := s.refresh(ctx); err != nil {
+replace: if missing && false {\n\t\tif err := s.refresh(ctx); err != nil {
+pkg: ./core/chunk/packstore
+run: ^TestAMissSeesAnotherStoresPublish$
