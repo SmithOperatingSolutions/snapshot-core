@@ -85,12 +85,15 @@ func hashesIn(ctx context.Context, rd chunk.Reader, h hash.Hash) ([]hash.Hash, e
 	return out, nil
 }
 
-// heap is the heap in use once the collector has run.
-func heap() uint64 {
+// heap is the heap in use once the collector has run: twice, since what a
+// sync.Pool held survives one cycle in its victim cache and would be counted
+// against whatever ran between two measurements.
+func heap() int64 {
+	runtime.GC()
 	runtime.GC()
 	var m runtime.MemStats
 	runtime.ReadMemStats(&m)
-	return m.HeapAlloc
+	return int64(m.HeapAlloc)
 }
 
 // #6: the memory a repository costs to open (the chunk index) and to
@@ -123,7 +126,7 @@ func TestSlowMemoryPerChunkOn1MChunks(t *testing.T) {
 // store costs to open and the live heap's peak over a collection, in
 // bytes. The repository is on disk (blob/local), so what is stored, and
 // what a collection stores, is not on the heap.
-func measureMemory(t *testing.T, n int, inMemory int) (open, peak uint64) {
+func measureMemory(t *testing.T, n int, inMemory int) (open, peak int64) {
 	t.Helper()
 	const perGroup = 1000
 	dir := t.TempDir()
@@ -249,7 +252,7 @@ func measureMemory(t *testing.T, n int, inMemory int) (open, peak uint64) {
 	if rep.Live < n {
 		t.Fatalf("GC marked %d chunks live, want at least the %d leaves", rep.Live, n)
 	}
-	peak = high.Load() - base
+	peak = int64(high.Load()) - base
 	t.Logf("collect: %d live in %v, peak %d bytes", rep.Live, time.Since(start).Round(time.Millisecond), peak)
 	entries, err := os.ReadDir(dir)
 	if err != nil {
