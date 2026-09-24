@@ -184,11 +184,15 @@ can refuse them) and a fuzz target.
   the weekly run): a gibibyte of random data writes to `blob/local` at 262
   MB/s where it wrote at 114, compressible text at 485 where it wrote at
   188, a one-byte re-snapshot deduplicates at 322; in memory on sixteen
-  workers 639 MB/s where one worker does 230. Reads 0.5–1.2 GB/s and
-  commits about 100 ms are unchanged. What bounds a write now is the
-  storer (the seal and the pack's bytes on one goroutine, about 0.3 s per
-  256 MiB) and, on disk, the backend's fsync'ed write, which more packs in
-  flight do not raise (measured the same at two, four and eight).
+  workers 830 MB/s where one worker does 300. Chunks are sealed on the
+  goroutine that prepares them, under the pending pack's keys, and sealed
+  again under the lock only if the pack rolled over meanwhile; the placer
+  copies a chunk out of its block once and recycles the block, compression
+  writes into a scratch buffer and keeps only a shorter result, and a pack
+  is built in its writer's own buffer. Reads 0.5–1.2 GB/s and commits about
+  100 ms are unchanged. On disk the backend's fsync'ed write bounds a
+  write, which more packs in flight do not raise (measured the same at two,
+  four and eight).
 - **CompareAndSetRoot(expected, next)** refuses a `next` that is not a stored
   chunk, uploads every pending pack, writes one index object for the session's
   packs, then swaps the manifest (root := next, index list += the session's

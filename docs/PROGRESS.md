@@ -337,6 +337,7 @@ Beyond the list: merging what a branch already holds changes nothing (`TestMergi
 | the write path's profile, a fourth time (#10) | With packs finished beside the writer, the cutter bounded the write at about 800 MB/s: a Buzhash rolls a byte at a time, and the serial dependency looked like the end of it | The hash at a byte depends on the 48 bytes before it alone, so the masks' hits are marked in parallel and only the cut placement is serial: 2.4 GB/s |
 | the parallel chunker's tests (#10) | Two mutants survived at first: a bit set past the search's end within its last word, which random data never places, and a reader blocked handing over a block, which the differential test's reader never was | A unit test of the bit search's bounds; a reader that fills every slot ahead and then blocks, closed with nobody reading |
 | the race detector, on the finisher (#10) | The GC property test's clock offsets were plain fields, written by the test and now read by a finisher goroutine uploading a pack | Atomic offsets, set and read through methods |
+| the write path's profile, a fifth time (#10) | With the storer trivial the wall did not move: a 256 MiB write allocated 3.4 GB, and both measurement tests were bounded by their own sources (a byte-at-a-time text generator, then a ChaCha8 stream at 700 MB/s) | One copy per chunk, recycled blocks, a compression scratch, packs built in place; the tests generate their data once beforehand |
 | (redcheck on this branch) | Build-tagged tests unjudged; `TestMain` judged; pairs not matched by scope; contract changes invisible; environment-bound callers refused; no `main` in a new clone; a tagged backfill's mutants built without its tag; fuzz targets not counted as tests | Tool fixed each time, with a red test |
 
 ### Batch 2 (in progress)
@@ -389,15 +390,16 @@ them, each tracked as an issue:
    (`TestSlowWorkersOutrunOneWorker`, `TestTheStreamIsTheSameAtAnyWorkerCount`),
    and `core/cdc` cuts disknexus's boundaries itself three times as fast
    (`TestSlowTheChunkerOutrunsDisknexus`). On the same laptop over
-   `blob/local`: 260 MB/s writing random data (from 114), 484 compressible
-   (from 188), 320 re-snapshotting (from 203); in memory 639 on sixteen
-   workers against 230 on one; reads and commits unchanged
+   `blob/local`: 321 MB/s writing random data (from 114), 509 compressible
+   (from 188), 376 re-snapshotting (from 203); in memory 830 on sixteen
+   workers against 300 on one; reads and commits unchanged
    (`TestSlowThroughputOnLocalDisk`, weekly). Full packs are finished and
    uploaded beside the writer, at most two at once
    (`TestAnUploadDoesNotHoldUpTheWriter`, `TestAtMostTwoPacksAreInFlight`,
    `TestAPublishWaitsForItsUploads`); `cdc.Parallel` marks the masks' hits
    on every core and places the cuts on one, 2.4 GB/s against 750 serial
    (`TestSlowParallelCuttingOutrunsTheChunker`,
-   `TestTheParallelChunkerCutsWhereTheChunkerCuts`). The storer and, on
-   disk, the fsync'ed write bound it now; more packs in flight measured the
-   same at two, four and eight.
+   `TestTheParallelChunkerCutsWhereTheChunkerCuts`); chunks are sealed on
+   the preparing goroutine (`TestAChunkPreparedForOnePackStoresInTheNext`)
+   and the path copies each chunk once. On disk the fsync'ed write bounds
+   it; more packs in flight measured the same at two, four and eight.
