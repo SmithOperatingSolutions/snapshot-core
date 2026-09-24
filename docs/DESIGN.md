@@ -235,12 +235,12 @@ can refuse them) and a fuzz target.
   objects before it switches to streaming them into the table. Measured on
   64-byte chunks with 64 Ki in memory, the repository on disk
   (`TestSlowMemoryPerChunkOn1MChunks`, the slow tier): a million chunks open
-  in 21 KiB where they took 117 MiB, and collect in a peak of 54 MiB where
-  they took 371; two million open in 25 KiB and collect in the same 54 MiB
-  (§9). Of that peak, 32 MiB is the repack writer's buffer, presized at the
-  pack size since #10 whatever the repack copies (#14 decides whether GC
-  sizes it to what it copies), and 20 MiB the codec's zstd encoder; what
-  is left is what grows with nothing.
+  in 21 KiB where they took 117 MiB, and collect in a peak of 30 MiB where
+  they took 371; two million open in 25 KiB and collect in 34 MiB (§9). Of
+  that peak, 20 MiB is the codec's zstd encoder; a repack's pack writer is
+  sized to what is left to copy, not to a pack (#14: at the pack's size,
+  as the store's pending pack is since #10, it was 32 MiB whatever the
+  repack copied).
 - The manifest lists every index object until GC compacts them (§9).
 
 *(The prolly tree, the version graph and merge are §7–8; GC is §9.)*

@@ -156,8 +156,18 @@ type Writer struct {
 	finished bool
 }
 
-// NewWriter starts a pack with a fresh random salt.
+// NewWriter starts a pack with a fresh random salt, its buffer at the
+// pack's size: appending frames then never grows and copies the pack,
+// which was a third of what a store did per chunk (#10).
 func NewWriter(kr *seal.Keyring, repo seal.RepoID, codec *Codec, maxSize int) (*Writer, error) {
+	return NewWriterSized(kr, repo, codec, maxSize, maxSize)
+}
+
+// NewWriterSized is NewWriter for a pack expected to hold about expect
+// bytes of frames: its buffer starts at that, not at the pack's size, and
+// grows if the pack goes past it. A repack of a few KiB of live chunks
+// costs those KiB, not a pack (#14).
+func NewWriterSized(kr *seal.Keyring, repo seal.RepoID, codec *Codec, maxSize, expect int) (*Writer, error) {
 	if maxSize < HeaderSize+TrailerSize || maxSize > MaxPackSize {
 		return nil, fmt.Errorf("pack: size limit %d outside %d..%d", maxSize, HeaderSize+TrailerSize, MaxPackSize)
 	}
@@ -174,10 +184,8 @@ func NewWriter(kr *seal.Keyring, repo seal.RepoID, codec *Codec, maxSize int) (*
 	w.U16(version)
 	w.U16(0) // flags
 	w.Raw(salt[:])
-	// The pack's bytes, allocated once at the pack's size: appending frames
-	// then never grows and copies the pack, which was a third of what a
-	// store did per chunk (#10).
-	buf := make([]byte, 0, maxSize)
+	size := min(max(expect+HeaderSize+TrailerSize, HeaderSize+TrailerSize), maxSize)
+	buf := make([]byte, 0, size)
 	return &Writer{codec: codec, keys: keys, salt: salt, maxSize: maxSize, buf: append(buf, w.Bytes()...),
 		entries: map[hash.Hash]Entry{}}, nil
 }
