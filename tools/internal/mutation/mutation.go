@@ -178,6 +178,7 @@ type Options struct {
 	GoCmd   string        // defaults to "go"
 	Log     io.Writer     // progress; nil discards
 	Timeout time.Duration // per mutant test run; 0: DefaultTimeout
+	Workers int           // mutants run at once, each in a copy of its own; 0 or 1: one after another
 }
 
 // DefaultTimeout bounds one mutant's test run: a mutant that makes a test
