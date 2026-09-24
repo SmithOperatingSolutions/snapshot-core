@@ -22,6 +22,7 @@ import (
 	"errors"
 	"fmt"
 	"sort"
+	"sync"
 
 	"github.com/klauspost/compress/zstd"
 
@@ -99,8 +100,9 @@ func Name(b []byte) string {
 // Codec holds the zstd encoder and a size-bounded decoder. Safe for
 // concurrent use; one per chunk store.
 type Codec struct {
-	enc *zstd.Encoder
-	dec *zstd.Decoder
+	enc     *zstd.Encoder
+	dec     *zstd.Decoder
+	scratch sync.Pool // []byte the encoder writes into
 }
 
 // NewCodec builds a codec.
@@ -116,7 +118,9 @@ func NewCodec() (*Codec, error) {
 		_ = enc.Close()
 		return nil, err
 	}
-	return &Codec{enc: enc, dec: dec}, nil
+	c := &Codec{enc: enc, dec: dec}
+	c.scratch.New = func() any { return make([]byte, 0, MaxChunkSize+MaxChunkSize/8) }
+	return c, nil
 }
 
 // Close releases the codec.
@@ -195,13 +199,24 @@ func (w *Writer) Add(h hash.Hash, data []byte) error {
 
 // Compress is the payload a chunk is stored as: zstd when that is shorter,
 // else the bytes themselves. Safe to call from many goroutines at once.
+// The encoder writes into a scratch buffer kept from call to call, so a
+// chunk that does not compress costs no allocation, and one that does
+// costs its compressed size.
 func (c *Codec) Compress(data []byte) (payload []byte, codec uint8) {
-	if len(data) > 0 {
-		if z := c.enc.EncodeAll(data, nil); len(z) < len(data) {
-			return z, CodecZstd
-		}
+	if len(data) == 0 {
+		return data, CodecRaw
 	}
-	return data, CodecRaw
+	scratch := c.scratch.Get().([]byte)
+	z := c.enc.EncodeAll(data, scratch[:0])
+	if len(z) < len(data) {
+		payload = make([]byte, len(z))
+		copy(payload, z)
+		codec = CodecZstd
+	} else {
+		payload, codec = data, CodecRaw
+	}
+	c.scratch.Put(z[:0]) //nolint:staticcheck // SA6002: the slice is what the pool holds
+	return payload, codec
 }
 
 // AddCompressed is Add for a chunk already compressed by this writer's
@@ -291,12 +306,13 @@ func (w *Writer) Finish() (Built, error) {
 	if err != nil {
 		return Built{}, err
 	}
+	// The pack is built in the writer's own buffer, allocated at the pack's
+	// size, so finishing copies nothing; the writer is done with it.
 	indexOffset := len(w.buf)
-	b := make([]byte, 0, len(w.buf)+len(sealed)+TrailerSize)
-	b = append(append(b, w.buf...), sealed...)
+	b := append(w.buf, sealed...)
 	b = binary.LittleEndian.AppendUint64(b, uint64(indexOffset))
 	b = binary.LittleEndian.AppendUint32(b, uint32(len(sealed)))
-	b = append(b, trailerMagic...)
+	b = append(b, trailerMagic...) // w.buf's array, appended beyond its length: a Get on the frames meanwhile reads bytes this never touches
 	name := Name(b)
 	return Built{Name: name, Bytes: b, Info: Info{Name: name, Salt: w.salt, Size: int64(len(b)), Entries: entries}}, nil
 }

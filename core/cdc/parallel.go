@@ -21,6 +21,7 @@ type Parallel struct {
 	stop       chan struct{}
 	once       sync.Once
 	order      chan *block // marked blocks, in stream order
+	free       chan []byte // block buffers the placer is done with, for the reader to fill again
 
 	cur  *block
 	pos  int    // into cur.data
@@ -50,7 +51,8 @@ func NewParallel(r io.Reader, g Geometry, workers int) (*Parallel, error) {
 	if workers <= 0 {
 		workers = runtime.GOMAXPROCS(0)
 	}
-	p := &Parallel{g: g, hard: g.Mask<<2 | g.Mask, easy: g.Mask >> 2, stop: make(chan struct{}), order: make(chan *block, 2*workers)}
+	p := &Parallel{g: g, hard: g.Mask<<2 | g.Mask, easy: g.Mask >> 2, stop: make(chan struct{}),
+		order: make(chan *block, 2*workers), free: make(chan []byte, 2*workers+2)}
 	work := make(chan *block, workers)
 	go p.read(r, work)
 	for range workers {
@@ -73,7 +75,13 @@ func (p *Parallel) read(r io.Reader, work chan<- *block) {
 	var prev []byte
 	empty := 0
 	for {
-		data := make([]byte, blockSize)
+		var data []byte
+		select {
+		case data = <-p.free: // a block the placer is done with; its chunks were copied out
+			data = data[:blockSize]
+		default:
+			data = make([]byte, blockSize)
+		}
 		n, err := r.Read(data)
 		if n == 0 && err == nil {
 			if empty++; empty >= maxConsecutiveEmptyReads {
@@ -212,6 +220,7 @@ func (p *Parallel) Next() ([]byte, error) {
 		}
 		// The block is consumed: what it holds of the chunk under way is kept.
 		p.buf = append(p.buf, b.data[len(b.data)-(p.n-len(p.buf)):]...)
+		p.release(b)
 		if b.err != nil {
 			p.done = b.err
 			p.cur = nil
@@ -226,14 +235,29 @@ func (p *Parallel) Next() ([]byte, error) {
 	}
 }
 
-// emit ends the chunk under way at b.data[i] and returns it.
+// emit ends the chunk under way at b.data[i] and returns it: one copy out
+// of the block (or onto what earlier blocks contributed), never a slice of
+// the block, whose buffer is filled again once the placer is done with it.
 func (p *Parallel) emit(b *block, i int) []byte {
-	start := p.pos - (p.n - len(p.buf)) // where this block's share of the chunk begins
-	_ = start
-	out := append(p.buf, b.data[p.chunkStart(b):i+1]...)
+	share := b.data[p.chunkStart(b) : i+1]
+	var out []byte
+	if p.buf == nil {
+		out = make([]byte, len(share))
+		copy(out, share)
+	} else {
+		out = append(p.buf, share...)
+	}
 	p.buf, p.n = nil, 0
 	p.pos = i + 1
-	return append([]byte(nil), out...)
+	return out
+}
+
+// release hands a consumed block's buffer back to the reader.
+func (p *Parallel) release(b *block) {
+	select {
+	case p.free <- b.data[:0]:
+	default: // the reader is far ahead; the buffer is garbage
+	}
 }
 
 // chunkStart is the index in b.data where the chunk under way begins:

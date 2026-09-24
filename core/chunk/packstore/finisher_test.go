@@ -283,6 +283,12 @@ func TestAChunkPreparedForOnePackStoresInTheNext(t *testing.T) {
 	bs := mem.New()
 	s := smallPacks(t, bs)
 	chunks, hs := chunksOf("prepared ahead", 24) // three packs' worth, all sealed for the first
+	for i := range chunks {                      // half compress, so the payload kept for the re-seal is the compressed one
+		if i%2 == 0 {
+			chunks[i] = bytes.Repeat([]byte{byte('a' + i)}, 4<<10)
+			hs[i] = hash.Sum(chunks[i])
+		}
+	}
 	var prepared []chunk.Prepared
 	for _, c := range chunks {
 		p, err := s.Prepare(c)

@@ -4292,3 +4292,17 @@ find: if p.sealed != nil && s.pending.Salt() == p.salt {
 replace: if p.sealed != nil {
 pkg: ./core/chunk/packstore
 run: ^TestAChunkPreparedForOnePackStoresInTheNext$
+
+id: cdc-parallel-a-chunk-is-not-a-slice-of-its-block
+file: core/cdc/parallel.go
+find: out = make([]byte, len(share))\n\t\tcopy(out, share)
+replace: out = share
+pkg: ./core/cdc
+run: ^TestTheParallelChunkerCutsWhereTheChunkerCuts$
+
+id: pack-compress-copies-out-of-the-scratch
+file: core/pack/pack.go
+find: payload = make([]byte, len(z))\n\t\tcopy(payload, z)
+replace: payload = z
+pkg: ./core/chunk/packstore
+run: ^TestAChunkPreparedForOnePackStoresInTheNext$
