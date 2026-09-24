@@ -139,7 +139,7 @@ func (g Geometry) mark(prev, data []byte) (hard, easy []uint64) {
 		if i >= window {
 			out = data[i-window]
 		} else {
-			out = hist[i]
+			out = hist[i] //nolint:gosec // G602: i < window here
 		}
 		hash = bits.RotateLeft64(hash, 1) ^ outTable[out] ^ table[b]
 		if hash&hmask == 0 {
@@ -245,7 +245,8 @@ func (p *Parallel) emit(b *block, i int) []byte {
 		out = make([]byte, len(share))
 		copy(out, share)
 	} else {
-		out = append(p.buf, share...)
+		out = p.buf
+		out = append(out, share...)
 	}
 	p.buf, p.n = nil, 0
 	p.pos = i + 1

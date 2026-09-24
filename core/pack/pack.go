@@ -309,7 +309,8 @@ func (w *Writer) Finish() (Built, error) {
 	// The pack is built in the writer's own buffer, allocated at the pack's
 	// size, so finishing copies nothing; the writer is done with it.
 	indexOffset := len(w.buf)
-	b := append(w.buf, sealed...)
+	b := w.buf
+	b = append(b, sealed...)
 	b = binary.LittleEndian.AppendUint64(b, uint64(indexOffset))
 	b = binary.LittleEndian.AppendUint32(b, uint32(len(sealed)))
 	b = append(b, trailerMagic...) // w.buf's array, appended beyond its length: a Get on the frames meanwhile reads bytes this never touches
