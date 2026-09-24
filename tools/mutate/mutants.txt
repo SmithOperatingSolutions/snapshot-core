@@ -4390,3 +4390,31 @@ find: workers := max(1, min(o.Workers, len(ms)))
 replace: workers := 1
 pkg: ./tools/internal/mutation
 run: ^TestMutantsRunAtOnceOnWorkers$
+
+id: vcs-commit-bounds-the-message
+file: core/vcs/vcs.go
+find: func (r *Repo) Commit(ctx context.Context, p auth.Principal, branch string, prev WorkingSet, namespace hash.Hash, message string) (Commit, error) {\n\tif err := r.branchCheck(ctx, p, auth.Write, branch); err != nil {\n\t\treturn Commit{}, err\n\t}\n\tif len(message) > MaxMessageLen || !utf8.ValidString(message) {
+replace: func (r *Repo) Commit(ctx context.Context, p auth.Principal, branch string, prev WorkingSet, namespace hash.Hash, message string) (Commit, error) {\n\tif err := r.branchCheck(ctx, p, auth.Write, branch); err != nil {\n\t\treturn Commit{}, err\n\t}\n\tif (len(message) > MaxMessageLen || !utf8.ValidString(message)) && false {
+pkg: ./core/vcs
+run: ^TestCommitRefusesWhatTheTwoStepsRefuse$
+
+id: vcs-commit-checks-the-merge-state
+file: core/vcs/vcs.go
+find: if !sameMerge(stored.Merge, prev.Merge) {
+replace: if !sameMerge(stored.Merge, prev.Merge) && false {
+pkg: ./core/vcs
+run: ^TestCommitRefusesWhatTheTwoStepsRefuse$
+
+id: vcs-commit-waits-for-conflicts
+file: core/vcs/vcs.go
+find: if n, err := r.conflictCount(ctx, stored); err != nil {\n\t\t\treturn err\n\t\t} else if n > 0 {
+replace: if n, err := r.conflictCount(ctx, stored); err != nil {\n\t\t\treturn err\n\t\t} else if n > 0 && false {
+pkg: ./core/vcs
+run: ^TestCommitRefusesWhatTheTwoStepsRefuse$
+
+id: vcs-commit-of-a-merge-has-two-parents
+file: core/vcs/vcs.go
+find: theirs, err := r.readCommit(ctx, stored.Merge.Theirs)\n\t\t\tif err != nil {\n\t\t\t\treturn err\n\t\t\t}\n\t\t\tc.Parents = append(c.Parents, theirs.Hash)
+replace: theirs, err := r.readCommit(ctx, stored.Merge.Theirs)\n\t\t\tif err != nil {\n\t\t\t\treturn err\n\t\t\t}\n\t\t\t_ = theirs.Hash
+pkg: ./core/vcs
+run: ^TestCommitRefusesWhatTheTwoStepsRefuse$
