@@ -70,6 +70,18 @@ Red-Check: mutants mem-swap-compares-version
 redcheck then requires the commit's tests to pass, and each named mutant to be
 killed by those tests alone.
 
+**Measurements are never a red.** A test that times something and holds
+it to a bar is a distribution, and redcheck gives a verdict: the tree before
+the change passes or fails by the machine's wobble whenever the change's
+gain is within a few times the noise, and the PR blocks at random for the
+rest of the branch's life. A performance change lands as `refactor:` (or
+`chore:` for its test alone) with the figures before and after in the
+commit body, measured on the same machine in the same run, and any
+behavior it carries gets its own red. The test that guards the figure
+afterwards is a regression guard: give its bar headroom against the
+measured value, on the slowest machine that will run it, so it fails on a
+regression and never on a bad day.
+
 **Property tests and their red.** A `test:` commit's red run fails its
 `rapid` properties on purpose, and rapid saves each failure under
 `testdata/rapid/`. Those files record the stub, not a bug: delete them
