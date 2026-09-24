@@ -273,3 +273,81 @@ func TestStoreFailuresSurface(t *testing.T) {
 		t.Errorf("Walk of a root claiming a stream depth = %v, want ErrCorrupt", err)
 	}
 }
+
+// A decider reports conflicts below the key, in the model's own location
+// encoding, each kept as given; one with no location is at the key; with
+// any conflict the result is ours, untouched; and a key the decider leaves
+// clean, or combines, merges as a resolver's would.
+func TestADeciderLocatesConflictsBelowTheKey(t *testing.T) {
+	s, sp := memstore.New(), notes()
+	base := write(t, s, sp, map[string]string{"a": "v", "b": "v", "c": "v"})
+	ours := write(t, s, sp, map[string]string{"a": "vO", "b": "vO", "c": "vO"})
+	theirs := write(t, s, sp, map[string]string{"a": "vT", "b": "vT", "c": "vT"})
+	decide := func(key []byte, o, th prolly.Change) (mapobject.Decision, error) {
+		switch string(key) {
+		case "a": // two fields of the record collide
+			return mapobject.Decision{Conflicts: []model.Conflict{
+				{Location: []byte("a/x"), Reason: "field x changed differently"},
+				{Location: []byte("a/y"), Reason: "field y changed differently"},
+			}}, nil
+		case "b": // the record as a whole
+			return mapobject.Decision{Conflicts: []model.Conflict{{Reason: "deleted on one side"}}}, nil
+		}
+		return mapobject.Decision{Value: []byte("vOT"), Put: true}, nil // combined
+	}
+	r, err := sp.MergeWith(ctx, base, ours, theirs, s, decide)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got []string
+	for _, c := range r.Conflicts {
+		got = append(got, string(c.Location)+": "+c.Reason)
+	}
+	want := []string{"a/x: field x changed differently", "a/y: field y changed differently", "b: deleted on one side"}
+	if strings.Join(got, "; ") != strings.Join(want, "; ") {
+		t.Errorf("conflicts = %v, want %v: each where the decider put it, the key's where it put none", got, want)
+	}
+	if r.Root != ours {
+		t.Errorf("with conflicts the result is %+v, want ours %+v untouched", r.Root, ours)
+	}
+
+	onlyC := func(key []byte, o, th prolly.Change) (mapobject.Decision, error) {
+		if string(key) == "c" {
+			return mapobject.Decision{Value: []byte("vOT"), Put: true}, nil
+		}
+		return mapobject.Decision{}, nil // the sides agree: ours stays
+	}
+	r, err = sp.MergeWith(ctx, base, ours, theirs, s, onlyC)
+	if err != nil || len(r.Conflicts) != 0 {
+		t.Fatalf("a decider leaving every key clean merged to %+v, %v", r.Conflicts, err)
+	}
+	if got := read(t, s, sp, r.Root); got["a"] != "vO" || got["b"] != "vO" || got["c"] != "vOT" {
+		t.Errorf("merged = %v, want a and b as ours and c combined", sorted(got))
+	}
+}
+
+// A decider's error aborts the merge with that error and no result: a
+// record that does not decode mid-merge is the store's problem, not a
+// conflict for a person to resolve.
+func TestADecidersErrorAbortsTheMerge(t *testing.T) {
+	s, sp := memstore.New(), notes()
+	base := write(t, s, sp, map[string]string{"a": "v"})
+	ours := write(t, s, sp, map[string]string{"a": "vO"})
+	theirs := write(t, s, sp, map[string]string{"a": "vT"})
+	errUndecodable := errors.New("a record that does not decode")
+	r, err := sp.MergeWith(ctx, base, ours, theirs, s, func([]byte, prolly.Change, prolly.Change) (mapobject.Decision, error) {
+		return mapobject.Decision{}, errUndecodable
+	})
+	if !errors.Is(err, errUndecodable) {
+		t.Fatalf("a decider failing gave %v, want its error", err)
+	}
+	if r.Root != (model.Root{}) || len(r.Conflicts) != 0 {
+		t.Errorf("a failed merge returned %+v: nothing must come of it", r)
+	}
+	r, err = sp.MergeWith(ctx, base, ours, theirs, s, func([]byte, prolly.Change, prolly.Change) (mapobject.Decision, error) {
+		return mapobject.Decision{Value: []byte("not a note"), Put: true}, nil
+	})
+	if !errors.Is(err, chunk.ErrCorrupt) {
+		t.Errorf("a decider storing a record the model refuses merged: %v, want ErrCorrupt", err)
+	}
+}

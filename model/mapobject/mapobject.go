@@ -38,6 +38,20 @@ type Spec struct {
 // it, and the key stays as ours.
 type Resolver func(key []byte, ours, theirs prolly.Change) (value []byte, put bool, reason string)
 
+// Decision is a Decider's answer for one key both sides changed.
+type Decision struct {
+	Value     []byte           // stored when Put, through the Spec's Check
+	Put       bool             // false keeps ours as it is
+	Conflicts []model.Conflict // where the sides could not combine; one with no Location is at the key
+}
+
+// Decider decides one key both sides changed, as a Resolver does, and can
+// say more: conflicts located below the key (a field, a member, a cell), in
+// the model's own location encoding, and an error, which aborts the merge
+// (a stored record that does not decode, a store failure). With any
+// conflict nothing is stored for the key.
+type Decider func(key []byte, ours, theirs prolly.Change) (Decision, error)
+
 // ReadOnly wraps a reader as a store that refuses every Put, for opening a
 // map to read.
 func ReadOnly(r chunk.Reader) chunk.ReadWriter { return readOnly{r} }
@@ -226,6 +240,11 @@ func (s Spec) put(ed *prolly.Editor, key, value []byte) error {
 		return err
 	}
 	return ed.Put(key, value)
+}
+
+// MergeWith is Merge with a Decider. (Stub.)
+func (s Spec) MergeWith(ctx context.Context, base, ours, theirs model.Root, rw chunk.ReadWriter, decide Decider) (model.MergeResult, error) {
+	return model.MergeResult{}, errors.New("mapobject: MergeWith is not implemented")
 }
 
 // Disagreement is the resolver every map-shaped model starts from: both
