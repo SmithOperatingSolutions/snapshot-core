@@ -3,7 +3,9 @@
 package e2e_test
 
 import (
+	"bytes"
 	"context"
+	"io"
 	"runtime"
 	"testing"
 	"time"
@@ -28,6 +30,10 @@ func TestSlowWorkersOutrunOneWorker(t *testing.T) {
 	}
 	const size = 256 << 20
 	ctx := context.Background()
+	data := make([]byte, size) // generated once: the source must not be what is measured
+	if _, err := io.ReadFull(newRandom(3, size), data); err != nil {
+		t.Fatal(err)
+	}
 	write := func(workers int) (time.Duration, string) {
 		t.Helper()
 		kr, err := seal.NewKeyring()
@@ -42,7 +48,7 @@ func TestSlowWorkersOutrunOneWorker(t *testing.T) {
 		cfg := repo.DefaultGeometry().Stream()
 		cfg.Workers = workers
 		t0 := time.Now()
-		root, err := blob.Write(ctx, s, newRandom(3, size), cfg)
+		root, err := blob.Write(ctx, s, bytes.NewReader(data), cfg)
 		if err != nil {
 			t.Fatal(err)
 		}

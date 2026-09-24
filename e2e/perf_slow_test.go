@@ -183,14 +183,18 @@ func mbs(n int64, d time.Duration) float64 { return float64(n) / 1e6 / d.Seconds
 // commit need.
 func TestSlowThroughputOnLocalDisk(t *testing.T) {
 	const size = 1 << 30
+	random := make([]byte, size) // generated once: the source must not be what is measured
+	if _, err := io.ReadFull(newRandom(1, size), random); err != nil {
+		t.Fatal(err)
+	}
 	p := newPerfRepo(t)
-	w, c := p.put("random.bin", newRandom(1, size))
+	w, c := p.put("random.bin", bytes.NewReader(random))
 	t.Logf("write 1 GiB random:          %v (%.0f MB/s), commit %v", w.Round(time.Millisecond), mbs(size, w), c.Round(time.Millisecond))
 	w, c = p.put("text.log", &textStream{left: size})
 	t.Logf("write 1 GiB compressible:    %v (%.0f MB/s), commit %v", w.Round(time.Millisecond), mbs(size, w), c.Round(time.Millisecond))
 
 	packBytesBefore := packBytes(t, p.o.Blobs)
-	changed := io.MultiReader(newRandom(1, size/2), bytes.NewReader([]byte("X")), skipTo(newRandom(1, size), size/2))
+	changed := io.MultiReader(bytes.NewReader(random[:size/2]), bytes.NewReader([]byte("X")), bytes.NewReader(random[size/2:]))
 	w, c = p.put("random.bin", changed)
 	t.Logf("re-snapshot random +1 byte:  %v (%.0f MB/s), commit %v", w.Round(time.Millisecond), mbs(size, w), c.Round(time.Millisecond))
 	if added := packBytes(t, p.o.Blobs) - packBytesBefore; added > 8<<20 {
@@ -214,7 +218,7 @@ func TestSlowThroughputOnLocalDisk(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !sameBytes(t, rd, changedAgain(size)) {
+	if !sameBytes(t, rd, io.MultiReader(bytes.NewReader(random[:size/2]), bytes.NewReader([]byte("X")), bytes.NewReader(random[size/2:]))) {
 		t.Fatal("the re-snapshotted random file does not read back as the bytes written")
 	}
 	t0 := time.Now()
@@ -224,18 +228,6 @@ func TestSlowThroughputOnLocalDisk(t *testing.T) {
 	}
 	t.Logf("open the repository:         %v", time.Since(t0).Round(time.Millisecond))
 	_ = re.Close()
-}
-
-func changedAgain(size int64) io.Reader {
-	return io.MultiReader(newRandom(1, size/2), bytes.NewReader([]byte("X")), skipTo(newRandom(1, size), size/2))
-}
-
-// skipTo discards the first n bytes of r.
-func skipTo(r io.Reader, n int64) io.Reader {
-	if _, err := io.CopyN(io.Discard, r, n); err != nil {
-		panic(err)
-	}
-	return r
 }
 
 func sameBytes(t *testing.T, a, b io.Reader) bool {

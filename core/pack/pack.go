@@ -208,6 +208,32 @@ func (c *Codec) Compress(data []byte) (payload []byte, codec uint8) {
 // codec (Compress): rawLen is the chunk's length, payload and codec what
 // Compress returned. The seal, which needs this pack's keys, happens here.
 func (w *Writer) AddCompressed(h hash.Hash, rawLen int, payload []byte, codec uint8) error {
+	if w.finished || rawLen > MaxChunkSize || len(w.entries) >= MaxChunksPerPack {
+		return w.AddSealed(h, rawLen, nil, codec) // the refusal, without sealing first
+	}
+	if _, ok := w.entries[h]; ok {
+		return ErrDup
+	}
+	sealed, err := w.Seal(h, payload)
+	if err != nil {
+		return err
+	}
+	return w.AddSealed(h, rawLen, sealed, codec)
+}
+
+// Salt identifies this pack's keys: a frame sealed by one writer's Seal
+// belongs in no other pack.
+func (w *Writer) Salt() seal.Salt { return w.salt }
+
+// Seal seals a compressed payload for this pack, on any goroutine (#10):
+// the chunk's hash is the frame's associated data.
+func (w *Writer) Seal(h hash.Hash, payload []byte) ([]byte, error) {
+	return w.keys.chunk.Seal(h[:], payload)
+}
+
+// AddSealed appends a frame this writer's Seal produced: rawLen is the
+// chunk's length, codec what Compress returned. It refuses what Add does.
+func (w *Writer) AddSealed(h hash.Hash, rawLen int, sealed []byte, codec uint8) error {
 	switch {
 	case w.finished:
 		return errors.New("pack: writer is finished")
@@ -218,10 +244,6 @@ func (w *Writer) AddCompressed(h hash.Hash, rawLen int, payload []byte, codec ui
 	}
 	if _, ok := w.entries[h]; ok {
 		return ErrDup
-	}
-	sealed, err := w.keys.chunk.Seal(h[:], payload)
-	if err != nil {
-		return err
 	}
 	if len(w.entries) > 0 && len(w.buf)+len(sealed)+indexBound(len(w.entries)+1)+TrailerSize > w.maxSize {
 		return ErrFull

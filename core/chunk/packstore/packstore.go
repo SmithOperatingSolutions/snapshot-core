@@ -506,12 +506,15 @@ func (s *Store) upload(ctx context.Context, packs []pack.Built) error {
 	return first
 }
 
-// prepared is a chunk hashed and compressed, not yet stored.
+// prepared is a chunk hashed, compressed and sealed for the pack that was
+// pending when it was prepared, not yet stored.
 type prepared struct {
 	h       hash.Hash
 	n       int    // the chunk's length
-	payload []byte // compressed, or the chunk itself
+	payload []byte // compressed, or the chunk itself: sealed again if the pack moved on
 	codec   uint8
+	sealed  []byte    // the frame, under the keys of the pack salt names
+	salt    seal.Salt // that pack
 }
 
 func (p *prepared) Hash() hash.Hash { return p.h }
@@ -519,14 +522,45 @@ func (p *prepared) Len() int        { return p.n }
 
 var _ chunk.Preparer = (*Store)(nil)
 
-// Prepare implements chunk.Preparer: the hash and the compression, on the
-// caller's goroutine, with no lock taken.
+// Prepare implements chunk.Preparer: the hash, the compression and the
+// seal, on the caller's goroutine, the lock taken only to learn which pack
+// is pending (#10). The seal is under that pack's keys; if the pack has
+// moved on by the time the chunk is stored, PutPrepared seals it again.
 func (s *Store) Prepare(data []byte) (chunk.Prepared, error) {
 	if len(data) > chunk.MaxChunkSize {
 		return nil, fmt.Errorf("%w: %d bytes", chunk.ErrTooLarge, len(data))
 	}
 	payload, codec := s.codec.Compress(data)
-	return &prepared{h: hash.Sum(data), n: len(data), payload: payload, codec: codec}, nil
+	p := &prepared{h: hash.Sum(data), n: len(data), payload: payload, codec: codec}
+	s.mu.Lock()
+	if s.pending == nil && !s.closed {
+		w, err := s.newWriter()
+		if err != nil {
+			s.mu.Unlock()
+			return nil, err
+		}
+		s.pending = w
+	}
+	w := s.pending
+	s.mu.Unlock()
+	if w != nil {
+		sealed, err := w.Seal(p.h, payload)
+		if err != nil {
+			return nil, err
+		}
+		p.sealed, p.salt = sealed, w.Salt()
+	}
+	return p, nil
+}
+
+// addPreparedLocked appends p to the pending pack: the frame as sealed if
+// the pack is the one it was sealed for, sealed again otherwise. Callers
+// hold s.mu.
+func (s *Store) addPreparedLocked(p *prepared) error {
+	if p.sealed != nil && s.pending.Salt() == p.salt {
+		return s.pending.AddSealed(p.h, p.n, p.sealed, p.codec)
+	}
+	return s.pending.AddCompressed(p.h, p.n, p.payload, p.codec)
 }
 
 // Put implements chunk.Store.
@@ -578,12 +612,12 @@ func (s *Store) PutPrepared(ctx context.Context, cp chunk.Prepared) (hash.Hash, 
 		}
 		s.pending = w
 	}
-	err = s.pending.AddCompressed(h, p.n, p.payload, p.codec)
+	err = s.addPreparedLocked(p)
 	var full *pack.Writer
 	if errors.Is(err, pack.ErrFull) {
 		full = s.takePendingLocked()
 		if s.pending, err = s.newWriter(); err == nil {
-			err = s.pending.AddCompressed(h, p.n, p.payload, p.codec)
+			err = s.addPreparedLocked(p) // a fresh pack: sealed again under its keys
 		}
 	}
 	s.mu.Unlock()

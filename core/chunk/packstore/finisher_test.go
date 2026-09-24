@@ -1,6 +1,7 @@
 package packstore_test
 
 import (
+	"bytes"
 	"context"
 	"io"
 	"strings"
@@ -10,6 +11,7 @@ import (
 
 	"github.com/SmithOperatingSolutions/snapshot-core/core/blob"
 	"github.com/SmithOperatingSolutions/snapshot-core/core/blob/mem"
+	"github.com/SmithOperatingSolutions/snapshot-core/core/chunk"
 	"github.com/SmithOperatingSolutions/snapshot-core/core/chunk/packstore"
 	"github.com/SmithOperatingSolutions/snapshot-core/core/hash"
 )
@@ -270,5 +272,41 @@ func TestAChunkOfAPackBeingFinishedReads(t *testing.T) {
 	}
 	if n := len(objects(t, g, "packs/")); n != 3 {
 		t.Fatalf("after storing a chunk of a finishing pack again the store holds %d packs, want the three sixteen chunks make: the chunk must be found there, not stored twice", n)
+	}
+}
+
+// A chunk is sealed for the pack pending when it is prepared (#10, B). If
+// that pack has moved on by the time the chunk is stored, the frame is
+// sealed again for the pack it lands in: every chunk reads back whatever
+// pack it was prepared for.
+func TestAChunkPreparedForOnePackStoresInTheNext(t *testing.T) {
+	bs := mem.New()
+	s := smallPacks(t, bs)
+	chunks, hs := chunksOf("prepared ahead", 24) // three packs' worth, all sealed for the first
+	var prepared []chunk.Prepared
+	for _, c := range chunks {
+		p, err := s.Prepare(c)
+		if err != nil {
+			t.Fatal(err)
+		}
+		prepared = append(prepared, p)
+	}
+	for i, p := range prepared {
+		if h, err := s.PutPrepared(ctx, p); err != nil || h != hs[i] {
+			t.Fatalf("storing chunk %d prepared ahead: %s, %v", i, h.Short(), err)
+		}
+	}
+	if err := s.CompareAndSetRoot(ctx, hash.Hash{}, hs[0]); err != nil {
+		t.Fatal(err)
+	}
+	if n := len(objects(t, bs, "packs/")); n < 2 {
+		t.Fatalf("positive control: %d packs, want the chunks to have rolled over into another", n)
+	}
+	fresh := open(t, bs, keyring(t))
+	for i, h := range hs {
+		got, err := fresh.Get(ctx, h)
+		if err != nil || !bytes.Equal(got, chunks[i]) {
+			t.Fatalf("chunk %d, prepared for the first pack and stored in a later one, reads as %d bytes, %v", i, len(got), err)
+		}
 	}
 }

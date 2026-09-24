@@ -4285,3 +4285,10 @@ find: if empty++; empty >= maxConsecutiveEmptyReads {
 replace: if empty++; false {
 pkg: ./core/cdc
 run: ^TestTheParallelChunkerCutsWhereTheChunkerCuts$
+
+id: packstore-seals-again-for-another-pack
+file: core/chunk/packstore/packstore.go
+find: if p.sealed != nil && s.pending.Salt() == p.salt {
+replace: if p.sealed != nil {
+pkg: ./core/chunk/packstore
+run: ^TestAChunkPreparedForOnePackStoresInTheNext$
