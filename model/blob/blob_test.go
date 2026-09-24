@@ -47,6 +47,9 @@ func subject(t *testing.T) contract.Subject {
 			out := bytes.Clone(c)
 			return append(out, byte(seed), 'x')
 		},
+		Collide: func(c []byte, seed uint64) (ours, theirs []byte) { // a blob changed on both sides conflicts whole
+			return append(bytes.Clone(c), byte(seed), 'o'), append(bytes.Clone(c), byte(seed), 't')
+		},
 		Write: func(t *testing.T, c []byte) model.Root {
 			t.Helper()
 			r, err := blob.Write(ctx, s, bytes.NewReader(c), small())
