@@ -116,7 +116,7 @@ as a pinned, unmodified module, imported only by `core/dnx`.
 ```
 mise install          # Go 1.27, golangci-lint, govulncheck, built from source
 mise run ci           # what CI runs: fmt, vet, lint, vuln, race, coverage gate,
-                      # red-check, crash harness, scale guards, fuzz, mutants, MinIO
+                      # red-check, crash harness, scale guards, fuzz, mutants, S3 tier (SeaweedFS)
 mise run ci:quick     # fmt, vet, lint, race
 mise run redcheck     # every test: commit fails without its feat:/fix:
 mise run mutate       # every checked-in mutant is killed
