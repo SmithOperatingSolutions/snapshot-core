@@ -1,5 +1,5 @@
 // Command ci is the local run-all: every check CI runs that this machine can,
-// in CI's order, with nothing but Go (plus Docker for the optional MinIO tier).
+// in CI's order, with nothing but Go (plus Docker for the optional S3 tier).
 //
 //	go run ./tools/ci                 # everything
 //	go run ./tools/ci -quick          # fmt, vet, lint, race
@@ -58,7 +58,7 @@ var steps = []step{
 	{"slow", false, stepSlow},
 	{"fuzz", false, stepFuzz},
 	{"mutate", false, stepMutate},
-	{"minio", false, stepMinio},
+	{"s3", false, stepS3},
 }
 
 func main() { os.Exit(run()) }
@@ -310,13 +310,21 @@ func stepMutate(ctx context.Context, _ *config) error {
 	return stream(ctx, nil, "go", "run", "./tools/mutate")
 }
 
-// minioImage is the MinIO the S3 suites were proven against, pinned by
-// digest. Docker Hub no longer serves minio/minio; quay.io still does.
-const minioImage = "quay.io/minio/minio:RELEASE.2025-09-07T16-13-09Z@sha256:14cea493d9a34af32f524e538b8346cf79f3321eff8e708c1e2960462bd8936e"
+// s3Image is the S3-compatible server the S3 suites run against in CI,
+// pinned by digest: SeaweedFS, since MinIO ended its public distribution
+// (2026-09-24: quay.io, Docker Hub and dl.min.io all gone). SeaweedFS lists a
+// directory's children right after the directory rather than in byte order,
+// which the contract is told (contract.AnyTotalOrder) and no caller in the
+// core depends on; it honors If-None-Match and If-Match, so the probe and the
+// root swap run as on S3.
+const s3Image = "docker.io/chrislusf/seaweedfs:4.47@sha256:ce9e796f1fe6f06968f4c04bdaf8f678dad9c8acdfef3d244133d71bfa6bf882"
 
-// stepMinio runs the S3 suites against a real MinIO. With SNAPSHOT_S3_ENDPOINT
-// set it uses that server; otherwise it starts a throwaway container.
-func stepMinio(ctx context.Context, _ *config) error {
+// stepS3 runs the S3 suites against a real S3-compatible server. With
+// SNAPSHOT_S3_ENDPOINT set it uses that server as configured (the weekly
+// run's real provider); otherwise it starts SeaweedFS in Docker, or skips
+// when Docker is unavailable. SNAPSHOT_S3_REQUIRED=1 makes the tests fail
+// rather than skip on a missing endpoint.
+func stepS3(ctx context.Context, _ *config) error {
 	if _, err := os.Stat("core/blob/s3"); err != nil {
 		return errSkip{"no S3 backend yet"}
 	}
@@ -325,24 +333,25 @@ func stepMinio(ctx context.Context, _ *config) error {
 		if _, err := output(ctx, nil, "docker", "info"); err != nil {
 			return errSkip{"Docker unavailable and SNAPSHOT_S3_ENDPOINT unset"}
 		}
-		id, err := output(ctx, nil, "docker", "run", "-d", "--rm", "-p", "127.0.0.1::9000",
-			"-e", "MINIO_ROOT_USER=snapshotcore", "-e", "MINIO_ROOT_PASSWORD=snapshotcore-secret",
-			minioImage, "server", "/data")
+		id, err := output(ctx, nil, "docker", "run", "-d", "--rm", "-p", "127.0.0.1::8333",
+			"-e", "AWS_ACCESS_KEY_ID=snapshotcore", "-e", "AWS_SECRET_ACCESS_KEY=snapshotcore-secret",
+			s3Image, "server", "-s3", "-dir=/data", "-master.volumeSizeLimitMB=64")
 		if err != nil {
-			return fmt.Errorf("starting MinIO: %w", err)
+			return fmt.Errorf("starting SeaweedFS: %w", err)
 		}
 		id = strings.TrimSpace(id)
 		defer func() { _, _ = output(context.Background(), nil, "docker", "stop", id) }()
-		port, err := output(ctx, nil, "docker", "port", id, "9000/tcp")
+		port, err := output(ctx, nil, "docker", "port", id, "8333/tcp")
 		if err != nil {
-			return fmt.Errorf("reading MinIO's port: %w", err)
+			return fmt.Errorf("reading SeaweedFS's port: %w", err)
 		}
 		endpoint := "http://" + strings.TrimSpace(strings.Split(strings.TrimSpace(port), "\n")[0])
-		if err := waitHTTP(ctx, endpoint+"/minio/health/ready", 60*time.Second); err != nil {
+		if err := waitHTTP(ctx, endpoint+"/status", 60*time.Second); err != nil {
 			return err
 		}
 		env = append(env, "SNAPSHOT_S3_ENDPOINT="+endpoint, "SNAPSHOT_S3_ACCESS_KEY=snapshotcore",
-			"SNAPSHOT_S3_SECRET_KEY=snapshotcore-secret", "SNAPSHOT_S3_BUCKET=snapshot-core-test")
+			"SNAPSHOT_S3_SECRET_KEY=snapshotcore-secret", "SNAPSHOT_S3_BUCKET=snapshot-core-test",
+			"SNAPSHOT_S3_LIST_ORDER=tree")
 	}
 	pkgs, err := productPackages(ctx)
 	if err != nil {

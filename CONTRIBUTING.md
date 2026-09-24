@@ -19,7 +19,7 @@ mise run ci:quick   # fmt, vet, lint, race suite
 
 `mise run ci` is `go run ./tools/ci`. It needs nothing but Go: the S3 backend
 runs its contract suite against an in-process S3 server (`core/blob/s3/s3fake`).
-A real MinIO run is an extra tier (`mise run minio`, Docker) that CI requires.
+A run against a real S3 server is an extra tier (`mise run s3`, SeaweedFS in Docker) that CI requires.
 
 ## The loop for every change
 
