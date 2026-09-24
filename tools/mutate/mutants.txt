@@ -4516,3 +4516,31 @@ find: if c.Reason == "" {
 replace: if c.Reason == "" && false {
 pkg: ./model/contract
 run: ^TestCollisionVerdict$
+
+id: mapobject-put-checks-the-record
+file: model/mapobject/mapobject.go
+find: if err := s.Check(key, value); err != nil {\n\t\treturn err\n\t}\n\treturn ed.Put(key, value)
+replace: return ed.Put(key, value)
+pkg: ./model/mapobject
+run: ^TestAResolverCombinesBothSides$
+
+id: mapobject-validate-checks-every-record
+file: model/mapobject/mapobject.go
+find: if err := s.Check(k, v); err != nil {\n\t\t\treturn err\n\t\t}
+replace: if err := s.Check(k, v); err != nil && false {\n\t\t\treturn err\n\t\t}
+pkg: ./model/mapobject
+run: ^TestValidateRunsCheckOnEveryRecord$
+
+id: mapobject-added-differently-conflicts
+file: model/mapobject/mapobject.go
+find: case ours.Kind == prolly.Added:\n\t\treturn nil, false, "added differently on both sides"
+replace: case ours.Kind == prolly.Added:\n\t\treturn nil, false, ""
+pkg: ./model/mapobject
+run: ^TestMergePerKey$
+
+id: mapobject-a-resolvers-value-is-stored
+file: model/mapobject/mapobject.go
+find: case put:\n\t\t\t\terr = s.put(ed, co.Key, value)
+replace: case put && false:\n\t\t\t\terr = s.put(ed, co.Key, value)
+pkg: ./model/mapobject
+run: ^TestAResolverCombinesBothSides$

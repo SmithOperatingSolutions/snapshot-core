@@ -238,3 +238,38 @@ func sorted(m map[string]string) []string {
 	sort.Strings(out)
 	return out
 }
+
+// The store's failures surface, not a zero map: a root whose chunk is not
+// stored fails Open, Diff and Merge; a record theirs adds that the model
+// refuses fails the merge; the read-only store refuses a write; Walk with
+// nothing to do per record still walks.
+func TestStoreFailuresSurface(t *testing.T) {
+	s, sp := memstore.New(), notes()
+	good := write(t, s, sp, map[string]string{"a": "v1"})
+	missing := model.Root{Hash: hash.Sum([]byte("never stored")), Size: 1, Format: 7}
+	if _, err := sp.Open(ctx, s, missing); err == nil {
+		t.Error("Open of a root whose chunk is not stored succeeded")
+	}
+	if _, err := sp.Diff(ctx, good, missing, s); err == nil {
+		t.Error("Diff to a root whose chunk is not stored succeeded")
+	}
+	if _, err := sp.Diff(ctx, missing, good, s); err == nil {
+		t.Error("Diff from a root whose chunk is not stored succeeded")
+	}
+	if _, err := sp.Merge(ctx, missing, good, good, s, nil); err == nil {
+		t.Error("Merge over a base whose chunk is not stored succeeded")
+	}
+	theirs := write(t, s, sp, map[string]string{"a": "v1", "b": "not a note"})
+	if _, err := sp.Merge(ctx, good, good, theirs, s, nil); !errors.Is(err, chunk.ErrCorrupt) {
+		t.Errorf("a merge applying a record the model refuses = %v, want ErrCorrupt", err)
+	}
+	if _, err := mapobject.ReadOnly(s).Put(ctx, []byte("x")); err == nil {
+		t.Error("the read-only store took a write")
+	}
+	if err := sp.Walk(ctx, good, s, func(hash.Hash, bool) (bool, error) { return true, nil }, nil); err != nil {
+		t.Errorf("Walk with nothing to do per record: %v", err)
+	}
+	if err := sp.Walk(ctx, model.Root{Hash: good.Hash, Size: 1, Format: 7, Depth: 2}, s, func(hash.Hash, bool) (bool, error) { return true, nil }, nil); !errors.Is(err, chunk.ErrCorrupt) {
+		t.Errorf("Walk of a root claiming a stream depth = %v, want ErrCorrupt", err)
+	}
+}

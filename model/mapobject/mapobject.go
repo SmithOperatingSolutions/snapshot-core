@@ -11,8 +11,10 @@
 package mapobject
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"fmt"
 
 	"github.com/SmithOperatingSolutions/snapshot-core/core/chunk"
 	"github.com/SmithOperatingSolutions/snapshot-core/core/hash"
@@ -36,8 +38,6 @@ type Spec struct {
 // it, and the key stays as ours.
 type Resolver func(key []byte, ours, theirs prolly.Change) (value []byte, put bool, reason string)
 
-var errNotImplemented = errors.New("mapobject: not implemented")
-
 // ReadOnly wraps a reader as a store that refuses every Put, for opening a
 // map to read.
 func ReadOnly(r chunk.Reader) chunk.ReadWriter { return readOnly{r} }
@@ -54,26 +54,93 @@ func (s Spec) Root(m *prolly.Map) model.Root {
 	return model.Root{Hash: m.Root(), Size: m.Count(), Format: s.Format}
 }
 
+// claims checks what a root says before the map is opened.
+func (s Spec) claims(root model.Root) error {
+	if root.Format != s.Format {
+		return fmt.Errorf("%w: %s format %d", model.ErrUnknownModel, s.Name, root.Format)
+	}
+	if root.Depth != 0 {
+		return fmt.Errorf("%w: a %s root claims stream depth %d", chunk.ErrCorrupt, s.Name, root.Depth)
+	}
+	return nil
+}
+
 // Open opens the map under root and checks the root's claims against it:
 // the spec's format, depth 0, and a count equal to the root's size.
 func (s Spec) Open(ctx context.Context, st chunk.ReadWriter, root model.Root) (*prolly.Map, error) {
-	return nil, errNotImplemented
+	if err := s.claims(root); err != nil {
+		return nil, err
+	}
+	m, err := prolly.Open(ctx, st, s.Config, root.Hash)
+	if err != nil {
+		return nil, err
+	}
+	if m.Count() != root.Size {
+		return nil, fmt.Errorf("%w: a %s of %d entries whose root says %d", chunk.ErrCorrupt, s.Name, m.Count(), root.Size)
+	}
+	return m, nil
 }
 
 // Validate opens the map and runs Check over every record.
 func (s Spec) Validate(ctx context.Context, root model.Root, r chunk.Reader) error {
-	return errNotImplemented
+	m, err := s.Open(ctx, ReadOnly(r), root)
+	if err != nil {
+		return err
+	}
+	it, err := m.IterRange(ctx, nil, nil)
+	if err != nil {
+		return err
+	}
+	for {
+		k, v, ok, err := it.Next()
+		if err != nil || !ok {
+			return err
+		}
+		if err := s.Check(k, v); err != nil {
+			return err
+		}
+	}
 }
 
 // Walk names every chunk of the map to visit, root first, and calls each
 // for every record, so a model can walk what its records reach.
 func (s Spec) Walk(ctx context.Context, root model.Root, r chunk.Reader, visit func(h hash.Hash, leaf bool) (bool, error), each func(key, value []byte) error) error {
-	return errNotImplemented
+	if err := s.claims(root); err != nil {
+		return err
+	}
+	if each == nil {
+		each = func([]byte, []byte) error { return nil }
+	}
+	return prolly.Walk(ctx, r, s.Config, root.Hash, visit, each)
+}
+
+var kinds = map[prolly.ChangeKind]model.ChangeKind{prolly.Added: model.Added, prolly.Removed: model.Removed, prolly.Modified: model.Modified}
+
+type diffIter struct{ d *prolly.DiffIter }
+
+func (d diffIter) Next(context.Context) (model.Change, bool, error) {
+	c, ok, err := d.d.Next()
+	if err != nil || !ok {
+		return model.Change{}, false, err
+	}
+	return model.Change{Kind: kinds[c.Kind], Location: c.Key}, true, nil
 }
 
 // Diff is one change per key, located by the key.
 func (s Spec) Diff(ctx context.Context, from, to model.Root, r chunk.Reader) (model.DiffIter, error) {
-	return nil, errNotImplemented
+	fm, err := s.Open(ctx, ReadOnly(r), from)
+	if err != nil {
+		return nil, err
+	}
+	tm, err := s.Open(ctx, ReadOnly(r), to)
+	if err != nil {
+		return nil, err
+	}
+	d, err := prolly.Diff(ctx, fm, tm)
+	if err != nil {
+		return nil, err
+	}
+	return diffIter{d}, nil
 }
 
 // Merge merges per key: what only ours changed stays, what only theirs
@@ -81,7 +148,84 @@ func (s Spec) Diff(ctx context.Context, from, to model.Root, r chunk.Reader) (mo
 // (Disagreement when nil). With any conflict the result is ours and the
 // conflicts; otherwise the merged map's root.
 func (s Spec) Merge(ctx context.Context, base, ours, theirs model.Root, rw chunk.ReadWriter, resolve Resolver) (model.MergeResult, error) {
-	return model.MergeResult{}, errNotImplemented
+	if resolve == nil {
+		resolve = Disagreement
+	}
+	var maps [3]*prolly.Map
+	for i, r := range []model.Root{base, ours, theirs} {
+		var err error
+		if maps[i], err = s.Open(ctx, rw, r); err != nil {
+			return model.MergeResult{}, err
+		}
+	}
+	dOurs, err := prolly.Diff(ctx, maps[0], maps[1])
+	if err != nil {
+		return model.MergeResult{}, err
+	}
+	dTheirs, err := prolly.Diff(ctx, maps[0], maps[2])
+	if err != nil {
+		return model.MergeResult{}, err
+	}
+	ed := maps[1].Editor()
+	var conflicts []model.Conflict
+	co, okO, err := dOurs.Next()
+	if err != nil {
+		return model.MergeResult{}, err
+	}
+	ct, okT, err := dTheirs.Next()
+	if err != nil {
+		return model.MergeResult{}, err
+	}
+	for (okO || okT) && err == nil {
+		switch {
+		case !okT || (okO && bytes.Compare(co.Key, ct.Key) < 0): // only ours changed it
+			co, okO, err = dOurs.Next()
+		case !okO || bytes.Compare(ct.Key, co.Key) < 0: // only theirs changed it
+			if err = s.apply(ed, ct); err == nil {
+				ct, okT, err = dTheirs.Next()
+			}
+		default: // both changed it
+			value, put, reason := resolve(co.Key, co, ct)
+			switch {
+			case reason != "":
+				conflicts = append(conflicts, model.Conflict{Location: bytes.Clone(co.Key), Reason: reason})
+			case put:
+				err = s.put(ed, co.Key, value)
+			}
+			if err == nil {
+				if co, okO, err = dOurs.Next(); err == nil {
+					ct, okT, err = dTheirs.Next()
+				}
+			}
+		}
+	}
+	if err != nil {
+		return model.MergeResult{}, err
+	}
+	if len(conflicts) > 0 {
+		return model.MergeResult{Root: ours, Conflicts: conflicts}, nil
+	}
+	merged, err := ed.Flush(ctx)
+	if err != nil {
+		return model.MergeResult{}, err
+	}
+	return model.MergeResult{Root: s.Root(merged)}, nil
+}
+
+// apply makes theirs' change to a key in the merged map.
+func (s Spec) apply(ed *prolly.Editor, c prolly.Change) error {
+	if c.Kind == prolly.Removed {
+		return ed.Delete(c.Key)
+	}
+	return s.put(ed, c.Key, c.To)
+}
+
+// put stores a record the model has checked.
+func (s Spec) put(ed *prolly.Editor, key, value []byte) error {
+	if err := s.Check(key, value); err != nil {
+		return err
+	}
+	return ed.Put(key, value)
 }
 
 // Disagreement is the resolver every map-shaped model starts from: both
@@ -89,5 +233,15 @@ func (s Spec) Merge(ctx context.Context, base, ours, theirs model.Root, rw chunk
 // conflict; the same value on both sides is clean; different values are a
 // conflict.
 func Disagreement(key []byte, ours, theirs prolly.Change) (value []byte, put bool, reason string) {
-	return nil, false, "mapobject: not implemented"
+	switch {
+	case ours.Kind == prolly.Removed && theirs.Kind == prolly.Removed:
+		return nil, false, ""
+	case ours.Kind == prolly.Removed || theirs.Kind == prolly.Removed:
+		return nil, false, "deleted on one side and changed on the other"
+	case bytes.Equal(ours.To, theirs.To):
+		return nil, false, ""
+	case ours.Kind == prolly.Added:
+		return nil, false, "added differently on both sides"
+	}
+	return nil, false, "changed differently on both sides"
 }
