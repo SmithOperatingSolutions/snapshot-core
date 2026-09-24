@@ -49,7 +49,7 @@ type Decision struct {
 // say more: conflicts located below the key (a field, a member, a cell), in
 // the model's own location encoding, and an error, which aborts the merge
 // (a stored record that does not decode, a store failure). With any
-// conflict nothing is stored for the key.
+// conflict anywhere the merge's result is ours, so nothing is stored.
 type Decider func(key []byte, ours, theirs prolly.Change) (Decision, error)
 
 // ReadOnly wraps a reader as a store that refuses every Put, for opening a
@@ -165,6 +165,19 @@ func (s Spec) Merge(ctx context.Context, base, ours, theirs model.Root, rw chunk
 	if resolve == nil {
 		resolve = Disagreement
 	}
+	return s.MergeWith(ctx, base, ours, theirs, rw, func(key []byte, o, th prolly.Change) (Decision, error) {
+		value, put, reason := resolve(key, o, th)
+		if reason != "" {
+			return Decision{Conflicts: []model.Conflict{{Reason: reason}}}, nil
+		}
+		return Decision{Value: value, Put: put}, nil
+	})
+}
+
+// MergeWith is Merge with a Decider: a key both sides changed goes to
+// decide, whose conflicts are kept where it located them (at the key when
+// it located none) and whose error aborts the merge.
+func (s Spec) MergeWith(ctx context.Context, base, ours, theirs model.Root, rw chunk.ReadWriter, decide Decider) (model.MergeResult, error) {
 	var maps [3]*prolly.Map
 	for i, r := range []model.Root{base, ours, theirs} {
 		var err error
@@ -199,12 +212,18 @@ func (s Spec) Merge(ctx context.Context, base, ours, theirs model.Root, rw chunk
 				ct, okT, err = dTheirs.Next()
 			}
 		default: // both changed it
-			value, put, reason := resolve(co.Key, co, ct)
-			switch {
-			case reason != "":
-				conflicts = append(conflicts, model.Conflict{Location: bytes.Clone(co.Key), Reason: reason})
-			case put:
-				err = s.put(ed, co.Key, value)
+			var d Decision
+			if d, err = decide(co.Key, co, ct); err != nil {
+				break
+			}
+			for _, c := range d.Conflicts {
+				if c.Location == nil {
+					c.Location = bytes.Clone(co.Key)
+				}
+				conflicts = append(conflicts, c)
+			}
+			if d.Put { // with any conflict the merge is ours and this edit is discarded
+				err = s.put(ed, co.Key, d.Value)
 			}
 			if err == nil {
 				if co, okO, err = dOurs.Next(); err == nil {
@@ -240,11 +259,6 @@ func (s Spec) put(ed *prolly.Editor, key, value []byte) error {
 		return err
 	}
 	return ed.Put(key, value)
-}
-
-// MergeWith is Merge with a Decider. (Stub.)
-func (s Spec) MergeWith(ctx context.Context, base, ours, theirs model.Root, rw chunk.ReadWriter, decide Decider) (model.MergeResult, error) {
-	return model.MergeResult{}, errors.New("mapobject: MergeWith is not implemented")
 }
 
 // Disagreement is the resolver every map-shaped model starts from: both

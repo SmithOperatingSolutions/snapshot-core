@@ -4540,7 +4540,21 @@ run: ^TestMergePerKey$
 
 id: mapobject-a-resolvers-value-is-stored
 file: model/mapobject/mapobject.go
-find: case put:\n\t\t\t\terr = s.put(ed, co.Key, value)
-replace: case put && false:\n\t\t\t\terr = s.put(ed, co.Key, value)
+find: if d.Put { // with any conflict the merge is ours and this edit is discarded\n\t\t\t\terr = s.put(ed, co.Key, d.Value)
+replace: if d.Put && false { // with any conflict the merge is ours and this edit is discarded\n\t\t\t\terr = s.put(ed, co.Key, d.Value)
 pkg: ./model/mapobject
 run: ^TestAResolverCombinesBothSides$
+
+id: mapobject-a-deciders-error-aborts-the-merge
+file: model/mapobject/mapobject.go
+find: if d, err = decide(co.Key, co, ct); err != nil {\n\t\t\t\tbreak\n\t\t\t}
+replace: if d, _ = decide(co.Key, co, ct); err != nil {\n\t\t\t\tbreak\n\t\t\t}
+pkg: ./model/mapobject
+run: ^TestADecidersErrorAbortsTheMerge$
+
+id: mapobject-a-conflict-without-a-location-is-at-the-key
+file: model/mapobject/mapobject.go
+find: if c.Location == nil {\n\t\t\t\t\tc.Location = bytes.Clone(co.Key)\n\t\t\t\t}
+replace: if c.Location == nil && false {\n\t\t\t\t\tc.Location = bytes.Clone(co.Key)\n\t\t\t\t}
+pkg: ./model/mapobject
+run: ^TestADeciderLocatesConflictsBelowTheKey$
