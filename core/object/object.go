@@ -17,9 +17,9 @@ import (
 
 	"github.com/SmithOperatingSolutions/snapshot-core/core/chunk"
 	"github.com/SmithOperatingSolutions/snapshot-core/core/hash"
-	"github.com/SmithOperatingSolutions/snapshot-core/core/internal/wire"
 	"github.com/SmithOperatingSolutions/snapshot-core/core/model"
 	"github.com/SmithOperatingSolutions/snapshot-core/core/prolly"
+	"github.com/SmithOperatingSolutions/snapshot-core/core/wire"
 )
 
 // RefSize is the length of an encoded object reference.

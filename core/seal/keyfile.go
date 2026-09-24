@@ -6,7 +6,7 @@ import (
 	"fmt"
 
 	"github.com/SmithOperatingSolutions/snapshot-core/core/dnx"
-	"github.com/SmithOperatingSolutions/snapshot-core/core/internal/wire"
+	"github.com/SmithOperatingSolutions/snapshot-core/core/wire"
 )
 
 // Argon2Params are the passphrase KDF's costs.

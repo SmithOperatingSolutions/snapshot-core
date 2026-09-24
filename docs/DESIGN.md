@@ -50,7 +50,7 @@ Lower rows never import higher rows.
 | Layer | Packages | Imports |
 | --- | --- | --- |
 | Adapter | `core/dnx` | disknexus-engine (the only importer), stdlib |
-| Primitives | `core/hash`, `core/auth`, `core/internal/wire` | `core/dnx` (hash only), stdlib |
+| Primitives | `core/hash`, `core/auth`, `core/wire` (the bounded reader and writer every record decoder is built on, public for models outside the core) | `core/dnx` (hash only), stdlib |
 | Crypto, chunking | `core/seal`, `core/cdc`, `core/boundary` | primitives, `core/dnx` (seal only) |
 | Backends | `core/blob`, `core/blob/{mem,local,multivol,s3,cache}` | stdlib, AWS SDK (s3 only) |
 | Packs | `core/pack`, `core/dedup` | seal, hash, zstd |
@@ -128,7 +128,7 @@ one, a repository keeps its objects there and its root elsewhere.
 
 ## 5. On-disk formats (a compatibility contract)
 
-All integers are little-endian; varints are minimal LEB128 (`core/internal/wire`,
+All integers are little-endian; varints are minimal LEB128 (`core/wire`,
 which refuses anything else). Every format has a hand-written decoder and a fuzz
 target; packs and index objects also have a checked-in v1 file that must read
 forever (`core/pack/testdata/pack_v1.bin`, `core/dedup/testdata/index_v1.bin`).
