@@ -6,6 +6,7 @@ import (
 	"io"
 	"testing"
 	"testing/iotest"
+	"time"
 
 	"github.com/SmithOperatingSolutions/snapshot-core/core/cdc"
 	"github.com/SmithOperatingSolutions/snapshot-core/core/dnx"
@@ -124,7 +125,7 @@ func TestTheChunkerCutsWhereDisknexusCuts(t *testing.T) {
 	}
 	// A reader that makes no progress is given up on, as bufio does.
 	c, _ = cdc.New(noProgress{}, g)
-	if _, err := c.Next(); !errors.Is(err, io.ErrNoProgress) {
+	if err := nextWithin(t, c.Next, 5*time.Second); !errors.Is(err, io.ErrNoProgress) {
 		t.Fatalf("a reader returning (0, nil) forever: %v, want io.ErrNoProgress", err)
 	}
 	// Chunks are the caller's: cutting on does not alter one already returned.
@@ -182,4 +183,23 @@ func streamCuttingExactlyAtMin(data []byte, g cdc.Geometry) []byte {
 		}
 	}
 	return nil
+}
+
+// nextWithin calls next and returns its error, or fails the test if it has
+// not returned within d: a chunker that never gives up on a reader must
+// fail this test, not hang it.
+func nextWithin(t *testing.T, next func() ([]byte, error), d time.Duration) error {
+	t.Helper()
+	errs := make(chan error, 1)
+	go func() {
+		_, err := next()
+		errs <- err
+	}()
+	select {
+	case err := <-errs:
+		return err
+	case <-time.After(d):
+		t.Fatalf("Next did not return in %v on a reader that makes no progress", d)
+		return nil
+	}
 }

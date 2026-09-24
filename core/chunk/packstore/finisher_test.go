@@ -22,16 +22,30 @@ type gatedPacks struct {
 	blob.BlobStore
 	mu      sync.Mutex
 	gate    chan struct{} // closed to release every waiting put
-	hold    int           // pack puts the gate holds; the rest pass (0: every one)
+	once    sync.Once
+	hold    int // pack puts the gate holds; the rest pass (0: every one)
 	held    int
 	waiting int
 	peak    int
 	landed  []string // pack and root events in the order they completed
 }
 
-func newGated(bs blob.BlobStore) *gatedPacks {
+func newGated(t *testing.T, bs blob.BlobStore) *gatedPacks {
 	return &gatedPacks{BlobStore: bs, gate: make(chan struct{})}
 }
+
+// gatedStore opens a small-packs store over a gate and arranges for the
+// gate to open before the store closes: cleanups run last first, so a
+// test that fails with a put held must not leave Close waiting for it.
+func gatedStore(t *testing.T, g *gatedPacks) *packstore.Store {
+	t.Helper()
+	s := smallPacks(t, g)
+	t.Cleanup(g.release)
+	return s
+}
+
+// release lets every held put through, once.
+func (g *gatedPacks) release() { g.once.Do(func() { close(g.gate) }) }
 
 func (g *gatedPacks) Put(ctx context.Context, name string, r io.Reader, size int64) error {
 	g.mu.Lock()
@@ -127,8 +141,8 @@ func putAll(s *packstore.Store, chunks [][]byte) <-chan error {
 // goes on storing chunks for the pack after it, and a chunk of the held
 // pack still reads, from memory. Released, everything lands and publishes.
 func TestAnUploadDoesNotHoldUpTheWriter(t *testing.T) {
-	g := newGated(mem.New())
-	s := smallPacks(t, g)
+	g := newGated(t, mem.New())
+	s := gatedStore(t, g)
 	chunks, hs := chunksOf("held", 16) // two 32 KiB packs' worth: the first is held
 	done := putAll(s, chunks)
 	g.waitingPuts(t, 1)
@@ -143,7 +157,7 @@ func TestAnUploadDoesNotHoldUpTheWriter(t *testing.T) {
 	if got, err := s.Get(ctx, hs[0]); err != nil || len(got) != 4<<10 {
 		t.Fatalf("a chunk of the pack being uploaded reads as %d bytes, %v; want it from memory", len(got), err)
 	}
-	close(g.gate)
+	g.release()
 	if err := s.CompareAndSetRoot(ctx, hash.Hash{}, hs[0]); err != nil {
 		t.Fatalf("publishing once the uploads are released: %v", err)
 	}
@@ -158,8 +172,8 @@ func TestAnUploadDoesNotHoldUpTheWriter(t *testing.T) {
 // Memory stays bounded: with every upload held, at most two packs are in
 // flight; a writer with a third full pack waits for one to land.
 func TestAtMostTwoPacksAreInFlight(t *testing.T) {
-	g := newGated(mem.New())
-	s := smallPacks(t, g)
+	g := newGated(t, mem.New())
+	s := gatedStore(t, g)
 	chunks, _ := chunksOf("many", 48) // six packs' worth
 	done := putAll(s, chunks)
 	g.waitingPuts(t, 2)
@@ -168,7 +182,7 @@ func TestAtMostTwoPacksAreInFlight(t *testing.T) {
 		t.Fatal("with every upload held the writer stored six packs' worth without waiting: nothing bounds the packs in flight")
 	case <-time.After(200 * time.Millisecond):
 	}
-	close(g.gate)
+	g.release()
 	if err := <-done; err != nil {
 		t.Fatal(err)
 	}
@@ -183,9 +197,9 @@ func TestAtMostTwoPacksAreInFlight(t *testing.T) {
 // A publish waits for every upload: the root is swapped only once each
 // pack the chunks are in has landed.
 func TestAPublishWaitsForItsUploads(t *testing.T) {
-	g := newGated(mem.New())
+	g := newGated(t, mem.New())
 	g.hold = 1 // the first pack alone is held; the publish's own upload passes
-	s := smallPacks(t, g)
+	s := gatedStore(t, g)
 	chunks, hs := chunksOf("published", 16)
 	if err := <-putAll(s, chunks); err != nil {
 		t.Fatal(err)
@@ -193,7 +207,7 @@ func TestAPublishWaitsForItsUploads(t *testing.T) {
 	go func() {
 		g.waitingPuts(t, 1)
 		time.Sleep(50 * time.Millisecond) // the swap must not come before the release
-		close(g.gate)
+		g.release()
 	}()
 	if err := s.CompareAndSetRoot(ctx, hash.Hash{}, hs[0]); err != nil {
 		t.Fatal(err)
@@ -243,12 +257,14 @@ func (g *gatedPacks) landedPacks(t *testing.T, n int) []string {
 // even starts) reads from the unfinished pack: the finisher is held at
 // that point and the read must not wait for it.
 func TestAChunkOfAPackBeingFinishedReads(t *testing.T) {
-	g := newGated(mem.New())
-	close(g.gate) // uploads pass; the hold is on the finish
-	s := smallPacks(t, g)
+	g := newGated(t, mem.New())
+	g.release() // uploads pass; the hold is on the finish
+	s := gatedStore(t, g)
 	held := make(chan struct{})
 	release := make(chan struct{})
-	var once sync.Once
+	var once, freed sync.Once
+	free := func() { freed.Do(func() { close(release) }) }
+	t.Cleanup(free)                  // a test that fails with a finisher held must not leave Close waiting for it
 	packstore.HoldFinish(s, func() { // every finisher waits; the first one's arrival is the signal
 		once.Do(func() { close(held) })
 		<-release
@@ -263,7 +279,7 @@ func TestAChunkOfAPackBeingFinishedReads(t *testing.T) {
 	if _, err := s.Put(ctx, chunks[0]); err != nil {
 		t.Fatalf("storing a chunk of a pack being finished again: %v", err)
 	}
-	close(release)
+	free()
 	if err := <-done; err != nil {
 		t.Fatal(err)
 	}

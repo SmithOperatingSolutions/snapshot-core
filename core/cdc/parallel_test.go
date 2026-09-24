@@ -125,7 +125,7 @@ func TestTheParallelChunkerCutsWhereTheChunkerCuts(t *testing.T) {
 		t.Fatalf("a failing read: parallel %d chunks and %v, the chunker %d and %v", len(got), gotErr, len(want), wantErr)
 	}
 	p, _ = cdc.NewParallel(noProgress{}, g, 0)
-	if _, err := p.Next(); !errors.Is(err, io.ErrNoProgress) {
+	if err := nextWithin(t, p.Next, 5*time.Second); !errors.Is(err, io.ErrNoProgress) {
 		t.Fatalf("a reader returning (0, nil) forever: %v, want io.ErrNoProgress", err)
 	}
 	p.Close()
@@ -228,4 +228,23 @@ func (b *thenBlocks) Read(p []byte) (int, error) {
 		select {}
 	}
 	return n, err
+}
+
+// nextWithin calls next and returns its error, or fails the test if it has
+// not returned within d: a chunker that never gives up must fail this
+// test, not hang it.
+func nextWithin(t *testing.T, next func() ([]byte, error), d time.Duration) error {
+	t.Helper()
+	errs := make(chan error, 1)
+	go func() {
+		_, err := next()
+		errs <- err
+	}()
+	select {
+	case err := <-errs:
+		return err
+	case <-time.After(d):
+		t.Fatalf("Next did not return in %v on a reader that makes no progress", d)
+		return nil
+	}
 }

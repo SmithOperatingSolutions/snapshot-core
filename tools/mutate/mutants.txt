@@ -721,8 +721,8 @@ run: ^TestWriterLimits$
 
 id: pack-refuses-duplicates
 file: core/pack/pack.go
-find: if _, ok := w.entries[h]; ok {\n\t\treturn ErrDup
-replace: if _, ok := w.entries[h]; ok && false {\n\t\treturn ErrDup
+find: if _, ok := w.entries[h]; ok {\n\t\treturn ErrDup\n\t}\n\tif len(w.entries) > 0
+replace: if _, ok := w.entries[h]; ok && false {\n\t\treturn ErrDup\n\t}\n\tif len(w.entries) > 0
 pkg: ./core/pack
 run: ^TestWriterLimits$
 
@@ -735,8 +735,8 @@ run: ^TestWriterLimits$
 
 id: pack-compresses-only-when-smaller
 file: core/pack/pack.go
-find: if z := c.enc.EncodeAll(data, nil); len(z) < len(data) {
-replace: if z := c.enc.EncodeAll(data, nil); len(z) < len(data)+1<<20 {
+find: z := c.enc.EncodeAll(data, scratch[:0])\n\tif len(z) < len(data) {
+replace: z := c.enc.EncodeAll(data, scratch[:0])\n\tif len(z) < len(data)+1<<20 {
 pkg: ./core/pack
 run: ^TestCompressesOnlyWhenItHelps$
 
@@ -952,8 +952,8 @@ run: ^TestContract$/^TooLarge$
 
 id: packstore-uploads-before-publishing
 file: core/chunk/packstore/packstore.go
-find: if err := s.upload(ctx, toUpload); err != nil {\n\t\treturn err\n\t}
-replace: _ = toUpload
+find: go func() { uploaded <- s.uploadPacks(ctx, toUpload, false) }()
+replace: go func() { uploaded <- nil }()
 pkg: ./core/chunk/packstore
 run: ^TestPublishedChunksAreDurableBeforeTheRoot$
 
@@ -1871,29 +1871,29 @@ run: ^TestANewRepoHasMainAtAnEmptyInitialCommit$
 
 id: vcs-stale-working-set-conflicts
 file: core/vcs/vcs.go
-find: if work != prev.Hash {
-replace: if work != prev.Hash && false {
+find: if work != prev.Hash {\n\t\t\treturn fmt.Errorf("%w: branch %s", ErrConflict, branch)\n\t\t}\n\t\tif keepMerge {
+replace: if work != prev.Hash && false {\n\t\t\treturn fmt.Errorf("%w: branch %s", ErrConflict, branch)\n\t\t}\n\t\tif keepMerge {
 pkg: ./core/vcs
 run: ^TestAStaleWorkingSetUpdateIsAConflict$
 
 id: vcs-conflicts-block-commits
 file: core/vcs/vcs.go
-find: } else if n > 0 {
-replace: } else if n > 0 && false {
+find: if n, err := r.conflictCount(ctx, ws); err != nil {\n\t\t\treturn err\n\t\t} else if n > 0 {
+replace: if n, err := r.conflictCount(ctx, ws); err != nil {\n\t\t\treturn err\n\t\t} else if n > 0 && false {
 pkg: ./core/vcs
 run: ^TestConflictsBlockTheCommitUntilResolved$
 
 id: vcs-merge-commit-has-two-parents
 file: core/vcs/vcs.go
-find: c.Parents = append(c.Parents, theirs.Hash)
-replace: _ = theirs.Hash
+find: theirs, err := r.readCommit(ctx, ws.Merge.Theirs)\n\t\t\tif err != nil {\n\t\t\t\treturn err\n\t\t\t}\n\t\t\tc.Parents = append(c.Parents, theirs.Hash)
+replace: theirs, err := r.readCommit(ctx, ws.Merge.Theirs)\n\t\t\tif err != nil {\n\t\t\t\treturn err\n\t\t\t}\n\t\t\t_ = theirs.Hash
 pkg: ./core/vcs
 run: ^TestConflictsBlockTheCommitUntilResolved$
 
 id: vcs-author-is-the-principal
 file: core/vcs/vcs.go
-find: Time: r.o.Clock().UTC(), Author: p.ID, Message: message}
-replace: Time: r.o.Clock().UTC(), Author: "someone", Message: message}
+find: Namespace: ws.Staged, Height: head.Height + 1,\n\t\t\tTime: r.o.Clock().UTC(), Author: p.ID, Message: message}
+replace: Namespace: ws.Staged, Height: head.Height + 1,\n\t\t\tTime: r.o.Clock().UTC(), Author: "someone", Message: message}
 pkg: ./core/vcs
 run: ^TestTheAuthorIsThePrincipal$
 
@@ -2074,8 +2074,8 @@ run: ^TestAFolderBranchesDiffsAndMerges$
 
 id: e2e-merge-commit-has-two-parents
 file: core/vcs/vcs.go
-find: c.Parents = append(c.Parents, theirs.Hash)
-replace: _ = theirs.Hash
+find: theirs, err := r.readCommit(ctx, ws.Merge.Theirs)\n\t\t\tif err != nil {\n\t\t\t\treturn err\n\t\t\t}\n\t\t\tc.Parents = append(c.Parents, theirs.Hash)
+replace: theirs, err := r.readCommit(ctx, ws.Merge.Theirs)\n\t\t\tif err != nil {\n\t\t\t\treturn err\n\t\t\t}\n\t\t\t_ = theirs.Hash
 pkg: ./e2e
 run: ^TestAFolderBranchesDiffsAndMerges$
 
@@ -2088,8 +2088,8 @@ run: ^TestAFolderBranchesDiffsAndMerges$
 
 id: e2e-commits-write-their-index
 file: core/chunk/packstore/packstore.go
-find: if err := s.writeSessionIndex(ctx); err != nil {
-replace: if err := error(nil); err != nil {
+find: written, err := s.writeSessionIndex(ctx, toUpload)
+replace: written, err := &indexWriter{}, error(nil)
 pkg: ./e2e
 run: ^TestAFolderBranchesDiffsAndMerges$
 
@@ -2138,8 +2138,8 @@ run: ^TestUpdateWorkingSetKeepsTheMergeState$
 
 id: vcs-merge-state-checked-against-the-store
 file: core/vcs/vcs.go
-find: stored, err := r.readWorkingSet(ctx, work)
-replace: stored, err := prev, error(nil)
+find: if keepMerge {\n\t\t\tstored, err := r.readWorkingSet(ctx, work)
+replace: if keepMerge {\n\t\t\tstored, err := prev, error(nil)
 pkg: ./core/vcs
 run: ^TestUpdateWorkingSetKeepsTheMergeState$
 
@@ -2167,8 +2167,8 @@ run: ^TestRefsNameOnlyStoredObjects$
 
 id: vcs-commit-message-bounded
 file: core/vcs/vcs.go
-find: if len(message) > MaxMessageLen || !utf8.ValidString(message) {\n\t\treturn Commit{}
-replace: if (len(message) > MaxMessageLen || !utf8.ValidString(message)) && false {\n\t\treturn Commit{}
+find: func (r *Repo) CommitWorkingSet(ctx context.Context, p auth.Principal, branch, message string) (Commit, error) {\n\tif err := r.branchCheck(ctx, p, auth.Write, branch); err != nil {\n\t\treturn Commit{}, err\n\t}\n\tif len(message) > MaxMessageLen || !utf8.ValidString(message) {
+replace: func (r *Repo) CommitWorkingSet(ctx context.Context, p auth.Principal, branch, message string) (Commit, error) {\n\tif err := r.branchCheck(ctx, p, auth.Write, branch); err != nil {\n\t\treturn Commit{}, err\n\t}\n\tif (len(message) > MaxMessageLen || !utf8.ValidString(message)) && false {
 pkg: ./core/vcs
 run: ^TestMessagesAreBoundedUTF8$
 

@@ -226,10 +226,8 @@ func (w *Writer) AddCompressed(h hash.Hash, rawLen int, payload []byte, codec ui
 	if w.finished || rawLen > MaxChunkSize || len(w.entries) >= MaxChunksPerPack {
 		return w.AddSealed(h, rawLen, nil, codec) // the refusal, without sealing first
 	}
-	if _, ok := w.entries[h]; ok {
-		return ErrDup
-	}
-	sealed, err := w.Seal(h, payload)
+	sealed, err := w.Seal(h, payload) // a duplicate is refused by AddSealed, after a seal it did not need
+
 	if err != nil {
 		return err
 	}
