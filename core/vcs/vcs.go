@@ -58,6 +58,9 @@ var (
 	ErrUnresolvedConflicts = errors.New("vcs: unresolved merge conflicts")
 	ErrMergeState          = errors.New("vcs: only merging, resolving, committing and abandoning change a merge in progress")
 	ErrNoMerge             = errors.New("vcs: no merge in progress")
+	// ErrConflictTooLarge refuses a merge whose model reported a conflict
+	// larger than a conflict record holds; nothing is written.
+	ErrConflictTooLarge = errors.New("vcs: a model reported a conflict too large to record")
 	// ErrSessionLost is the chunk store's: GC deleted writes the repository
 	// had not published, and the host must reopen it and write again.
 	ErrSessionLost = chunk.ErrSessionLost
