@@ -4644,3 +4644,45 @@ find: case ours.Root() == theirs.Root() && !reg.Accumulates():
 replace: case ours.Root() == theirs.Root() && !reg.Accumulates() && false:
 pkg: ./core/merge
 run: ^TestTheSameChangesOnBothSidesDoNoWork$
+
+id: contract-an-accumulating-model-may-add-the-same-change
+file: model/contract/contract.go
+find: case model.Accumulates(m) && o == th && o != b:
+replace: case false && model.Accumulates(m) && o == th && o != b:
+pkg: ./model/contract
+run: ^TestIdentityVerdict$
+
+id: contract-only-the-same-change-is-accumulated
+file: model/contract/contract.go
+find: case model.Accumulates(m) && o == th && o != b:
+replace: case model.Accumulates(m) && o != b:
+pkg: ./model/contract
+run: ^TestIdentityVerdict$
+
+id: contract-no-change-is-not-accumulated
+file: model/contract/contract.go
+find: case model.Accumulates(m) && o == th && o != b:
+replace: case model.Accumulates(m) && o == th:
+pkg: ./model/contract
+run: ^TestIdentityVerdict$
+
+id: contract-an-accumulated-merge-validates
+file: model/contract/contract.go
+find: if err := valid(r.Root); err != nil {
+replace: if err := valid(r.Root); err != nil && false {
+pkg: ./model/contract
+run: ^TestIdentityVerdict$
+
+id: contract-an-identity-is-clean
+file: model/contract/contract.go
+find: case len(r.Conflicts) != 0:\n\t\treturn fmt.Errorf("root %+v with %d conflicts, want none", r.Root, len(r.Conflicts))
+replace: case len(r.Conflicts) < 0:\n\t\treturn fmt.Errorf("root %+v with %d conflicts, want none", r.Root, len(r.Conflicts))
+pkg: ./model/contract
+run: ^TestIdentityVerdict$
+
+id: contract-an-identity-is-exact
+file: model/contract/contract.go
+find: case r.Root != want:\n\t\treturn fmt.Errorf("root %+v, want %+v", r.Root, want)
+replace: case r.Root != want && false:\n\t\treturn fmt.Errorf("root %+v, want %+v", r.Root, want)
+pkg: ./model/contract
+run: ^TestIdentityVerdict$

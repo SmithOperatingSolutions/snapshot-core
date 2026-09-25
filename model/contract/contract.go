@@ -2,7 +2,9 @@
 // (Storage Core Spec, "Data-model plugins": round-trip, determinism,
 // diff-matches-edits, merge(b, o, o) == o; each model also fuzzes its own
 // decoders). A model must also walk (model.Walker), so GC can collect a
-// repository holding its objects.
+// repository holding its objects. A model that accumulates
+// (model.Accumulator) may merge the same change on both sides to more than
+// that change: its merge(b, o, o) must be clean and valid, not o.
 package contract
 
 import (
@@ -160,9 +162,22 @@ func mergeIdentities(t *testing.T, s Subject) {
 	}
 }
 
-// identityVerdict judges a merge identity. (Stub.)
+// identityVerdict judges a merge identity: the merge is clean and is want.
+// A model that accumulates (model.Accumulator) merges the same change on
+// both sides as two changes, so its merge(b, o, o) need not be o; it must
+// still be clean and an object the model validates.
 func identityVerdict(m model.Model, b, o, th, want model.Root, r model.MergeResult, valid func(model.Root) error) error {
-	return errors.New("identityVerdict: not implemented")
+	switch {
+	case len(r.Conflicts) != 0:
+		return fmt.Errorf("root %+v with %d conflicts, want none", r.Root, len(r.Conflicts))
+	case model.Accumulates(m) && o == th && o != b:
+		if err := valid(r.Root); err != nil {
+			return fmt.Errorf("the model accumulated the same change on both sides to %+v, which it does not validate: %w", r.Root, err)
+		}
+	case r.Root != want:
+		return fmt.Errorf("root %+v, want %+v", r.Root, want)
+	}
+	return nil
 }
 
 // collidingEditsConflict: two edits the model says cannot combine merge to
