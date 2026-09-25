@@ -5900,8 +5900,6 @@ replace: if ok && s.condemned[loc.Pack.Name] && false {\n\t\t\tcarry = append(ca
 pkg: ./core/chunk/packstore
 run: ^TestRegression_SC34_ACountedChunkOnlyARepackedPackHoldsSurvivesItsExpiry$
 
-
-
 id: local-journal-open-error-is-not-busy
 file: core/blob/local/local.go
 find: os.O_RDWR|os.O_CREATE|os.O_APPEND, filePerm)\n\tif err != nil {\n\t\treturn nil, err

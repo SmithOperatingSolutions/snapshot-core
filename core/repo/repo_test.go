@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	mrand "math/rand/v2"
+	"path/filepath"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -16,6 +17,7 @@ import (
 
 	"github.com/SmithOperatingSolutions/snapshot-core/core/auth"
 	"github.com/SmithOperatingSolutions/snapshot-core/core/blob"
+	"github.com/SmithOperatingSolutions/snapshot-core/core/blob/local"
 	"github.com/SmithOperatingSolutions/snapshot-core/core/blob/mem"
 	"github.com/SmithOperatingSolutions/snapshot-core/core/boundary"
 	"github.com/SmithOperatingSolutions/snapshot-core/core/cdc"
@@ -1157,5 +1159,58 @@ func TestARepositoryOpenedWithTheJournalCommitsThroughIt(t *testing.T) {
 	defer after.Close()
 	if head, err := after.Head(ctx, alice, vcs.MainBranch); err != nil || head.Hash != c.Hash {
 		t.Fatalf("after Close another open sees head %s (%v), want the journaled commit %s", head.Hash.Short(), err, c.Hash.Short())
+	}
+}
+
+// The owner's decision on #34: the journal is on by default on the disk
+// backends (blob/local, blob/multivol), and off on blob/mem, where it
+// measured worse with many writers; JournalOff turns it off.
+func TestTheJournalIsOnByDefaultOnDisk(t *testing.T) {
+	commitAndLook := func(t *testing.T, bs blob.BlobStore, mode packstore.JournalMode) (journaled bool) {
+		t.Helper()
+		o := options(t, bs, keyring(t))
+		r := initRepo(t, o)
+		_ = r.Close()
+		o.Journal, o.JournalInterval = mode, time.Hour
+		rw, err := repo.Open(ctx, o)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer rw.Close()
+		ws, err := rw.WorkingSet(ctx, alice, vcs.MainBranch)
+		if err != nil {
+			t.Fatal(err)
+		}
+		c, err := rw.Commit(ctx, alice, vcs.MainBranch, ws, ws.Working, "default")
+		if err != nil {
+			t.Fatal(err)
+		}
+		o.Journal = packstore.JournalOff
+		other, err := repo.Open(ctx, o)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer other.Close()
+		head, err := other.Head(ctx, alice, vcs.MainBranch)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return head.Hash != c.Hash
+	}
+	disk := func(t *testing.T) blob.BlobStore {
+		bs, err := local.Create(filepath.Join(t.TempDir(), "store"), local.Options{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return bs
+	}
+	if !commitAndLook(t, disk(t), packstore.JournalDefault) {
+		t.Error("with default options on blob/local a commit published at once: the journal is not on by default on disk")
+	}
+	if commitAndLook(t, disk(t), packstore.JournalOff) {
+		t.Error("with JournalOff on blob/local a commit was journaled: the journal cannot be turned off")
+	}
+	if commitAndLook(t, mem.New(), packstore.JournalDefault) {
+		t.Error("with default options on blob/mem a commit was journaled: mem's default is off")
 	}
 }
