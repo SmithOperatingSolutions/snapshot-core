@@ -24,6 +24,7 @@ exact commit the spec's package map was reviewed at. That is the pin.
 | D10 | The chunker (2026-09-23, #10) | `core/cdc` rolls disknexus's Buzhash and cut rules over each read buffer, byte for byte disknexus's boundaries; disknexus stays the oracle, imported in `core/dnx` and held to by `core/dnx/compat`'s goldens and a differential test. `cdc.Parallel` marks where the masks hit on many goroutines and places the cuts on one, since the hash at a byte depends on the 48 bytes before it alone: the same boundaries at 2.4 GB/s on sixteen threads | disknexus reads a byte at a time and bounds a write at about 200 MB/s on one core; ours cuts the same 8,531 chunks of 256 MiB at 750 MB/s serially. The spec's rule 3 allows a package of our own beside it |
 | D11 | The S3 tier's server (2026-09-24) | SeaweedFS (`chrislusf/seaweedfs`, pinned by digest in `tools/ci`), started in Docker by the `s3` step with its credentials from the environment. It honors If-None-Match and If-Match, so the probe and the root swap run as on S3; it lists a directory's children right after the directory rather than in byte order, which the contract is told (`contract.AnyTotalOrder`: one total order kept across pages, prefixes and `after`) and no caller in the core depends on (GC's orphan scan and the repo's config listing page with `after` and read sets; multivol merges only its own local volumes) | MinIO ended its public distribution (quay.io, Docker Hub and dl.min.io all gone on 2026-09-24); a fork of MinIO built from source remains the fallback |
 | D9 | Where the Engine Spec lives | Its L4 (tables) is implemented in a separate, consuming repository. Its L0–L3 rules apply here as below | Owner decision |
+| D12 | Small objects' write path (2026-09-25, #40) | A stream whose reader says it holds under 256 KiB (`cdc.Lener`) is cut and stored on the caller's goroutine, and `cdc.New` sizes its buffers to the stream; a reader that does not say its length takes the path it took before. `repo.Chunks()` is also a `chunk.Preparer` and `chunk.Flusher` | A 100-byte object's write was about 200 µs of CPU: 24% zeroing the serial chunker's 512 KiB and 64 KiB buffers, which the parallel path built and never used, then the parallel path's 34 goroutines and two 64 KiB blocks for one chunk; now about 7 µs, 30 times the batch rate (`tools/commitbench -only batch`). On that harness the serial path wrote 16 KiB objects 2.6× as fast, 64 KiB 2.0×, 128 KiB 1.6×, 512 KiB 1.3×, 2 MiB even; the bar sits at the prolly inline limit. The size decides only how much a read asks for, never where a cut falls |
 
 ## 2. How the Engine Spec's L0–L3 land here
 
@@ -192,7 +193,20 @@ can refuse them) and a fuzz target.
   `cdc.Parallel` reads and marks the stream on its own goroutines and the
   caller's places the cuts and stores in stream order, so the stream is
   the same at any worker count; at most about 2×Workers chunks and a few
-  blocks are in flight. A pending pack's buffer starts at about what the
+  blocks are in flight. A stream that says it is shorter than 256 KiB
+  (`cdc.Lener`: a `bytes.Reader`, `strings.Reader` or `bytes.Buffer`)
+  takes the serial path instead, and the serial chunker's buffers are
+  sized to the stream, its chunk buffer growing toward Max and a Lener
+  read in a buffer no larger than it holds (#40, D12): a 100-byte object
+  wrote in about 200 µs, most of it zeroing 576 KiB of buffers and
+  starting 34 goroutines and two 64 KiB blocks for one chunk, and writes
+  in about 7 µs (`TestSlowSmallObjectsWriteInMicroseconds`,
+  `TestRegression_SC40_AShortStreamAllocatesWhatItNeeds`). A host
+  reaches both halves and `Flush` through `repo.Chunks()`: its
+  `chunk.ReadWriter` is also a `chunk.Preparer` and a `chunk.Flusher`
+  (every method of the store but the root's), so `stream.Write` and
+  `model/blob`'s `Write` find them by type assertion as on the store
+  itself, and a host storing chunks itself asserts them the same way. A pending pack's buffer starts at about what the
   last pending pack held (at least 64 KiB) and doubles as it fills, up to the
   pack's size: the packs a large write cuts full start the next at the pack's
   size, so each frame is copied once, and a small publish allocates for a
