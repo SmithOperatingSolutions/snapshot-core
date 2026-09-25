@@ -276,13 +276,21 @@ func TestForgedJournalRecordsAreRefused(t *testing.T) {
 		"codec 2":           func(p *plainRecord) { p.codecOverride = map[int]uint8{1: 2} },
 		"raw over a chunk":  func(p *plainRecord) { p.rawOverride = map[int]uint64{0: pack.MaxChunkSize + 1} },
 		"stored over a frame": func(p *plainRecord) {
-			p.storedOverride = map[int]uint64{0: maxFrameStored + 1}
+			over := jframe{h: hash.Sum([]byte("over")), raw: pack.MaxChunkSize, codec: pack.CodecRaw, sealed: make([]byte, maxFrameStored+1)}
+			p.frameList, p.frames = []jframe{over}, 1
 		},
 		"stored past the end": func(p *plainRecord) { p.storedOverride = map[int]uint64{1: 1 << 20} },
-		"frames over a pack":  func(p *plainRecord) { p.frames = pack.MaxChunksPerPack + 1 },
+		"frames over a pack": func(p *plainRecord) {
+			empty := jframe{h: hash.Sum(nil), codec: pack.CodecRaw, sealed: make([]byte, pack.FrameOverhead)}
+			p.frameList = make([]jframe, pack.MaxChunksPerPack+1)
+			for i := range p.frameList {
+				p.frameList[i] = empty
+			}
+			p.frames = uint64(len(p.frameList))
+		},
 		"frames past the end": func(p *plainRecord) { p.frames = 5 },
 		"counted over the limit": func(p *plainRecord) {
-			p.counted = maxCounted + 1
+			p.counted, p.countedList = maxCounted+1, make([]hash.Hash, maxCounted+1)
 		},
 		"counted past the end": func(p *plainRecord) { p.counted = 3 },
 		"trailing bytes":       func(p *plainRecord) { p.trailing = []byte{0} },
@@ -362,21 +370,20 @@ func fillTo(t testing.TB, kr *seal.Keyring, n int) []byte {
 	return b
 }
 
-// A header that claims more than any writer leaves is not a record: it is
-// neither opened nor read into memory, and nothing after it replays.
+// A record longer than any writer leaves is not a record, even sealed
+// under the right key: it is not opened, and nothing after it replays.
 func TestAJournalHeaderOverTheLimitIsNotARecord(t *testing.T) {
 	kr := goldenKeyring(t)
 	recs := chainedRecords(t, kr, goldenRepo, 1)
 	b, ends := sealRecords(t, kr, goldenRepo, recs)
-	var h wire.Writer
-	h.Raw([]byte(journalMagic))
-	h.U16(journalV1)
-	h.U32(maxJournal + 1)
-	h.Raw(make([]byte, 32))
-	j := append(append(append([]byte(nil), b...), h.Bytes()...), make([]byte, 1024)...)
-	got, used, err := decodeJournal(kr, goldenRepo, j)
+	at := sealJournalPlain(t, kr, goldenRepo, fillTo(t, kr, maxJournal))
+	if got, _, err := decodeJournal(kr, goldenRepo, at); err != nil || len(got) != 1 {
+		t.Fatalf("positive control: a record of exactly %d bytes: %d records (%v), want it", maxJournal, len(got), err)
+	}
+	over := sealJournalPlain(t, kr, goldenRepo, fillTo(t, kr, maxJournal+1))
+	got, used, err := decodeJournal(kr, goldenRepo, append(append([]byte(nil), b...), over...))
 	if err != nil || len(got) != 1 || used != ends[0] {
-		t.Fatalf("a header claiming %d bytes after one record: %d records over %d bytes (%v), want the one record", maxJournal+1, len(got), used, err)
+		t.Fatalf("a sealed record of %d bytes after one record: %d records over %d bytes (%v), want the one record alone", maxJournal+1, len(got), used, err)
 	}
 }
 

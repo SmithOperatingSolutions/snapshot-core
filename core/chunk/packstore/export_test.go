@@ -292,3 +292,35 @@ func ForgeJournalFrame(ctx context.Context, bs blob.Journaler, kr *seal.Keyring,
 	}
 	return nil
 }
+
+// ForgeJournalRoot rewrites the journal's last record so it sets a root no
+// record carries and the store never held, sealed under the right key.
+func ForgeJournalRoot(ctx context.Context, bs blob.Journaler, kr *seal.Keyring, repo seal.RepoID) error {
+	j, err := bs.OpenJournal(ctx)
+	if err != nil {
+		return err
+	}
+	defer j.Close()
+	b, err := j.Read(ctx, maxJournal)
+	if err != nil {
+		return err
+	}
+	recs, _, err := decodeJournal(kr, repo, b)
+	if err != nil || len(recs) == 0 {
+		return fmt.Errorf("%d records: %w", len(recs), err)
+	}
+	recs[len(recs)-1].next = hash.Sum([]byte("a root nobody stored"))
+	if err := j.Reset(ctx); err != nil {
+		return err
+	}
+	for i := range recs {
+		sealed, err := recs[i].seal(kr, repo)
+		if err != nil {
+			return err
+		}
+		if err := j.Append(ctx, sealed); err != nil {
+			return err
+		}
+	}
+	return nil
+}

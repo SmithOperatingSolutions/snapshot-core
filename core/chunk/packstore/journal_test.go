@@ -434,6 +434,9 @@ func TestAReplayVerifiesItsFrames(t *testing.T) {
 	bs, kr := mem.New(), keyring(t)
 	s := openJournaled(t, bs, kr, time.Hour)
 	first := commit(t, s, hash.Hash{}, payload("first", 100))
+	if _, err := s.Put(ctx, payload("not the root", 100)); err != nil { // the frame forged: not the root, which the replay checks apart
+		t.Fatal(err)
+	}
 	_ = commit(t, s, first, payload("second", 100))
 	packstore.Abandon(s)
 	if err := packstore.ForgeJournalFrame(ctx, bs, kr, repo); err != nil {
@@ -588,3 +591,151 @@ func TestTheJournalOptionOnABackendWithoutOne(t *testing.T) {
 }
 
 type noJournal struct{ blob.BlobStore }
+
+// A journal's commits counted on chunks already stored; a replay checks
+// they survived any GC since, as a publish does (DESIGN §9): one whose
+// pack GC expired is ErrSessionLost, and nothing is published over it. A
+// live journal writer checks the same at each commit. GC runs while the
+// writer holds the journal, so it cannot replay it first.
+func TestAJournalChecksTheChunksItCountedOn(t *testing.T) {
+	for _, crash := range []bool{false, true} {
+		t.Run(fmt.Sprintf("crash=%v", crash), func(t *testing.T) {
+			bs, kr := mem.New(), keyring(t)
+			hs := published(t, open(t, bs, kr), "a, the root", "b, garbage")
+			s, err := packstore.Open(ctx, journalOptions(bs, kr, time.Hour))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := s.Put(ctx, []byte("b, garbage")); err != nil { // counted on: b's pack
+				t.Fatal(err)
+			}
+			h := commit(t, s, hs[0], payload("journaled", 100))
+			round(t, bs, kr, liveSet(hs[0]), t0)
+			out := round(t, bs, kr, liveSet(hs[0]), t0.Add(time.Hour))
+			if len(out.Expired) != 1 {
+				t.Fatalf("fixture: expired %v, want b's pack", out.Expired)
+			}
+			remove(t, bs, out.Expired)
+			if !crash {
+				h2, err := s.Put(ctx, payload("third", 100))
+				if err != nil {
+					t.Fatal(err)
+				}
+				if err := s.CompareAndSetRoot(ctx, h, h2); !errors.Is(err, chunk.ErrSessionLost) {
+					t.Fatalf("a journaled commit after GC expired a chunk the journal counted on = %v, want ErrSessionLost", err)
+				}
+				packstore.Abandon(s)
+			} else {
+				packstore.Abandon(s)
+				if s2, err := packstore.Open(ctx, journalOptions(bs, kr, time.Hour)); !errors.Is(err, chunk.ErrSessionLost) {
+					if err == nil {
+						_ = s2.Close()
+					}
+					t.Fatalf("replaying a journal that counted on a chunk GC expired = %v, want ErrSessionLost", err)
+				}
+			}
+			if got := publishedRoot(t, bs, kr); got != hs[0] {
+				t.Fatalf("the backend's root moved to %s over a chunk GC expired", got.Short())
+			}
+		})
+	}
+}
+
+// A commit too large to journal publishes instead, and so does one that
+// would take the journal past its limit.
+func TestACommitTooLargeToJournalPublishes(t *testing.T) {
+	bs, kr := mem.New(), keyring(t)
+	s := openJournaled(t, bs, kr, time.Hour)
+	root := commit(t, s, hash.Hash{}, payload("first", 100))
+	small := commit(t, s, root, payload("small", 100))
+	if got := publishedRoot(t, bs, kr); got != root {
+		t.Fatalf("positive control: a small commit published (root %s)", got.Short())
+	}
+	put := func(seed string, n int) {
+		for i := range n {
+			if _, err := s.Put(ctx, payload(fmt.Sprintf("%s-%d", seed, i), 1<<20)); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	put("big", 17) // 17 MiB of incompressible chunks in the pending pack
+	big := commit(t, s, small, payload("over the record limit", 100))
+	if got := publishedRoot(t, bs, kr); got != big {
+		t.Fatalf("a commit of 17 MiB left the backend at %s, want it published at %s", got.Short(), big.Short())
+	}
+	put("half", 9)
+	half := commit(t, s, big, payload("9 MiB", 100))
+	if got := publishedRoot(t, bs, kr); got != big {
+		t.Fatalf("positive control: a 9 MiB commit published (root %s, want %s)", got.Short(), big.Short())
+	}
+	put("more", 9)
+	more := commit(t, s, half, payload("past the journal", 100))
+	if got := publishedRoot(t, bs, kr); got != more {
+		t.Fatalf("a commit that would take the journal past %d MiB left the backend at %s, want it published", 16, got.Short())
+	}
+}
+
+// A replay refuses a journal whose last root is a chunk it does not hold.
+func TestAReplayRefusesARootItDoesNotHold(t *testing.T) {
+	bs, kr := mem.New(), keyring(t)
+	s := openJournaled(t, bs, kr, time.Hour)
+	first := commit(t, s, hash.Hash{}, payload("first", 100))
+	_ = commit(t, s, first, payload("second", 100))
+	packstore.Abandon(s)
+	if err := packstore.ForgeJournalRoot(ctx, bs, kr, repo); err != nil {
+		t.Fatal(err)
+	}
+	if s2, err := packstore.Open(ctx, journalOptions(bs, kr, time.Hour)); !errors.Is(err, chunk.ErrCorrupt) {
+		if err == nil {
+			_ = s2.Close()
+		}
+		t.Fatalf("replaying a journal whose root it does not hold = %v, want ErrCorrupt", err)
+	}
+	if got := publishedRoot(t, bs, kr); got != first {
+		t.Fatalf("the backend's root moved to %s", got.Short())
+	}
+}
+
+// A store without the journal, opened while a journal writer was live,
+// refuses to publish over the journal that writer left when it died.
+func TestAWriterWithoutTheJournalRefusesAJournalLeftBehind(t *testing.T) {
+	bs, kr := mem.New(), keyring(t)
+	js := openJournaled(t, bs, kr, time.Hour)
+	first := commit(t, js, hash.Hash{}, payload("first", 100))
+	plain := open(t, bs, kr)
+	_ = commit(t, js, first, payload("journaled", 100))
+	packstore.Abandon(js)
+	h, err := plain.Put(ctx, payload("plain", 100))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := plain.CompareAndSetRoot(ctx, first, h); !errors.Is(err, blob.ErrJournalBusy) {
+		t.Fatalf("a publish over a journal left behind = %v, want ErrJournalBusy until it is replayed", err)
+	}
+	if got := publishedRoot(t, bs, kr); got != first {
+		t.Fatalf("the backend's root moved to %s over journaled commits", got.Short())
+	}
+}
+
+// A root that moves under a journal holding commits, found first by the
+// background publish, is ErrJournalConflict there too, and sticks.
+func TestAPublishOverAMovedRootIsRefused(t *testing.T) {
+	bs, kr := mem.New(), keyring(t)
+	s := openJournaled(t, bs, kr, time.Hour)
+	o := packstore.Options{Blobs: bs, Keys: kr, Repo: repo}
+	first := commit(t, s, hash.Hash{}, payload("first", 100))
+	_ = commit(t, s, first, payload("journaled", 100))
+	intruder := commit(t, open(t, mem.New(), kr), hash.Hash{}, payload("v0.2.0's", 100))
+	if err := packstore.ForceRoot(ctx, o, intruder); err != nil {
+		t.Fatal(err)
+	}
+	if err := packstore.PublishJournal(s); !errors.Is(err, packstore.ErrJournalConflict) {
+		t.Fatalf("the background publish over a root that moved under the journal = %v, want ErrJournalConflict", err)
+	}
+	if _, err := s.Put(ctx, payload("after", 100)); !errors.Is(err, packstore.ErrJournalConflict) {
+		t.Fatalf("a put after the publish found the conflict = %v, want ErrJournalConflict", err)
+	}
+	if got := publishedRoot(t, bs, kr); got != intruder {
+		t.Fatalf("the backend's root is %s, want the intruder's left alone", got.Short())
+	}
+}

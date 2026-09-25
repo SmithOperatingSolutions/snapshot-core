@@ -5612,3 +5612,262 @@ find: if s.running == 0 {
 replace: if true {
 pkg: ./core/chunk/packstore
 run: ^TestRegression_SC34_APublishWaitsForAFinisherStartedAfterItsWait$
+
+id: packstore-journal-refuses-a-moved-root
+file: core/chunk/packstore/journal.go
+find: if n > 0 && m.root != base {
+replace: if false {
+pkg: ./core/chunk/packstore
+run: ^TestARootMovedUnderAJournalIsRefused$
+
+id: packstore-journal-commit-checks-expected
+file: core/chunk/packstore/journal.go
+find: if cur != expected {\n\t\treturn chunk.ErrRootConflict
+replace: if cur != expected && false {\n\t\treturn chunk.ErrRootConflict
+pkg: ./core/chunk/packstore
+run: ^TestARootMovedUnderAJournalIsRefused$
+
+id: packstore-journal-commits-follow-the-journal
+file: core/chunk/packstore/journal.go
+find: \t\tcur = s.jroot\n
+replace: \t\tcur = s.man.root\n
+pkg: ./core/chunk/packstore
+run: ^TestManyJournaledCommitsReplay$
+
+id: packstore-journal-publishes-after-a-full-pack
+file: core/chunk/packstore/journal.go
+find: must := len(s.session) > 0 || len(s.unuploaded) > 0 || len(s.sessionIdx) > 0 ||
+replace: must := len(s.unuploaded) > 0 || len(s.sessionIdx) > 0 ||
+pkg: ./core/chunk/packstore
+run: ^TestACommitAfterAFullPackPublishes$
+
+id: packstore-journal-size-limit
+file: core/chunk/packstore/journal.go
+find: if err == nil && s.jbytes+len(b) <= maxJournal {
+replace: if err == nil {
+pkg: ./core/chunk/packstore
+run: ^TestACommitTooLargeToJournalPublishes$
+
+id: packstore-journal-records-counted
+file: core/chunk/packstore/journal.go
+find: rec.counted = append([]hash.Hash(nil), s.jcounted...)
+replace: rec.counted = nil
+pkg: ./core/chunk/packstore
+run: ^TestAJournalChecksTheChunksItCountedOn$
+
+id: packstore-journal-replay-marks-counted
+file: core/chunk/packstore/journal.go
+find: \t\tfor _, h := range r.counted {\n\t\t\ts.deduped[h] = true\n\t\t}
+replace: \t\tfor range r.counted {\n\t\t}
+pkg: ./core/chunk/packstore
+run: ^TestAJournalChecksTheChunksItCountedOn$
+
+id: packstore-journal-replay-oldest-gcgen
+file: core/chunk/packstore/journal.go
+find: s.sessGen = recs[0].gcGen // the oldest
+replace: s.sessGen = s.man.gcGen // the oldest
+pkg: ./core/chunk/packstore
+run: ^TestAJournalChecksTheChunksItCountedOn$
+
+id: packstore-journal-commit-checks-survived
+file: core/chunk/packstore/journal.go
+find: if err := s.survived(m); err != nil {\n\t\treturn err\n\t}\n\ts.finishers.Wait()
+replace: if err := error(nil); err != nil {\n\t\treturn err\n\t}\n\ts.finishers.Wait()
+pkg: ./core/chunk/packstore
+run: ^TestAJournalChecksTheChunksItCountedOn$
+
+id: packstore-journal-published-not-replayed-twice
+file: core/chunk/packstore/journal.go
+find: case root == recs[len(recs)-1].next: // published
+replace: case false: // published
+pkg: ./core/chunk/packstore
+run: ^TestAPublishedJournalLeftUnresetIsNotReplayedTwice$
+
+id: packstore-journal-replay-refuses-a-moved-root
+file: core/chunk/packstore/journal.go
+find: case root != recs[0].expected:
+replace: case false:
+pkg: ./core/chunk/packstore
+run: ^TestARootMovedUnderAJournalIsRefused$
+
+id: packstore-journal-replay-verifies-frames
+file: core/chunk/packstore/journal.go
+find: \t\t\tif err != nil {\n\t\t\t\treturn fmt.Errorf("%w: a journaled frame: %w", chunk.ErrCorrupt, err)
+replace: \t\t\tif err != nil && false {\n\t\t\t\treturn fmt.Errorf("%w: a journaled frame: %w", chunk.ErrCorrupt, err)
+pkg: ./core/chunk/packstore
+run: ^TestAReplayVerifiesItsFrames$
+
+id: packstore-journal-replay-root-held
+file: core/chunk/packstore/journal.go
+find: \tif !stored {\n\t\treturn fmt.Errorf("%w: the journal's last root
+replace: \tif false {\n\t\treturn fmt.Errorf("%w: the journal's last root
+pkg: ./core/chunk/packstore
+run: ^TestAReplayRefusesARootItDoesNotHold$
+
+id: packstore-journal-held-refuses-a-left-journal
+file: core/chunk/packstore/journal.go
+find: \tif size > 0 {\n\t\trelease()
+replace: \tif false {\n\t\trelease()
+pkg: ./core/chunk/packstore
+run: ^TestAWriterWithoutTheJournalRefusesAJournalLeftBehind$
+
+id: packstore-journal-held-refuses-a-writer
+file: core/chunk/packstore/journal.go
+find: \t\treturn nil, fmt.Errorf("packstore: a writer with the journal is open: %w", err)
+replace: \t\treturn func() {}, nil
+pkg: ./core/chunk/packstore
+run: ^TestAWriterWithoutTheJournalIsRefusedWhileOneIsOpen$
+
+id: packstore-journal-any-open-replays
+file: core/chunk/packstore/journal.go
+find: \t\tif size == 0 {\n\t\t\treturn nil\n\t\t}
+replace: \t\tif size >= 0 {\n\t\t\treturn nil\n\t\t}
+pkg: ./core/chunk/packstore
+run: ^TestAJournalLeftByADeadWriterIsReplayedByAnyOpen$
+
+id: packstore-journal-root-is-the-journaled
+file: core/chunk/packstore/packstore.go
+find: \tif s.jrecords > 0 {\n\t\treturn s.jroot, nil\n\t}
+replace: 
+pkg: ./core/chunk/packstore
+run: ^TestAJournaledCommitIsDurableBeforeItIsPublished$
+
+id: packstore-journal-publish-empties-it
+file: core/chunk/packstore/journal.go
+find: if bytes > 0 {
+replace: if bytes < 0 {
+pkg: ./core/chunk/packstore
+run: ^TestCloseLandsTheJournal$
+
+id: packstore-journal-publish-conflict-sticks
+file: core/chunk/packstore/journal.go
+find: if errors.Is(err, chunk.ErrRootConflict) && n > 0 {
+replace: if false {
+pkg: ./core/chunk/packstore
+run: ^TestAPublishOverAMovedRootIsRefused$
+
+id: packstore-journal-put-refuses-after-failure
+file: core/chunk/packstore/packstore.go
+find: \tif s.jerr != nil {\n\t\ts.mu.Unlock()\n\t\treturn hash.Hash{}, s.jerr\n\t}
+replace: 
+pkg: ./core/chunk/packstore
+run: ^TestARootMovedUnderAJournalIsRefused$
+
+id: packstore-journal-close-publishes
+file: core/chunk/packstore/journal.go
+find: if publish && n > 0 && jerr == nil {
+replace: if publish && n > 0 && jerr == nil && false {
+pkg: ./core/chunk/packstore
+run: ^TestCloseLandsTheJournal$
+
+id: packstore-journal-first-commit-wakes-the-publisher
+file: core/chunk/packstore/journal.go
+find: \t\t\t\ts.jbase = m.root\n\t\t\t\tselect {\n\t\t\t\tcase s.jkick <- struct{}{}:
+replace: \t\t\t\ts.jbase = m.root\n\t\t\t\tselect {\n\t\t\t\tcase <-make(chan struct{}):
+pkg: ./core/chunk/packstore
+run: ^TestTheBackgroundPublishLandsWithinTheInterval$
+
+id: packstore-journal-reset-failure-sticks
+file: core/chunk/packstore/journal.go
+find: return s.journalFailed(fmt.Errorf("packstore: the journal was published and could not be emptied
+replace: return (fmt.Errorf("packstore: the journal was published and could not be emptied
+pkg: ./core/chunk/packstore
+run: ^TestAPublishedJournalLeftUnresetIsNotReplayedTwice$
+
+id: packstore-journal-record-chain
+file: core/chunk/packstore/journal.go
+find: if len(records) > 0 && r.expected != records[len(records)-1].next {
+replace: if false {
+pkg: ./core/chunk/packstore
+run: ^TestAJournalRecordThatDoesNotFollowOnIsRefused$
+
+id: packstore-journal-torn-record-stops
+file: core/chunk/packstore/journal.go
+find: n > maxJournal-journalHeaderLen || int(n) > len(b)-used-journalHeaderLen {
+replace: n > maxJournal-journalHeaderLen {
+pkg: ./core/chunk/packstore
+run: ^TestATornJournalTailIsDiscarded$
+
+id: packstore-journal-header-limit
+file: core/chunk/packstore/journal.go
+find: n > maxJournal-journalHeaderLen || int(n)
+replace: n > maxJournal-journalHeaderLen+1 || int(n)
+pkg: ./core/chunk/packstore
+run: ^TestAJournalHeaderOverTheLimitIsNotARecord$
+
+id: packstore-journal-unauthentic-stops
+file: core/chunk/packstore/journal.go
+find: \t\tif err != nil {\n\t\t\tbreak // torn, or not this repository's
+replace: \t\tif err != nil {\n\t\t\treturn nil, 0, errJournalCorrupt // torn, or not this repository's
+pkg: ./core/chunk/packstore
+run: ^TestARecordThatDoesNotAuthenticateEndsTheJournal$
+
+id: packstore-journal-frames-limit
+file: core/chunk/packstore/journal.go
+find: frames > pack.MaxChunksPerPack {
+replace: frames > pack.MaxChunksPerPack+1 {
+pkg: ./core/chunk/packstore
+run: ^TestForgedJournalRecordsAreRefused$
+
+id: packstore-journal-frames-limit-at
+file: core/chunk/packstore/journal.go
+find: frames > pack.MaxChunksPerPack {
+replace: frames >= pack.MaxChunksPerPack {
+pkg: ./core/chunk/packstore
+run: ^TestJournalLimitsAreAcceptedAtTheLimit$
+
+id: packstore-journal-raw-limit
+file: core/chunk/packstore/journal.go
+find: raw > pack.MaxChunkSize || f.codec
+replace: raw > pack.MaxChunkSize+1 || f.codec
+pkg: ./core/chunk/packstore
+run: ^TestForgedJournalRecordsAreRefused$
+
+id: packstore-journal-codec-limit
+file: core/chunk/packstore/journal.go
+find: f.codec > pack.CodecZstd ||
+replace: f.codec > pack.CodecZstd+1 ||
+pkg: ./core/chunk/packstore
+run: ^TestForgedJournalRecordsAreRefused$
+
+id: packstore-journal-stored-limit
+file: core/chunk/packstore/journal.go
+find: stored > maxFrameStored {
+replace: stored > maxFrameStored+1 {
+pkg: ./core/chunk/packstore
+run: ^TestForgedJournalRecordsAreRefused$
+
+id: packstore-journal-stored-limit-at
+file: core/chunk/packstore/journal.go
+find: stored > maxFrameStored {
+replace: stored >= maxFrameStored {
+pkg: ./core/chunk/packstore
+run: ^TestJournalLimitsAreAcceptedAtTheLimit$
+
+id: packstore-journal-counted-limit
+file: core/chunk/packstore/journal.go
+find: if p.Err() != nil || counted > maxCounted {
+replace: if p.Err() != nil || counted > maxCounted+1 {
+pkg: ./core/chunk/packstore
+run: ^TestForgedJournalRecordsAreRefused$
+
+id: packstore-journal-counted-limit-at
+file: core/chunk/packstore/journal.go
+find: if p.Err() != nil || counted > maxCounted {
+replace: if p.Err() != nil || counted >= maxCounted {
+pkg: ./core/chunk/packstore
+run: ^TestJournalLimitsAreAcceptedAtTheLimit$
+
+id: packstore-journal-trailing-bytes
+file: core/chunk/packstore/journal.go
+find: \tif err := p.Done(); err != nil {\n\t\treturn jrecord{}, fmt.Errorf("%w: %w", errJournalCorrupt, err)
+replace: \tif err := p.Done(); err != nil && false {\n\t\treturn jrecord{}, fmt.Errorf("%w: %w", errJournalCorrupt, err)
+pkg: ./core/chunk/packstore
+run: ^TestForgedJournalRecordsAreRefused$
+
+id: packstore-journal-plain-magic
+file: core/chunk/packstore/journal.go
+find: string(magic) != journalPlainMagic || v != journalV1 ||
+replace: string(magic) == "" || v != journalV1 ||
+pkg: ./core/chunk/packstore
+run: ^TestForgedJournalRecordsAreRefused$
