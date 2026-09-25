@@ -15,6 +15,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math"
 	"sort"
 
 	"github.com/SmithOperatingSolutions/snapshot-core/core/boundary"
@@ -145,7 +146,7 @@ func (m *Map) materialize(ctx context.Context, v value) ([]byte, error) {
 	if v.ref == nil {
 		return bytes.Clone(v.inline), nil
 	}
-	return stream.ReadAll(ctx, m.s, *v.ref)
+	return stream.ReadAll(ctx, m.s, *v.ref, math.MaxUint64)
 }
 
 // search is the first entry of n whose key is at least key.

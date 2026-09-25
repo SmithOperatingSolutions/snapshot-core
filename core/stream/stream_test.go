@@ -148,7 +148,7 @@ func TestRoundTripAtEverySize(t *testing.T) {
 		if ref.Size != uint64(n) {
 			t.Fatalf("a %d-byte stream has Ref.Size %d", n, ref.Size)
 		}
-		got, err := stream.ReadAll(ctx, s, ref)
+		got, err := stream.ReadAll(ctx, s, ref, uint64(n))
 		if err != nil || !bytes.Equal(got, data) {
 			t.Fatalf("a %d-byte stream read back as %d bytes (%v)", n, len(got), err)
 		}
@@ -208,7 +208,7 @@ func TestWriterEmitsTheDocumentedIndexFormat(t *testing.T) {
 func TestReaderReadsTheDocumentedFormat(t *testing.T) {
 	s := newStore()
 	ref := handBuilt(t, s)
-	if got, err := stream.ReadAll(ctx, s, ref); err != nil || string(got) != "alphabetagamma" {
+	if got, err := stream.ReadAll(ctx, s, ref, 14); err != nil || string(got) != "alphabetagamma" {
 		t.Fatalf("ReadAll of a hand-built stream = %q, %v", got, err)
 	}
 	r, err := stream.Open(ctx, s, ref)
@@ -243,7 +243,7 @@ func handBuilt(t *testing.T, s chunk.Writer) stream.Ref {
 func TestForgedStreamsAreCorrupt(t *testing.T) {
 	s := newStore()
 	good := handBuilt(t, s)
-	if got, err := stream.ReadAll(ctx, s, good); err != nil || string(got) != "alphabetagamma" {
+	if got, err := stream.ReadAll(ctx, s, good, 14); err != nil || string(got) != "alphabetagamma" {
 		t.Fatalf("positive control: %q, %v", got, err)
 	}
 	a, b, c := put(t, s, []byte("alpha")), put(t, s, []byte("beta")), put(t, s, []byte("gamma"))
@@ -264,7 +264,7 @@ func TestForgedStreamsAreCorrupt(t *testing.T) {
 		"a byte past the entries":        {Root: put(t, s, append(encodeIndex(1, ok), 0)), Size: 14, Depth: 1},
 		"truncated":                      {Root: put(t, s, encodeIndex(1, ok)[:40]), Size: 14, Depth: 1},
 	} {
-		_, err := stream.ReadAll(ctx, s, ref)
+		_, err := stream.ReadAll(ctx, s, ref, ref.Size)
 		if !errors.Is(err, chunk.ErrCorrupt) {
 			t.Errorf("%s: ReadAll = %v, want ErrCorrupt", name, err)
 		}
@@ -312,7 +312,7 @@ func TestAnInsertedByteRewritesAFewChunks(t *testing.T) {
 	s.added.Store(0)
 	edited := append(append(bytes.Clone(data[:100<<10]), 'x'), data[100<<10:]...)
 	ref2 := write(t, s, edited, small())
-	if got, _ := stream.ReadAll(ctx, s, ref2); !bytes.Equal(got, edited) {
+	if got, _ := stream.ReadAll(ctx, s, ref2, ref2.Size); !bytes.Equal(got, edited) {
 		t.Fatal("the edited stream reads back wrong")
 	}
 	if n, limit := s.added.Load(), int64(3+2*int(ref2.Depth)); n > limit {
@@ -348,7 +348,7 @@ func TestForgeriesThatWouldReadCleanly(t *testing.T) {
 	}
 	d := put(t, s, crafted)
 	twice := stream.Ref{Root: put(t, s, encodeIndex(1, []ientry{{d, 69}, {d, 69}})), Size: 138, Depth: 1}
-	if got, err := stream.ReadAll(ctx, s, twice); err != nil || !bytes.Equal(got, append(bytes.Clone(crafted), crafted...)) {
+	if got, err := stream.ReadAll(ctx, s, twice, twice.Size); err != nil || !bytes.Equal(got, append(bytes.Clone(crafted), crafted...)) {
 		t.Fatalf("positive control: a stream whose data looks like an index node read as %d bytes (%v)", len(got), err)
 	}
 	for name, ref := range map[string]stream.Ref{
@@ -356,7 +356,7 @@ func TestForgeriesThatWouldReadCleanly(t *testing.T) {
 		"a zero-length entry":            {Root: put(t, s, encodeIndex(1, []ientry{{a, 5}, {b, 0}, {b, 4}, {c, 5}})), Size: 14, Depth: 1},
 		"data read as an index node":     {Root: twice.Root, Size: 138, Depth: 2},
 	} {
-		if got, err := stream.ReadAll(ctx, s, ref); !errors.Is(err, chunk.ErrCorrupt) {
+		if got, err := stream.ReadAll(ctx, s, ref, ref.Size); !errors.Is(err, chunk.ErrCorrupt) {
 			t.Errorf("%s: ReadAll = %d bytes, %v; want ErrCorrupt", name, len(got), err)
 		}
 	}

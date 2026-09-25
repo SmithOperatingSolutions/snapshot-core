@@ -468,9 +468,9 @@ func walk(ctx context.Context, rd chunk.Reader, h hash.Hash, depth int, want uin
 	return nil
 }
 
-// ReadAll returns the whole stream. It grows with the bytes actually read,
-// not with what the Ref claims.
-func ReadAll(ctx context.Context, rd chunk.Reader, ref Ref) ([]byte, error) {
+// ReadAll returns the whole stream, which must be at most limit bytes long.
+// It grows with the bytes actually read, not with what the Ref claims.
+func ReadAll(ctx context.Context, rd chunk.Reader, ref Ref, limit uint64) ([]byte, error) {
 	r, err := Open(ctx, rd, ref)
 	if err != nil {
 		return nil, err

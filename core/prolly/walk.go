@@ -2,6 +2,7 @@ package prolly
 
 import (
 	"context"
+	"math"
 
 	"github.com/SmithOperatingSolutions/snapshot-core/core/chunk"
 	"github.com/SmithOperatingSolutions/snapshot-core/core/hash"
@@ -92,7 +93,7 @@ func (w *walker) leafValue(e entry) error {
 	v := e.val.inline
 	if e.val.ref != nil {
 		var err error
-		if v, err = stream.ReadAll(w.ctx, w.rd, *e.val.ref); err != nil {
+		if v, err = stream.ReadAll(w.ctx, w.rd, *e.val.ref, math.MaxUint64); err != nil {
 			return err
 		}
 	}
