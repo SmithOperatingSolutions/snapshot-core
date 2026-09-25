@@ -108,6 +108,7 @@ type Store struct {
 	lost        error                 // chunk.ErrSessionLost once GC deleted unpublished work: writes refuse
 	opens       int                   // manifests refresh has opened (tests count them)
 	objEst      map[[32]byte]int      // index objects loaded or written here, by estimated size (compaction)
+	lastPack    int                   // the size the last pending pack reached: the next one starts there
 }
 
 // maxInFlight bounds the packs finishing or uploading at once (#10): a
@@ -448,9 +449,17 @@ func (s *Store) Location(h hash.Hash) (packName string, off, n int64, ok bool) {
 	return loc.Pack.Name, int64(loc.Entry.Offset), int64(loc.Entry.StoredLen), true
 }
 
+// newWriter starts a pending pack sized at about what the last one held,
+// at least minPending, and growing to the pack's size as it fills: packs
+// cut full by a large write start the next at the pack's size, so its
+// frames are never copied (#10), and a publish of a few rows allocates for
+// a few rows, not for a pack.
 func (s *Store) newWriter() (*pack.Writer, error) {
-	return pack.NewWriter(s.o.Keys, s.o.Repo, s.codec, s.o.PackSize)
+	return pack.NewWriterSized(s.o.Keys, s.o.Repo, s.codec, s.o.PackSize, max(s.lastPack, minPending))
 }
+
+// minPending is the least a pending pack's buffer starts at.
+const minPending = 64 << 10
 
 // finishPendingLocked names and builds the pending pack on the caller's
 // goroutine, makes its chunks locatable, and keeps its bytes readable
@@ -459,6 +468,7 @@ func (s *Store) finishPendingLocked() (*pack.Built, error) {
 	if s.pending == nil || s.pending.Count() == 0 {
 		return nil, nil
 	}
+	s.lastPack = s.pending.Size()
 	b, err := s.pending.Finish()
 	s.pending = nil
 	if err != nil {
@@ -480,6 +490,7 @@ func (s *Store) takePendingLocked() *pack.Writer {
 	if w == nil || w.Count() == 0 {
 		return nil
 	}
+	s.lastPack = w.Size()
 	s.finishing = append(s.finishing, w)
 	s.finishers.Add(1)
 	return w
