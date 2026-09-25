@@ -84,6 +84,11 @@ type Map struct {
 	root   hash.Hash
 	count  uint64
 	height int
+	// flushed is set on a map a flush made: the root it edited and the
+	// keys it changed, in key order.
+	flushed bool
+	base    hash.Hash
+	changed [][]byte
 }
 
 // Empty returns the empty map, storing its one node.
@@ -313,12 +318,17 @@ func (e *Editor) Flush(ctx context.Context) (*Map, error) {
 		}
 		edits = append(edits, ed)
 	}
-	m, err := e.m.apply(ctx, edits)
+	var changed [][]byte
+	next, err := e.m.apply(ctx, edits, &changed)
 	if err != nil {
 		return nil, err
 	}
-	e.m, e.edits = m, map[string]*[]byte{}
-	return m, nil
+	// apply may hand back e.m itself (nothing changed), which others hold:
+	// the record of this flush goes on a copy.
+	m := *next
+	m.flushed, m.base, m.changed = true, e.m.root, changed
+	e.m, e.edits = &m, map[string]*[]byte{}
+	return &m, nil
 }
 
 // Changes reports what the flush that made m changed: the root of the map
@@ -326,5 +336,12 @@ func (e *Editor) Flush(ctx context.Context) (*Map, error) {
 // order: what Diff of the two reports. ok is false for a map no flush made
 // (Open, Empty), for which a caller must diff.
 func (m *Map) Changes() (base hash.Hash, keys [][]byte, ok bool) {
-	return hash.Hash{}, nil, false
+	if !m.flushed {
+		return hash.Hash{}, nil, false
+	}
+	keys = make([][]byte, len(m.changed))
+	for i, k := range m.changed {
+		keys[i] = bytes.Clone(k)
+	}
+	return m.base, keys, true
 }

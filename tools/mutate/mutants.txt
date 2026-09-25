@@ -5376,3 +5376,66 @@ find: if slices.Contains(froms[:i], from) {
 replace: if slices.Contains(froms[:i], from) || i > 0 {
 pkg: ./core/vcs
 run: ^TestCommitAsksForWhatEachStoredNamespaceChanges$
+
+id: prolly-flush-logs-a-changed-value
+file: core/prolly/flush.go
+find: if edits[0].del || !edits[0].e.val.equal(old[j].val) {
+replace: if edits[0].del || !edits[0].e.val.equal(old[j].val) || true {
+pkg: ./core/prolly
+run: ^TestAFlushKnowsWhatItChangedProperty$
+
+id: prolly-flush-logs-a-delete
+file: core/prolly/flush.go
+find: if edits[0].del || !edits[0].e.val.equal(old[j].val) {
+replace: if false && edits[0].del || !edits[0].e.val.equal(old[j].val) {
+pkg: ./core/prolly
+run: ^TestAFlushKnowsWhatItChangedProperty$
+
+id: prolly-flush-logs-an-add
+file: core/prolly/flush.go
+find: c.change(edits[0].key)\n\t\t\t\terr = c.add(edits[0].e)
+replace: err = c.add(edits[0].e)
+pkg: ./core/prolly
+run: ^TestAFlushKnowsWhatItChangedProperty$
+
+id: prolly-flush-logs-only-leaves
+file: core/prolly/flush.go
+find: 	if c.level == 0 {\n		c.changed = changed
+replace: 	if c.level >= 0 {\n		c.changed = changed
+pkg: ./core/prolly
+run: ^TestAFlushKnowsWhatItChangedProperty$
+
+id: prolly-flush-records-the-root-it-edited
+file: core/prolly/prolly.go
+find: m.flushed, m.base, m.changed = true, e.m.root, changed
+replace: m.flushed, m.base, m.changed = true, next.root, changed
+pkg: ./core/prolly
+run: ^TestAFlushKnowsWhatItChangedProperty$
+
+id: prolly-opened-map-claims-nothing
+file: core/prolly/prolly.go
+find: 	if !m.flushed {\n		return hash.Hash{}, nil, false
+replace: 	if false {\n		return hash.Hash{}, nil, false
+pkg: ./core/prolly
+run: ^TestAnOpenedMapDoesNotClaimChanges$
+
+id: vcs-flushed-list-only-against-its-base
+file: core/vcs/vcs.go
+find: if !ok || base != from {
+replace: if !ok || base != base {
+pkg: ./core/vcs
+run: ^TestCommitNamespaceAsksForEveryChangeTheFlushDidNotSee$
+
+id: vcs-flushed-list-asks-every-path
+file: core/vcs/vcs.go
+find: 	for _, path := range paths {
+replace: 	for _, path := range paths[:0] {
+pkg: ./core/vcs
+run: ^TestCommitNamespaceAsksWhatTheDiffFinds$
+
+id: vcs-commit-namespace-uses-the-flush
+file: core/vcs/vcs.go
+find: return r.commit(ctx, p, branch, prev, n.Root(), n, message)
+replace: return r.commit(ctx, p, branch, prev, n.Root(), nil, message)
+pkg: ./core/vcs
+run: ^TestCommitNamespaceReadsNoNamespaceNode$

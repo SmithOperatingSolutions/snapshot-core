@@ -337,6 +337,29 @@ func (r *Repo) checkPaths(ctx context.Context, p auth.Principal, branch string, 
 	}
 }
 
+// errNotFlushedFrom says a flushed namespace's record does not stand for
+// a diff against the namespace asked about.
+var errNotFlushedFrom = errors.New("vcs: not flushed from that namespace")
+
+// checkFlushed is checkPaths from from to flushed by what flushed's flush
+// changed: errNotFlushedFrom when flushed is nil, or its flush did not edit
+// from, and the caller must diff.
+func (r *Repo) checkFlushed(ctx context.Context, p auth.Principal, branch string, from hash.Hash, flushed *object.Namespace) error {
+	if flushed == nil {
+		return errNotFlushedFrom
+	}
+	base, paths, ok := flushed.Changes()
+	if !ok || base != from {
+		return errNotFlushedFrom
+	}
+	for _, path := range paths {
+		if err := r.check(ctx, p, auth.Write, pathResource(branch, path)); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func (r *Repo) readCommit(ctx context.Context, h hash.Hash) (Commit, error) {
 	b, err := r.s.Get(ctx, h)
 	if err != nil {
@@ -585,6 +608,22 @@ func (r *Repo) CommitWorkingSet(ctx context.Context, p auth.Principal, branch, m
 // second parent. It is UpdateWorkingSet then CommitWorkingSet, at one
 // swap's cost (#10).
 func (r *Repo) Commit(ctx context.Context, p auth.Principal, branch string, prev WorkingSet, namespace hash.Hash, message string) (Commit, error) {
+	return r.commit(ctx, p, branch, prev, namespace, nil, message)
+}
+
+// CommitNamespace is Commit of n, a namespace an editor flushed (#43).
+// Where the flush edited the namespace a check compares n with, the paths
+// the flush says it changed are the paths that differ (prolly.Map.Changes:
+// exactly what a diff reports), and it asks for write on those without
+// diffing; against any other namespace it diffs, as Commit does. It asks
+// the Authorizer exactly what Commit asks.
+func (r *Repo) CommitNamespace(ctx context.Context, p auth.Principal, branch string, prev WorkingSet, n *object.Namespace, message string) (Commit, error) {
+	return r.commit(ctx, p, branch, prev, n.Root(), n, message)
+}
+
+// commit is Commit; flushed, when not nil, is the namespace committed as
+// its flush made it.
+func (r *Repo) commit(ctx context.Context, p auth.Principal, branch string, prev WorkingSet, namespace hash.Hash, flushed *object.Namespace, message string) (Commit, error) {
 	if err := r.branchCheck(ctx, p, auth.Write, branch); err != nil {
 		return Commit{}, err
 	}
@@ -628,7 +667,11 @@ func (r *Repo) Commit(ctx context.Context, p auth.Principal, branch string, prev
 			if slices.Contains(froms[:i], from) {
 				continue
 			}
-			if err := r.checkPaths(ctx, p, branch, from, namespace); err != nil {
+			err := r.checkFlushed(ctx, p, branch, from, flushed)
+			if errors.Is(err, errNotFlushedFrom) {
+				err = r.checkPaths(ctx, p, branch, from, namespace)
+			}
+			if err != nil {
 				return err
 			}
 		}
@@ -1136,9 +1179,4 @@ func (r *Repo) ResolveConflict(ctx context.Context, p auth.Principal, branch, pa
 		}
 	}
 	return fmt.Errorf("vcs: the working set of %s kept changing", branch)
-}
-
-// CommitNamespace is Commit of a namespace an editor flushed.
-func (r *Repo) CommitNamespace(ctx context.Context, p auth.Principal, branch string, prev WorkingSet, n *object.Namespace, message string) (Commit, error) {
-	return Commit{}, errors.New("vcs: CommitNamespace is not implemented")
 }

@@ -21,20 +21,20 @@ type edit struct {
 // stretches its edits touch; the root level is re-chunked whole, and the
 // tree then grows or collapses to its canonical top. The result is the tree
 // a bulk build of the same entries draws.
-func (m *Map) apply(ctx context.Context, edits []edit) (*Map, error) {
+func (m *Map) apply(ctx context.Context, edits []edit, changed *[][]byte) (*Map, error) {
 	root, err := m.read(ctx, m.root)
 	if err != nil {
 		return nil, err
 	}
 	for level := 0; level < root.level; level++ {
-		if edits, err = m.applyLevel(ctx, level, edits); err != nil {
+		if edits, err = m.applyLevel(ctx, level, edits, changed); err != nil {
 			return nil, err
 		}
 		if len(edits) == 0 {
 			return m, nil // nothing at this level changed, so nothing above does
 		}
 	}
-	return m.applyRoot(ctx, root, edits)
+	return m.applyRoot(ctx, root, edits, changed)
 }
 
 // chunker draws one level's nodes from its entries, storing each node as
@@ -49,6 +49,9 @@ type chunker struct {
 	nodes    []*node // kept, not stored, when hold is set
 	hold     bool
 	existing map[hash.Hash]bool // nodes already stored: drawing one again writes nothing
+	// changed collects, at level 0, the keys whose values the edits
+	// change: what a Diff of the old tree against the new one reports.
+	changed *[][]byte
 }
 
 func (m *Map) newChunker(ctx context.Context, level int, hold bool) *chunker {
@@ -61,6 +64,19 @@ func (c *chunker) add(e entry) error {
 		return nil
 	}
 	return c.end()
+}
+
+// log has a level-0 chunker collect the keys its merge changes into changed.
+func (c *chunker) log(changed *[][]byte) {
+	if c.level == 0 {
+		c.changed = changed
+	}
+}
+
+func (c *chunker) change(key []byte) {
+	if c.changed != nil {
+		*c.changed = append(*c.changed, key)
+	}
 }
 
 // end closes the node being filled, if it has entries.
@@ -114,10 +130,14 @@ func merge(c *chunker, old []entry, edits []edit, limit []byte) ([]edit, error) 
 		switch {
 		case cmp < 0: // a new key
 			if !edits[0].del {
+				c.change(edits[0].key)
 				err = c.add(edits[0].e)
 			}
 			edits = edits[1:]
 		case cmp == 0: // an edited key
+			if edits[0].del || !edits[0].e.val.equal(old[j].val) {
+				c.change(edits[0].key)
+			}
 			if !edits[0].del {
 				err = c.add(edits[0].e)
 			}
@@ -138,7 +158,7 @@ func merge(c *chunker, old []entry, edits []edit, limit []byte) ([]edit, error) 
 // edit (the boundary before it is untouched) and re-chunks old nodes until
 // a new node ends exactly where an old one did: from there the old nodes
 // are the same, and are skipped to the next edit.
-func (m *Map) applyLevel(ctx context.Context, level int, edits []edit) ([]edit, error) {
+func (m *Map) applyLevel(ctx context.Context, level int, edits []edit, changed *[][]byte) ([]edit, error) {
 	var up []edit
 	for len(edits) > 0 {
 		c, err := m.seek(ctx, level, edits[0].key)
@@ -147,6 +167,7 @@ func (m *Map) applyLevel(ctx context.Context, level int, edits []edit) ([]edit, 
 		}
 		ch := m.newChunker(ctx, level, false)
 		ch.existing = map[hash.Hash]bool{} // a node drawn again ends where its old self did
+		ch.log(changed)
 		var removed []entry
 		for {
 			removed = append(removed, entry{key: c.n.lastKey(), child: nodeHash(c), count: c.n.total()})
@@ -205,8 +226,9 @@ func replace(removed, added []entry) []edit {
 
 // applyRoot re-chunks the root node with its edits, then grows the tree
 // until a level has one node, or collapses single-child roots.
-func (m *Map) applyRoot(ctx context.Context, root *node, edits []edit) (*Map, error) {
+func (m *Map) applyRoot(ctx context.Context, root *node, edits []edit, changed *[][]byte) (*Map, error) {
 	ch := m.newChunker(ctx, root.level, true)
+	ch.log(changed)
 	if _, err := merge(ch, root.entries, edits, nil); err != nil {
 		return nil, err
 	}
