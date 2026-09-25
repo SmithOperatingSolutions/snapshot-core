@@ -25,6 +25,7 @@ exact commit the spec's package map was reviewed at. That is the pin.
 | D11 | The S3 tier's server (2026-09-24) | SeaweedFS (`chrislusf/seaweedfs`, pinned by digest in `tools/ci`), started in Docker by the `s3` step with its credentials from the environment. It honors If-None-Match and If-Match, so the probe and the root swap run as on S3; it lists a directory's children right after the directory rather than in byte order, which the contract is told (`contract.AnyTotalOrder`: one total order kept across pages, prefixes and `after`) and no caller in the core depends on (GC's orphan scan and the repo's config listing page with `after` and read sets; multivol merges only its own local volumes) | MinIO ended its public distribution (quay.io, Docker Hub and dl.min.io all gone on 2026-09-24); a fork of MinIO built from source remains the fallback |
 | D9 | Where the Engine Spec lives | Its L4 (tables) is implemented in a separate, consuming repository. Its L0–L3 rules apply here as below | Owner decision |
 | D12 | Small objects' write path (2026-09-25, #40) | A stream whose reader says it holds under 256 KiB (`cdc.Lener`) is cut and stored on the caller's goroutine, and `cdc.New` sizes its buffers to the stream; a reader that does not say its length takes the path it took before. `repo.Chunks()` is also a `chunk.Preparer` and `chunk.Flusher` | A 100-byte object's write was about 200 µs of CPU: 24% zeroing the serial chunker's 512 KiB and 64 KiB buffers, which the parallel path built and never used, then the parallel path's 34 goroutines and two 64 KiB blocks for one chunk; now about 7 µs, 30 times the batch rate (`tools/commitbench -only batch`). On that harness the serial path wrote 16 KiB objects 2.6× as fast, 64 KiB 2.0×, 128 KiB 1.6×, 512 KiB 1.3×, 2 MiB even; the bar sits at the prolly inline limit. The size decides only how much a read asks for, never where a cut falls |
+| D13 | A size hint for a reader without a length (2026-09-25, #41) | `stream.WithLen(r, n)` wraps a reader in a `cdc.Lener` reporting the hint less what has been read, so D12's rule applies to it unchanged; `cdc.Chunker` switches to full-size reads after two reads in a row fill a buffer smaller than that | The smallest additive change: one function, no field in `stream.Config` (which is repo geometry, shared by every write) and no option parameter on `stream.Write`; it also sizes the read buffer, which a path flag alone would not (a 64 KiB block per small object). Pre-reading a block to decide was refused: it moves which chunk a failing reader's error lands on relative to `cdc.Parallel`. A wrong hint chooses the path, never a cut: a hint too large takes the parallel path, one too small the serial path, read in 64 KiB blocks from its second read on (`TestRegression_SC41_AWrongHintStoresTheSameStream`, `TestALenerThatUndercountsIsCutTheSameAndReadInFullBlocks`) |
 
 ## 2. How the Engine Spec's L0–L3 land here
 
@@ -201,7 +202,13 @@ can refuse them) and a fuzz target.
   wrote in about 200 µs, most of it zeroing 576 KiB of buffers and
   starting 34 goroutines and two 64 KiB blocks for one chunk, and writes
   in about 7 µs (`TestSlowSmallObjectsWriteInMicroseconds`,
-  `TestRegression_SC40_AShortStreamAllocatesWhatItNeeds`). A host
+  `TestRegression_SC40_AShortStreamAllocatesWhatItNeeds`). A reader
+  that does not say its length (a network stream, a pipe) takes the
+  same path when its host hints the length with `stream.WithLen(r, n)`
+  (#41, D13): the wrapper is a Lener, the hint picks the path and the
+  first read's size and never a cut, and a reader that yields more than
+  its hint is read in full blocks once two reads have filled the small
+  buffer (`TestRegression_SC41_AHintedShortStreamWritesLikeABytesReader`). A host
   reaches both halves and `Flush` through `repo.Chunks()`: its
   `chunk.ReadWriter` is also a `chunk.Preparer` and a `chunk.Flusher`
   (every method of the store but the root's), so `stream.Write` and

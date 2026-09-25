@@ -5,7 +5,7 @@ every "first failing test" checkbox in both specs. Updated at each milestone
 boundary and whenever a checklist item turns green; the evidence for each item
 is the named test, and the commit that added it carries its red.
 
-**Updated 2026-09-25** (v0.2.0: #22 to #27, a consumer's performance review, model.Accumulator; #40, small objects' write) · red-check clean · every checked-in mutant killed ·
+**Updated 2026-09-25** (v0.2.0: #22 to #27, a consumer's performance review, model.Accumulator; #40, small objects' write; #41, a size hint) · red-check clean · every checked-in mutant killed ·
 lint clean · every package at or above its coverage gate
 
 ## Milestones
@@ -468,11 +468,22 @@ them, each tracked as an issue:
     `TestRegression_SC40_AShortStreamAllocatesWhatItNeeds`). The chunk
     store `repo.Chunks()` hands a host prepares and flushes
     (`TestAHostWritingThroughTheRepositoryGetsTheParallelPathAndFlush`).
-    Left for the owner: a small object from a reader that does not say
-    its length still takes the parallel path (about 80 µs); per-chunk
+    Left for the owner: per-chunk
     zstd and the seal are most of the 7 µs left; one commit per object
     costs about 600 µs in memory, the namespace flush and the commit's
     path checks.
+
+13. ✅ **A size hint for a reader without a length** (#41):
+    `stream.WithLen(r, n)` makes a reader that does not say its length a
+    `cdc.Lener`, so a short stream from it is cut on the caller's
+    goroutine as a `bytes.Reader` one is (D13). A wrong hint chooses a
+    path, never a cut, and one too small is read in full blocks after
+    two reads. `tools/commitbench -only batch -reader plain|hinted`,
+    10,000 objects: 18,535 to 174,806 writes a second in memory, 12,476
+    to 151,879 on disk
+    (`TestRegression_SC41_AHintedShortStreamWritesLikeABytesReader`,
+    `TestRegression_SC41_AWrongHintStoresTheSameStream`,
+    `TestALenerThatUndercountsIsCutTheSameAndReadInFullBlocks`).
 
 Open, each as an issue: one extra root read per publish on S3 (#29); one
 pack per publish, and an unmoved root's backend read (#30); how the value
