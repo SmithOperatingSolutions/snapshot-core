@@ -108,6 +108,7 @@ type Store struct {
 	finishErr  error             // a finisher's failure to build its pack, surfaced at the next publish
 	slots      chan struct{}     // a token per pack that may be finishing or uploading at once (#10)
 	holdFinish func()            // tests: called by a finisher before it names its pack
+	afterWait  func()            // tests: called by a publish once it has waited for the finishers
 	pending    *pack.Writer
 	session    []pack.Info  // uploaded packs not yet in a published index object
 	sessionIdx [][32]byte   // index objects written but not yet in a published manifest
@@ -1081,6 +1082,9 @@ func (s *Store) CompareAndSetRoot(ctx context.Context, expected, next hash.Hash)
 func (s *Store) publish(ctx context.Context, expected, next hash.Hash) error {
 	// Every finisher has landed its pack or left it to retry here.
 	s.finishers.Wait()
+	if s.afterWait != nil {
+		s.afterWait()
+	}
 	s.mu.Lock()
 	if s.finishErr != nil {
 		err := s.finishErr

@@ -172,6 +172,9 @@ func WaitUploads(s *Store) { s.finishers.Wait() }
 // pack, so a test can hold a pack at that point.
 func HoldFinish(s *Store, f func()) { s.holdFinish = f }
 
+// AfterWait makes a publish call f once it has waited for the finishers.
+func AfterWait(s *Store, f func()) { s.afterWait = f }
+
 // ManifestOpens is how many manifests the store's refreshes have opened.
 func ManifestOpens(s *Store) int {
 	s.mu.Lock()

@@ -8,6 +8,7 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/SmithOperatingSolutions/snapshot-core/core/blob"
 	"github.com/SmithOperatingSolutions/snapshot-core/core/blob/mem"
@@ -150,4 +151,70 @@ func (b *rangeShort) Get(ctx context.Context, name string, off, n int64) (io.Rea
 		io.Reader
 		io.Closer
 	}{io.LimitReader(rc, n-1), rc}, nil
+}
+
+// Found building #34: a publish waited for the finishers, then took the
+// store's lock; a put from another goroutine that filled the pending pack
+// in between handed it, and the chunks the new root reaches, to a
+// finisher the publish did not wait for. The publish then wrote an index
+// object without that pack and swapped a root whose chunk no index object
+// lists and, until the finisher's upload, nothing durable holds. The
+// finisher is held (up to a second, so a publish that waits for it still
+// ends) until the publish has written its index object.
+func TestRegression_SC34_APublishWaitsForAFinisherStartedAfterItsWait(t *testing.T) {
+	raw, kr := mem.New(), keyring(t)
+	indexed := make(chan struct{})
+	var once atomic.Bool
+	bs := &onIndexPut{BlobStore: raw, put: func() {
+		if once.CompareAndSwap(false, true) {
+			close(indexed)
+		}
+	}}
+	s, err := packstore.Open(ctx, packstore.WithBackoff(packstore.Options{Blobs: bs, Keys: kr, Repo: repo, PackSize: 64 << 10}, time.Millisecond))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = s.Close() })
+	root, err := s.Put(ctx, payload("the root", 1000))
+	if err != nil {
+		t.Fatal(err)
+	}
+	packstore.HoldFinish(s, func() {
+		select {
+		case <-indexed:
+		case <-time.After(time.Second):
+		}
+	})
+	packstore.AfterWait(s, func() {
+		packstore.AfterWait(s, nil)
+		// Another writer fills the pending pack, the root's chunk in it.
+		if _, err := s.Put(ctx, payload("filler", 64<<10)); err != nil {
+			t.Error(err)
+		}
+	})
+	if err := s.CompareAndSetRoot(ctx, hash.Hash{}, root); err != nil {
+		t.Fatalf("CompareAndSetRoot: %v", err)
+	}
+	packstore.WaitUploads(s)
+	fresh := open(t, raw, kr)
+	if got, err := fresh.Root(ctx); err != nil || got != root {
+		t.Fatalf("the published root is %s (%v), want %s", got.Short(), err, root.Short())
+	}
+	if _, err := fresh.Get(ctx, root); err != nil {
+		t.Fatalf("another process cannot read the chunk the published root names (%v): the publish swapped a root whose pack no index object lists", err)
+	}
+}
+
+// onIndexPut calls put after every index object it stores.
+type onIndexPut struct {
+	blob.BlobStore
+	put func()
+}
+
+func (b *onIndexPut) Put(ctx context.Context, name string, r io.Reader, size int64) error {
+	err := b.BlobStore.Put(ctx, name, r, size)
+	if strings.HasPrefix(name, "index/") {
+		b.put()
+	}
+	return err
 }
