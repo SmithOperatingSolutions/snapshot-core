@@ -4715,3 +4715,66 @@ find: \t\tif m.root != expected {\n\t\t\treturn chunk.ErrRootConflict // the roo
 replace: \t\tif false {\n\t\t\treturn chunk.ErrRootConflict // the root moved
 pkg: ./core/chunk/packstore
 run: ^TestARootThatMovesDuringTheUploadStillLosesTheSwap$
+
+id: vcs-lost-swaps-back-off
+file: core/vcs/vcs.go
+find: \t\tif attempt > 0 {\n\t\t\tif err := r.pause(ctx, attempt-1); err != nil {\n\t\t\t\treturn err\n\t\t\t}\n\t\t}\n\t\tm, err := r.refs(ctx)
+replace: \t\tif attempt > 0 && false {\n\t\t\tif err := r.pause(ctx, attempt-1); err != nil {\n\t\t\t\treturn err\n\t\t\t}\n\t\t}\n\t\tm, err := r.refs(ctx)
+pkg: ./core/vcs
+run: ^TestLostSwapsBackOffBetweenAttempts$
+
+id: vcs-a-resolve-backs-off
+file: core/vcs/vcs.go
+find: \t\tif attempt > 0 {\n\t\t\tif err := r.pause(ctx, attempt-1); err != nil {\n\t\t\t\treturn err\n\t\t\t}\n\t\t}\n\t\tws, err := r.WorkingSet(ctx, p, branch)
+replace: \t\tif attempt > 0 && false {\n\t\t\tif err := r.pause(ctx, attempt-1); err != nil {\n\t\t\t\treturn err\n\t\t\t}\n\t\t}\n\t\tws, err := r.WorkingSet(ctx, p, branch)
+pkg: ./core/vcs
+run: ^TestAResolveThatLostItsWorkingSetBacksOff$
+
+id: vcs-a-pause-error-ends-the-writer
+file: core/vcs/vcs.go
+find: \t\t\tif err := r.pause(ctx, attempt-1); err != nil {\n\t\t\t\treturn err\n\t\t\t}\n\t\t}\n\t\tm, err := r.refs(ctx)
+replace: \t\t\tif err := r.pause(ctx, attempt-1); err != nil && false {\n\t\t\t\treturn err\n\t\t\t}\n\t\t}\n\t\tm, err := r.refs(ctx)
+pkg: ./core/vcs
+run: ^TestAWriterThatKeepsLosingStopsWithItsContext$
+
+id: vcs-backoff-doubles
+file: core/vcs/vcs.go
+find: d = min(backoffBase<<attempt, backoffCap)
+replace: d = min(backoffBase<<(attempt/2), backoffCap)
+pkg: ./core/vcs
+run: ^TestTheBackoffDoublesFromUnderAMillisecondToItsCap$
+
+id: vcs-backoff-is-capped
+file: core/vcs/vcs.go
+find: d = min(backoffBase<<attempt, backoffCap)
+replace: d = backoffBase << attempt
+pkg: ./core/vcs
+run: ^TestTheBackoffDoublesFromUnderAMillisecondToItsCap$
+
+id: vcs-backoff-shift-is-bounded
+file: core/vcs/vcs.go
+find: \tif attempt < 16 {\n\t\td = min(
+replace: \tif attempt < 1<<31 {\n\t\td = min(
+pkg: ./core/vcs
+run: ^TestTheBackoffDoublesFromUnderAMillisecondToItsCap$
+
+id: vcs-backoff-jitters-the-upper-half
+file: core/vcs/vcs.go
+find: return d/2 + time.Duration(jitter(int64(d/2)+1))
+replace: return d/2 + time.Duration(jitter(int64(d/2)))
+pkg: ./core/vcs
+run: ^TestTheBackoffDoublesFromUnderAMillisecondToItsCap$
+
+id: vcs-the-pause-reports-the-context
+file: core/vcs/vcs.go
+find: return ctx.Err() // a context that ended before or during the pause ends the writer
+replace: return nil
+pkg: ./core/vcs
+run: ^(TestAWriterThatKeepsLosingStopsWithItsContext|TestAPauseEndsWithItsContext)$
+
+id: vcs-the-pause-ends-with-the-context
+file: core/vcs/vcs.go
+find: \tcase <-ctx.Done():\n\tcase <-t.C:
+replace: \tcase <-t.C:
+pkg: ./core/vcs
+run: ^TestAPauseEndsWithItsContext$

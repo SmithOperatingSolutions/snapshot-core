@@ -160,3 +160,19 @@ func TestAWriterThatKeepsLosingStopsWithItsContext(t *testing.T) {
 		t.Fatalf("the commit took %v to stop", d)
 	}
 }
+
+// The default pause ends when its context does, not when its time is up.
+func TestAPauseEndsWithItsContext(t *testing.T) {
+	if err := vcs.Sleep(ctx, time.Millisecond); err != nil {
+		t.Fatalf("positive control: a pause whose context lives = %v, want it to end on time", err)
+	}
+	cctx, cancel := context.WithCancel(ctx)
+	time.AfterFunc(10*time.Millisecond, cancel)
+	start := time.Now()
+	if err := vcs.Sleep(cctx, 10*time.Second); !errors.Is(err, context.Canceled) {
+		t.Fatalf("a pause whose context ended = %v, want context.Canceled", err)
+	}
+	if d := time.Since(start); d > 5*time.Second {
+		t.Fatalf("a pause whose context ended at 10ms lasted %v: a canceled writer waits out its backoff", d)
+	}
+}

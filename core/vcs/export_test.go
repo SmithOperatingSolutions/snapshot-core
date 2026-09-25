@@ -13,3 +13,6 @@ func Backoff(attempt int, jitter func(n int64) int64) time.Duration { return bac
 func SetBackoff(r *Repo, sleep func(ctx context.Context, d time.Duration) error, jitter func(n int64) int64) {
 	r.sleep, r.jitter = sleep, jitter
 }
+
+// Sleep is the pause a repository takes between lost swaps by default.
+func Sleep(ctx context.Context, d time.Duration) error { return sleep(ctx, d) }
