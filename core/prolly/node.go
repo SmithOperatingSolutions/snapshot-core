@@ -17,6 +17,9 @@ const (
 	maxLevel  = 63
 	valInline = 0x00
 	valStream = 0x01
+	// maxPresized is the most entries a decode makes room for before they
+	// decode.
+	maxPresized = 256
 )
 
 // value is a leaf entry's value as stored: inline bytes, or a stream for a
@@ -118,7 +121,10 @@ func decodeNode(b []byte, inlineLimit int) (*node, error) {
 	if r.Err() != nil || kind != kindNode || level > maxLevel || count > uint64(len(b)) || (level > 0 && count == 0) {
 		return nil, corrupt("node header")
 	}
-	n := &node{level: level, entries: make([]entry, 0, count)}
+	// count is a claim until the entries decode: room for at most
+	// maxPresized up front (more than a 16 KiB node of 64-byte entries
+	// holds), the rest as they do (#24).
+	n := &node{level: level, entries: make([]entry, 0, min(count, maxPresized))}
 	var sum, carry uint64
 	for i := uint64(0); i < count; i++ {
 		var e entry
