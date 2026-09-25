@@ -209,7 +209,7 @@ Beyond the list: every incremental Flush equals a bulk build (`TestIncrementalFl
 - [x] Invalid branch names (`../x`, `a..b`, 129 chars, empty, `x.lock`) are rejected (`TestInvalidBranchNamesAreRejected`)
 - [x] Deleting the checked-out branch of an active session returns `ErrBranchInUse` (`TestDeletingACheckedOutBranchIsRefused`)
 - [x] Golden test: a fixed sequence of commits yields a fixed head hash (`TestAFixedHistoryHasAFixedHead`, which pins the store root too)
-- [x] (rules) Every ref update is one `CompareAndSetRoot`, retried on a lost swap and bounded (`TestAWriterThatKeepsLosingGivesUp`); the author is the principal (`TestTheAuthorIsThePrincipal`); `Log` is capped (`TestLogIsBoundedAndHighestFirst`)
+- [x] (rules) Every ref update is one `CompareAndSetRoot`, retried on a lost swap after a jittered, capped backoff and bounded (`TestAWriterThatKeepsLosingGivesUp`, `TestLostSwapsBackOffBetweenAttempts`, `TestTheBackoffDoublesFromUnderAMillisecondToItsCap`, `TestAWriterThatKeepsLosingStopsWithItsContext`); the author is the principal (`TestTheAuthorIsThePrincipal`); `Log` is capped (`TestLogIsBoundedAndHighestFirst`)
 
 Beyond the list: every store error at every point surfaces and leaves the refs as they were (`TestStoreErrorsSurfaceAndLeaveTheRefs`, about two hundred failure points), forged refs and chunks are `ErrCorrupt` (`TestForgedRefsAreCorrupt`, `TestForgedChunksAreCorrupt`, three fuzz targets), refs name only stored objects (`TestRefsNameOnlyStoredObjects`), and a lost `Init` race is `ErrExists` (`TestAnInitThatLosesTheRaceIsErrExists`).
 
@@ -280,6 +280,7 @@ Beyond the list: merging what a branch already holds changes nothing (`TestMergi
 
 | Found by | What it showed | Fix |
 | --- | --- | --- |
+| the engine's W3 under contention (perf review, snapshot-engine#1) | A writer that lost the root swap finished, uploaded and fsynced its pack and index object before it learned, about 11 ms each, holding the store's commit lock; the version graph retried at once, up to 1,000 times | The publish reads the root first and a loser writes nothing (`TestALoserLearnsBeforeItWrites`); the race after the check still loses (`TestARootThatMovesDuringTheUploadStillLosesTheSwap`, `TestARootThatMovesAndReturnsDuringTheUploadStillPublishes`); lost swaps back off (`TestLostSwapsBackOffBetweenAttempts`, `TestAResolveThatLostItsWorkingSetBacksOff`, `TestAPauseEndsWithItsContext`). W3 at 16 sessions: 2.8 to 16.3 tx/s on disk, 9.4 to 20.4 in memory (provisional, measured beside other work) |
 | mutant `dnx-open-requires-tag` survived | The test opened a *tagged* ciphertext without a tag, which fails authentication anyway | Test now uses an untagged ciphertext built with the stdlib |
 | wire LenBytes pre-check survived | The guard was redundant (Fixed already refuses without allocating) | Guard deleted |
 | mutant `seal-hkdf-binds-domain` survived | Domain separation is two layers; a behavioral test can't see either alone | Format-pinning tests re-derive keys and AAD with the stdlib |

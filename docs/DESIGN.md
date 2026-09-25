@@ -207,13 +207,20 @@ can refuse them) and a fuzz target.
   write, which more packs in flight do not raise (measured the same at two,
   four and eight).
 - **CompareAndSetRoot(expected, next)** refuses a `next` that is not a stored
-  chunk, uploads every pending pack, writes one index object for the session's
-  packs, then swaps the manifest (root := next, index list += the session's
-  objects, seq + 1). Every chunk a published root reaches is therefore durable
-  before the manifest names it. If the root moved, `ErrRootConflict` returns at
-  once (the caller re-reads and re-applies); if only the manifest changed
-  (another writer's index objects, GC), it refreshes and retries with jittered
-  backoff, at most 10 attempts (Engine Spec).
+  chunk, then reads the backend's root. A store whose view is at the root's
+  version answers from its cached manifest, and one whose view is behind
+  refreshes. A root that already moved returns `ErrRootConflict` before
+  anything is finished, uploaded or fsynced, and the pending chunks stay for
+  the retry. Otherwise it uploads every pending pack, writes one index object
+  for the session's packs, then swaps the manifest (root := next, index list
+  += the session's objects, seq + 1). Every chunk a published root reaches is
+  therefore durable before the manifest names it. A root that moves after the
+  check still loses at the swap, after the upload: its pack and index object
+  are named by no manifest, and GC collects them as orphans. If only the
+  manifest changed (another writer's index objects, GC), it refreshes and
+  retries with jittered backoff, at most 10 attempts (Engine Spec). The check
+  costs one root read per publish: nothing in memory, a small file read on
+  disk, one GET on S3.
 - **Get** serves from the pending pack, then a byte-bounded LRU, then the
   backend by one range read (the index object carries each pack's salt, so no
   header fetch). A hash the index does not know triggers one manifest refresh.
@@ -481,10 +488,16 @@ working set  0x05 · working [32] · staged [32] · merging u8 (0 or 1) ·
   branch with no merge in progress is `ErrNoMerge`. (The two roots joined
   the working set's merge layout before any release; no repository held
   the shorter one.)
-- A writer that loses the root swap re-reads and re-applies, up to 1,000
-  times in a row, then gives up with an error; nothing it did reaches the
-  root. A store error anywhere is the call's error, and leaves the refs as
-  they were.
+- A writer that loses the root swap pauses, then re-reads and re-applies.
+  The pause starts at 200µs and doubles to a 20ms cap, drawn over the upper
+  half of its span, so writers that lost together retry apart;
+  ResolveConflict pauses the same way when the working set changed under it.
+  The bound is 1,000 attempts, not a time: it is deterministic, needs no
+  clock, and gives a slow backend as many tries as a fast one. The capped
+  pause keeps the worst case near 15s, and a caller's context ends it at the
+  next pause. A writer that gives up gets an error of its own, and nothing it
+  did reaches the root. A store error anywhere is the call's error and leaves
+  the refs as they were.
 - Every call takes a `Principal` and asks the `Authorizer` about exactly
   what it does, in six actions: `Read` (refs, commits, objects), `Write` (a
   branch's working set; asked per path too), `Commit` (record what is
