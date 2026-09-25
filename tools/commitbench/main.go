@@ -28,6 +28,9 @@
 //     the commit wrote; -reader plain hides each object's length from the
 //     write, -reader hinted hints it with stream.WithLen (#41).
 //
+// -journal commits through the backend's journal (#34), and the tables add
+// the journal's appends.
+//
 // Timed runs on a shared machine take the measurement lock and start with
 // the load under 2 (CONTRIBUTING.md, "Heavy runs"); the tool prints the load
 // it started under beside the figures.
@@ -84,6 +87,8 @@ type config struct {
 	objectSize int
 	reader     string
 	flow       string
+	journal    bool
+	interval   time.Duration
 }
 
 // objectReader is how the batch run hands a small object to the write:
@@ -115,6 +120,8 @@ func run() int {
 	flag.IntVar(&c.objectSize, "object", 100, "bytes in each small object")
 	flag.StringVar(&c.reader, "reader", "lener", "how the batch run hands each object to the write: lener (a strings.Reader), plain (a reader without a length), hinted (plain, with stream.WithLen)")
 	flag.StringVar(&c.flow, "flow", "commit", "how a commit is made: commit (CommitNamespace, one publish), two-step (UpdateWorkingSet then CommitWorkingSet), two-step-flushed (their Flushed forms, handed the flush's record)")
+	flag.BoolVar(&c.journal, "journal", false, "commit through the backend's journal (packstore.Options.Journal, #34)")
+	flag.DurationVar(&c.interval, "interval", 0, "the journal's publish interval (0: packstore.DefaultJournalInterval)")
 	flag.Parse()
 	if c.reader != "lener" && c.reader != "plain" && c.reader != "hinted" {
 		fmt.Fprintf(os.Stderr, "commitbench: bad -reader %q\n", c.reader)
@@ -164,7 +171,7 @@ func loadavg() string {
 
 func bench(c config) error {
 	host, _ := os.Hostname()
-	fmt.Printf("commitbench: %s, load %s, %s\n", host, loadavg(), time.Now().Format(time.RFC3339))
+	fmt.Printf("commitbench: %s, load %s, %s, journal %v (interval %v)\n", host, loadavg(), time.Now().Format(time.RFC3339), c.journal, c.interval)
 	if slices.Contains(c.backends, "local") {
 		floor, err := fsyncFloor(c.dir)
 		if err != nil {
@@ -229,7 +236,7 @@ func bench(c config) error {
 		}
 	}
 	if len(batchRows) > 0 {
-		fmt.Printf("\n| backend | objects | write phase | writes/s | flush | commit | publish in it | total | pack bytes the commit wrote |\n| --- | --- | --- | --- | --- | --- | --- | --- | --- |\n")
+		fmt.Printf("\n| backend | objects | write phase | writes/s | flush | commit | publish in it | total | pack bytes the commit wrote | journal bytes it appended |\n| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |\n")
 		for _, r := range batchRows {
 			fmt.Println(r)
 		}
@@ -314,7 +321,8 @@ func newEnv(c config, backend string) (*env, error) {
 	}
 	// repo.Open's stack, with the two wrappers.
 	e.timed = &timedBlobs{BlobStore: e.raw}
-	e.chunks, err = packstore.Open(ctx, packstore.Options{Blobs: blob.NoDelete(e.timed), Keys: keys, Repo: cfg.RepoID, PackSize: cfg.Geometry.PackSize})
+	e.chunks, err = packstore.Open(ctx, packstore.Options{Blobs: blob.NoDelete(e.timed), Keys: keys, Repo: cfg.RepoID, PackSize: cfg.Geometry.PackSize,
+		Journal: c.journal, JournalInterval: c.interval})
 	if err != nil {
 		return nil, err
 	}
@@ -386,8 +394,44 @@ func (e *env) commitVia(ctx context.Context, flow, branch, path string, root mod
 // timedBlobs times the backend's calls by kind.
 type timedBlobs struct {
 	blob.BlobStore
-	packPut, indexPut, otherPut, swap, root, get stat
-	packBytes                                    atomic.Int64
+	packPut, indexPut, otherPut, swap, root, get, appends stat
+	packBytes, appendBytes                                atomic.Int64
+}
+
+// The timed store keeps its backend's journal, and times its appends.
+func (t *timedBlobs) OpenJournal(ctx context.Context) (blob.Journal, error) {
+	js, ok := t.BlobStore.(blob.Journaler)
+	if !ok {
+		return nil, errors.New("commitbench: the backend keeps no journal")
+	}
+	j, err := js.OpenJournal(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return timedJournal{j, t}, nil
+}
+
+func (t *timedBlobs) HoldJournal(ctx context.Context) (int64, func(), error) {
+	js, ok := t.BlobStore.(blob.Journaler)
+	if !ok {
+		return 0, func() {}, nil
+	}
+	return js.HoldJournal(ctx)
+}
+
+type timedJournal struct {
+	blob.Journal
+	t *timedBlobs
+}
+
+func (j timedJournal) Append(ctx context.Context, b []byte) error {
+	t0 := time.Now()
+	err := j.Journal.Append(ctx, b)
+	j.t.appends.add(t0)
+	if err == nil {
+		j.t.appendBytes.Add(int64(len(b)))
+	}
+	return err
 }
 
 type stat struct{ n, ns atomic.Int64 }
@@ -438,7 +482,7 @@ func (t *timedBlobs) SwapRoot(ctx context.Context, expected blob.Version, next [
 }
 
 func (t *timedBlobs) reset() {
-	for _, s := range []*stat{&t.packPut, &t.indexPut, &t.otherPut, &t.swap, &t.root, &t.get} {
+	for _, s := range []*stat{&t.packPut, &t.indexPut, &t.otherPut, &t.swap, &t.root, &t.get, &t.appends} {
 		s.reset()
 	}
 }
@@ -551,13 +595,14 @@ func breakdown(e *env, n int, el time.Duration) string {
 	pack, index, swap, root := per(&t.packPut), per(&t.indexPut), per(&t.swap), per(&t.root)
 	// The packs and the index objects are written at once: the publish
 	// waits for the longer.
-	rest := cas - max(pack, index) - swap - root
+	rest := cas - per(&t.appends) - max(pack, index) - swap - root
 	var b strings.Builder
-	fmt.Fprintf(&b, "%s, one writer, per commit (mean of %d; %v in all):\n", e.backend, n, el.Round(time.Millisecond))
+	fmt.Fprintf(&b, "%s, one writer, per commit (mean of %d; %v in all; with the journal the pack, index and swap rows are the background publishes, spread over the commits):\n", e.backend, n, el.Round(time.Millisecond))
 	fmt.Fprintf(&b, "| part | time | calls |\n| --- | --- | --- |\n")
 	fmt.Fprintf(&b, "| commit, end to end | %v | 1 |\n", (el / time.Duration(n)).Round(time.Microsecond))
 	fmt.Fprintf(&b, "| host work outside the publish (object write, namespace edit, refs edit, reads) | %v | |\n", (el/time.Duration(n) - cas).Round(time.Microsecond))
 	fmt.Fprintf(&b, "| publish (CompareAndSetRoot) | %v | %.2f |\n", cas.Round(time.Microsecond), cnt(&e.counted.cas))
+	fmt.Fprintf(&b, "| . journal append (write + fsync), in the commit | %v | %.2f |\n", per(&t.appends).Round(time.Microsecond), cnt(&t.appends))
 	fmt.Fprintf(&b, "| . pack finish+upload+fsync (Put packs/) | %v | %.2f |\n", pack.Round(time.Microsecond), cnt(&t.packPut))
 	fmt.Fprintf(&b, "| . index object (Put index/, beside the pack) | %v | %.2f |\n", index.Round(time.Microsecond), cnt(&t.indexPut))
 	fmt.Fprintf(&b, "| . root swap (SwapRoot: temp, fsync, rename, dir fsync) | %v | %.2f |\n", swap.Round(time.Microsecond), cnt(&t.swap))
@@ -730,6 +775,7 @@ func batch(c config, backend string, n int, prof profiles) (string, error) {
 	}
 	flush := time.Since(t1)
 	e.timed.packBytes.Store(0)
+	e.timed.appendBytes.Store(0)
 	e.counted.cas.reset()
 	t2 := time.Now()
 	if _, err := e.v.Commit(ctx, e.me, vcs.MainBranch, ws, ns.Root(), "batch"); err != nil {
@@ -738,8 +784,8 @@ func batch(c config, backend string, n int, prof profiles) (string, error) {
 	cm := time.Since(t2)
 	pub := time.Duration(e.counted.cas.ns.Load())
 	r := func(d time.Duration) time.Duration { return d.Round(10 * time.Microsecond) }
-	return fmt.Sprintf("| %s | %d | %v | %.0f | %v | %v | %v | %v | %d |", backend, n, r(write), float64(n)/write.Seconds(),
-		r(flush), r(cm), r(pub), r(write+flush+cm), e.timed.packBytes.Load()), nil
+	return fmt.Sprintf("| %s | %d | %v | %.0f | %v | %v | %v | %v | %d | %d |", backend, n, r(write), float64(n)/write.Seconds(),
+		r(flush), r(cm), r(pub), r(write+flush+cm), e.timed.packBytes.Load(), e.timed.appendBytes.Load()), nil
 }
 
 // --- the fsync floor ---
