@@ -180,11 +180,36 @@ func Open(ctx context.Context, o Options) (*Store, error) {
 // so it names nothing in a deleted pack. Published chunks past
 // o.IndexInMemory are indexed on disk (#6): the table is built when they
 // first pass the bound, and again at every rebuild.
+//
+// An index object the manifest lists can be gone by the time it is loaded:
+// a newer manifest replaced it and it was deleted (GC deletes the ones it
+// rewrote a grace window later, and an orphan at any time). The refresh
+// then reads the root again and, if it moved, starts over from it.
 func (s *Store) refresh(ctx context.Context) error {
 	r, err := s.o.Blobs.Root(ctx)
 	if err != nil {
 		return err
 	}
+	for attempt := 1; ; attempt++ {
+		err = s.refreshFrom(ctx, r)
+		if err == nil || !errors.Is(err, blob.ErrNotFound) || attempt == refreshAttempts {
+			return err
+		}
+		again, rerr := s.o.Blobs.Root(ctx)
+		if rerr != nil || again.Version == r.Version {
+			return err // gone from the manifest in force: not a race
+		}
+		r = again
+	}
+}
+
+// refreshAttempts bounds the manifests one refresh reads when each names
+// an index object gone by the time it is loaded.
+const refreshAttempts = 3
+
+// refreshFrom is refresh from root r, read from the backend.
+func (s *Store) refreshFrom(ctx context.Context, r blob.Root) error {
+	var err error
 	// Versions never repeat (blob.BlobStore), so the version this store
 	// last took is the manifest it holds, with every index object it
 	// lists loaded: there is nothing to open.
