@@ -2072,6 +2072,20 @@ replace: func (r *Repo) Chunks() chunk.ReadWriter { return r.chunks }
 pkg: ./core/repo
 run: ^TestHostsWriteObjectsThroughTheRepository$
 
+id: repo-chunks-flush-reaches-the-store
+file: core/repo/repo.go
+find: func (w readWriter) Flush(ctx context.Context) error { return w.s.Flush(ctx) }
+replace: func (w readWriter) Flush(ctx context.Context) error { return nil }
+pkg: ./core/repo
+run: ^TestAHostWritingThroughTheRepositoryGetsTheParallelPathAndFlush$
+
+id: repo-chunks-put-prepared-stores
+file: core/repo/repo.go
+find: 	return w.s.PutPrepared(ctx, p)
+replace: 	return p.Hash(), nil
+pkg: ./core/repo
+run: ^TestAHostWritingThroughTheRepositoryGetsTheParallelPathAndFlush$
+
 id: e2e-tree-applies-theirs
 file: model/mapobject/mapobject.go
 find: if err = s.apply(ed, ct); err == nil {

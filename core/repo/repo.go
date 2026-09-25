@@ -21,6 +21,7 @@ import (
 	"github.com/SmithOperatingSolutions/snapshot-core/core/chunk"
 	"github.com/SmithOperatingSolutions/snapshot-core/core/chunk/packstore"
 	"github.com/SmithOperatingSolutions/snapshot-core/core/gc"
+	"github.com/SmithOperatingSolutions/snapshot-core/core/hash"
 	"github.com/SmithOperatingSolutions/snapshot-core/core/model"
 	"github.com/SmithOperatingSolutions/snapshot-core/core/pack"
 	"github.com/SmithOperatingSolutions/snapshot-core/core/prolly"
@@ -370,10 +371,35 @@ func (r *Repo) Close() error { return r.chunks.Close() }
 // version graph. What is written becomes durable when the version graph
 // next changes a ref (a commit, a working-set update, a branch); a
 // repository closed before then drops it.
+//
+// It is also a chunk.Preparer and a chunk.Flusher (#40), the write path
+// the version graph's own store has: stream.Write (and so model/blob's
+// Write) finds them by type assertion and hashes and compresses a long
+// stream on every core, and flushes when the stream ends; a host that
+// stores chunks itself asserts them the same way.
 func (r *Repo) Chunks() chunk.ReadWriter { return readWriter{r.chunks} }
 
-// readWriter narrows a chunk store to reading and writing.
-type readWriter struct{ chunk.ReadWriter }
+// readWriter narrows a chunk store to reading, writing, preparing and
+// flushing: every method but the root's.
+type readWriter struct{ s *packstore.Store }
+
+var (
+	_ chunk.Preparer = readWriter{}
+	_ chunk.Flusher  = readWriter{}
+)
+
+func (w readWriter) Get(ctx context.Context, h hash.Hash) ([]byte, error) { return w.s.Get(ctx, h) }
+func (w readWriter) Has(ctx context.Context, hs []hash.Hash) (map[hash.Hash]bool, error) {
+	return w.s.Has(ctx, hs)
+}
+func (w readWriter) Put(ctx context.Context, data []byte) (hash.Hash, error) {
+	return w.s.Put(ctx, data)
+}
+func (w readWriter) Prepare(data []byte) (chunk.Prepared, error) { return w.s.Prepare(data) }
+func (w readWriter) PutPrepared(ctx context.Context, p chunk.Prepared) (hash.Hash, error) {
+	return w.s.PutPrepared(ctx, p)
+}
+func (w readWriter) Flush(ctx context.Context) error { return w.s.Flush(ctx) }
 
 // Prolly is the map geometry objects are written with.
 func (g Geometry) Prolly() prolly.Config {
