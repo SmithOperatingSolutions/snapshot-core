@@ -1,0 +1,583 @@
+// Command commitbench measures what a commit costs, the way a host commits:
+// on blob/local (fsync, default options) and blob/mem, through the version
+// graph's one-publish Commit (repo.Repo embeds *vcs.Repo, and Commit is
+// that method).
+//
+//	go run ./tools/commitbench                      # everything, both backends
+//	go run ./tools/commitbench -backends local -only single -cpuprofile cpu.prof
+//
+// The stack is the one repo.Open builds (repo.Init writes the config and the
+// first root; packstore.Open on blob.NoDelete of the store, then vcs.Open),
+// assembled here from the same exported pieces so that two wrappers can
+// watch it: one times the backend's calls by kind, one counts the root swaps
+// a writer lost. Runs:
+//
+// Each single-writer and concurrent run lasts -duration (20s), and the bulk
+// run is sized to finish well inside a minute: no run takes longer.
+//
+//   - single: one writer, one small object per commit, back to back:
+//     commits/s, p50 and p99, and where a commit's time goes;
+//   - concurrent: 4, 16 and 64 writers, each on a branch of its own, so no
+//     working set conflicts, but every commit swaps the one root: commits/s,
+//     p99, and the swaps lost to another writer (each is retried by vcs);
+//   - bulk: a 256 MiB random stream written, then one commit.
+//
+// Timed runs on a shared machine take the measurement lock and start with
+// the load under 2 (CONTRIBUTING.md, "Heavy runs"); the tool prints the load
+// it started under beside the figures.
+package main
+
+import (
+	"context"
+	"crypto/rand"
+	"errors"
+	"flag"
+	"fmt"
+	"io"
+	mrand "math/rand/v2"
+	"os"
+	"path/filepath"
+	"runtime/pprof"
+	"slices"
+	"strconv"
+	"strings"
+	"sync"
+	"sync/atomic"
+	"time"
+
+	"github.com/SmithOperatingSolutions/snapshot-core/core/auth"
+	"github.com/SmithOperatingSolutions/snapshot-core/core/blob"
+	"github.com/SmithOperatingSolutions/snapshot-core/core/blob/local"
+	"github.com/SmithOperatingSolutions/snapshot-core/core/blob/mem"
+	"github.com/SmithOperatingSolutions/snapshot-core/core/chunk"
+	"github.com/SmithOperatingSolutions/snapshot-core/core/chunk/packstore"
+	"github.com/SmithOperatingSolutions/snapshot-core/core/hash"
+	"github.com/SmithOperatingSolutions/snapshot-core/core/model"
+	"github.com/SmithOperatingSolutions/snapshot-core/core/object"
+	"github.com/SmithOperatingSolutions/snapshot-core/core/repo"
+	"github.com/SmithOperatingSolutions/snapshot-core/core/seal"
+	"github.com/SmithOperatingSolutions/snapshot-core/core/vcs"
+	mblob "github.com/SmithOperatingSolutions/snapshot-core/model/blob"
+	"github.com/SmithOperatingSolutions/snapshot-core/model/tree"
+)
+
+func main() { os.Exit(run()) }
+
+type config struct {
+	backends   []string
+	only       map[string]bool
+	dir        string
+	writers    []int
+	duration   time.Duration
+	bulkMiB    int
+	cpuprofile string
+	objectSize int
+}
+
+func run() int {
+	var c config
+	backends := flag.String("backends", "local,mem", "comma-separated backends: local, mem")
+	only := flag.String("only", "single,concurrent,bulk", "comma-separated runs: single, concurrent, bulk")
+	writers := flag.String("writers", "4,16,64", "comma-separated writer counts for the concurrent run")
+	flag.StringVar(&c.dir, "dir", os.TempDir(), "where blob/local stores are created (and removed afterwards)")
+	flag.DurationVar(&c.duration, "duration", 20*time.Second, "length of each single-writer and concurrent run (the owner's bound: a run takes under a minute)")
+	flag.IntVar(&c.bulkMiB, "bulk", 256, "MiB written before the bulk run's commit")
+	flag.StringVar(&c.cpuprofile, "cpuprofile", "", "write a CPU profile of the single-writer run on the first backend here")
+	flag.IntVar(&c.objectSize, "object", 100, "bytes in each small object")
+	flag.Parse()
+	c.backends = strings.Split(*backends, ",")
+	c.only = map[string]bool{}
+	for _, o := range strings.Split(*only, ",") {
+		c.only[strings.TrimSpace(o)] = true
+	}
+	for _, w := range strings.Split(*writers, ",") {
+		n, err := strconv.Atoi(strings.TrimSpace(w))
+		if err != nil || n < 1 {
+			fmt.Fprintf(os.Stderr, "commitbench: bad writer count %q\n", w)
+			return 2
+		}
+		c.writers = append(c.writers, n)
+	}
+	if err := bench(c); err != nil {
+		fmt.Fprintln(os.Stderr, "commitbench:", err)
+		return 1
+	}
+	return 0
+}
+
+func loadavg() string {
+	b, err := os.ReadFile("/proc/loadavg")
+	if err != nil {
+		return "unknown"
+	}
+	return strings.Join(strings.Fields(string(b))[:3], " ")
+}
+
+func bench(c config) error {
+	host, _ := os.Hostname()
+	fmt.Printf("commitbench: %s, load %s, %s\n", host, loadavg(), time.Now().Format(time.RFC3339))
+	if slices.Contains(c.backends, "local") {
+		floor, err := fsyncFloor(c.dir)
+		if err != nil {
+			return err
+		}
+		fmt.Printf("fsync floor on %s: write 4 KiB + fsync, p50 %v p99 %v; with a link and a directory fsync (a blob/local Put) p50 %v\n",
+			c.dir, floor.p50, floor.p99, floor.linkP50)
+	}
+	var rows []row
+	var breakdowns []string
+	for i, b := range c.backends {
+		if c.only["single"] {
+			prof := ""
+			if i == 0 {
+				prof = c.cpuprofile
+			}
+			r, bd, err := single(c, b, prof)
+			if err != nil {
+				return fmt.Errorf("%s single: %w", b, err)
+			}
+			rows = append(rows, r)
+			breakdowns = append(breakdowns, bd)
+		}
+		if c.only["concurrent"] {
+			for _, w := range c.writers {
+				r, err := concurrent(c, b, w)
+				if err != nil {
+					return fmt.Errorf("%s %d writers: %w", b, w, err)
+				}
+				rows = append(rows, r)
+			}
+		}
+		if c.only["bulk"] {
+			r, err := bulk(c, b)
+			if err != nil {
+				return fmt.Errorf("%s bulk: %w", b, err)
+			}
+			rows = append(rows, r)
+		}
+	}
+	fmt.Printf("\n| backend | run | writers | commits | commits/s | p50 | p99 | lost swaps |\n| --- | --- | --- | --- | --- | --- | --- | --- |\n")
+	for _, r := range rows {
+		fmt.Println(r)
+	}
+	for _, bd := range breakdowns {
+		fmt.Print("\n" + bd)
+	}
+	fmt.Printf("\nload at the end %s\n", loadavg())
+	return nil
+}
+
+type row struct {
+	backend, run   string
+	writers, count int
+	rate           float64
+	p50, p99       time.Duration
+	lost           int64
+	note           string
+}
+
+func (r row) String() string {
+	s := fmt.Sprintf("| %s | %s | %d | %d | %.1f | %v | %v | %d |", r.backend, r.run, r.writers, r.count, r.rate,
+		r.p50.Round(10*time.Microsecond), r.p99.Round(10*time.Microsecond), r.lost)
+	if r.note != "" {
+		s += " " + r.note
+	}
+	return s
+}
+
+// --- the stack ---
+
+type env struct {
+	backend string
+	dir     string
+	raw     blob.BlobStore
+	timed   *timedBlobs
+	chunks  *packstore.Store
+	counted *countingStore
+	v       *vcs.Repo
+	geo     repo.Geometry
+	me      auth.Principal
+}
+
+func newEnv(c config, backend string) (*env, error) {
+	ctx := context.Background()
+	e := &env{backend: backend, me: auth.Principal{ID: "user:bench"}}
+	switch backend {
+	case "local":
+		dir, err := os.MkdirTemp(c.dir, "commitbench-")
+		if err != nil {
+			return nil, err
+		}
+		e.dir = dir
+		bs, err := local.Create(filepath.Join(dir, "store"), local.Options{})
+		if err != nil {
+			return nil, err
+		}
+		e.raw = bs
+	case "mem":
+		e.raw = mem.New()
+	default:
+		return nil, fmt.Errorf("unknown backend %q", backend)
+	}
+	keys, err := seal.NewKeyring()
+	if err != nil {
+		return nil, err
+	}
+	e.geo = repo.DefaultGeometry()
+	models, err := model.NewRegistry(mblob.Model{}, tree.Model{Config: e.geo.Prolly()})
+	if err != nil {
+		return nil, err
+	}
+	o := repo.Options{Blobs: e.raw, Keys: keys, Registry: models, Authorizer: auth.AllowAll{}}
+	r, err := repo.Init(ctx, e.me, o)
+	if err != nil {
+		return nil, err
+	}
+	cfg := r.Config
+	if err := r.Close(); err != nil {
+		return nil, err
+	}
+	// repo.Open's stack, with the two wrappers.
+	e.timed = &timedBlobs{BlobStore: e.raw}
+	e.chunks, err = packstore.Open(ctx, packstore.Options{Blobs: blob.NoDelete(e.timed), Keys: keys, Repo: cfg.RepoID, PackSize: cfg.Geometry.PackSize})
+	if err != nil {
+		return nil, err
+	}
+	e.counted = &countingStore{Store: e.chunks}
+	e.v, err = vcs.Open(ctx, e.counted, vcs.Options{Config: cfg.Geometry.Prolly(), Registry: models, Authorizer: auth.AllowAll{}})
+	if err != nil {
+		return nil, err
+	}
+	return e, nil
+}
+
+func (e *env) close() {
+	_ = e.chunks.Close()
+	if e.dir != "" {
+		_ = os.RemoveAll(e.dir)
+	}
+}
+
+// commitOne writes one small object at path on branch and commits it.
+func (e *env) commitOne(ctx context.Context, branch, path string, size int) error {
+	body := make([]byte, size)
+	_, _ = rand.Read(body)
+	root, err := mblob.Write(ctx, e.chunks, strings.NewReader(string(body)), e.geo.Stream())
+	if err != nil {
+		return err
+	}
+	return e.commitRef(ctx, branch, path, root)
+}
+
+func (e *env) commitRef(ctx context.Context, branch, path string, root model.Root) error {
+	ws, err := e.v.WorkingSet(ctx, e.me, branch)
+	if err != nil {
+		return err
+	}
+	n, err := e.v.Namespace(ctx, ws.Working)
+	if err != nil {
+		return err
+	}
+	ed := n.Editor()
+	if err := ed.Put(path, object.Ref{Model: mblob.ID, Root: root}); err != nil {
+		return err
+	}
+	if n, err = ed.Flush(ctx); err != nil {
+		return err
+	}
+	_, err = e.v.Commit(ctx, e.me, branch, ws, n.Root(), "put "+path)
+	return err
+}
+
+// timedBlobs times the backend's calls by kind.
+type timedBlobs struct {
+	blob.BlobStore
+	packPut, indexPut, otherPut, swap, root, get stat
+}
+
+type stat struct{ n, ns atomic.Int64 }
+
+func (s *stat) add(t0 time.Time) {
+	s.n.Add(1)
+	s.ns.Add(int64(time.Since(t0)))
+}
+
+func (s *stat) reset() { s.n.Store(0); s.ns.Store(0) }
+
+func (t *timedBlobs) Put(ctx context.Context, name string, r io.Reader, size int64) error {
+	t0 := time.Now()
+	err := t.BlobStore.Put(ctx, name, r, size)
+	switch {
+	case strings.HasPrefix(name, "packs/"):
+		t.packPut.add(t0)
+	case strings.HasPrefix(name, "index/"):
+		t.indexPut.add(t0)
+	default:
+		t.otherPut.add(t0)
+	}
+	return err
+}
+
+func (t *timedBlobs) Get(ctx context.Context, name string, off, n int64) (io.ReadCloser, error) {
+	t0 := time.Now()
+	rc, err := t.BlobStore.Get(ctx, name, off, n)
+	t.get.add(t0)
+	return rc, err
+}
+
+func (t *timedBlobs) Root(ctx context.Context) (blob.Root, error) {
+	t0 := time.Now()
+	r, err := t.BlobStore.Root(ctx)
+	t.root.add(t0)
+	return r, err
+}
+
+func (t *timedBlobs) SwapRoot(ctx context.Context, expected blob.Version, next []byte) (blob.Version, error) {
+	t0 := time.Now()
+	v, err := t.BlobStore.SwapRoot(ctx, expected, next)
+	t.swap.add(t0)
+	return v, err
+}
+
+func (t *timedBlobs) reset() {
+	for _, s := range []*stat{&t.packPut, &t.indexPut, &t.otherPut, &t.swap, &t.root, &t.get} {
+		s.reset()
+	}
+}
+
+// countingStore counts the chunk store's publishes, and the swaps lost to
+// another writer, and times the publishes.
+type countingStore struct {
+	chunk.Store
+	cas  stat
+	lost atomic.Int64
+}
+
+func (c *countingStore) CompareAndSetRoot(ctx context.Context, expected, next hash.Hash) error {
+	t0 := time.Now()
+	err := c.Store.CompareAndSetRoot(ctx, expected, next)
+	c.cas.add(t0)
+	if errors.Is(err, chunk.ErrRootConflict) {
+		c.lost.Add(1)
+	}
+	return err
+}
+
+// --- runs ---
+
+func percentile(d []time.Duration, p float64) time.Duration {
+	if len(d) == 0 {
+		return 0
+	}
+	s := slices.Clone(d)
+	slices.Sort(s)
+	i := int(p * float64(len(s)-1))
+	return s[i]
+}
+
+func single(c config, backend, profile string) (row, string, error) {
+	ctx := context.Background()
+	e, err := newEnv(c, backend)
+	if err != nil {
+		return row{}, "", err
+	}
+	defer e.close()
+	// A few commits first, so the run measures the steady state.
+	for i := range 10 {
+		if err := e.commitOne(ctx, vcs.MainBranch, fmt.Sprintf("warm/%d", i), c.objectSize); err != nil {
+			return row{}, "", err
+		}
+	}
+	e.timed.reset()
+	e.counted.cas.reset()
+	e.counted.lost.Store(0)
+	if profile != "" {
+		f, err := os.Create(profile)
+		if err != nil {
+			return row{}, "", err
+		}
+		defer f.Close()
+		if err := pprof.StartCPUProfile(f); err != nil {
+			return row{}, "", err
+		}
+		defer pprof.StopCPUProfile()
+	}
+	var lat []time.Duration
+	t0 := time.Now()
+	deadline := t0.Add(c.duration)
+	for i := 0; time.Now().Before(deadline); i++ {
+		s := time.Now()
+		if err := e.commitOne(ctx, vcs.MainBranch, fmt.Sprintf("obj/%06d", i), c.objectSize); err != nil {
+			return row{}, "", err
+		}
+		lat = append(lat, time.Since(s))
+	}
+	el := time.Since(t0)
+	if profile != "" {
+		pprof.StopCPUProfile()
+	}
+	r := row{backend: backend, run: "one writer", writers: 1, count: len(lat), rate: float64(len(lat)) / el.Seconds(),
+		p50: percentile(lat, .5), p99: percentile(lat, .99), lost: e.counted.lost.Load()}
+	return r, breakdown(e, len(lat), el), nil
+}
+
+// breakdown is where a commit's time went, per commit.
+func breakdown(e *env, n int, el time.Duration) string {
+	per := func(s *stat) time.Duration { return time.Duration(s.ns.Load() / int64(n)) }
+	cnt := func(s *stat) float64 { return float64(s.n.Load()) / float64(n) }
+	t := e.timed
+	cas := per(&e.counted.cas)
+	pack, index, swap, root := per(&t.packPut), per(&t.indexPut), per(&t.swap), per(&t.root)
+	// The packs and the index objects are written at once: the publish
+	// waits for the longer.
+	rest := cas - max(pack, index) - swap - root
+	var b strings.Builder
+	fmt.Fprintf(&b, "%s, one writer, per commit (mean of %d; %v in all):\n", e.backend, n, el.Round(time.Millisecond))
+	fmt.Fprintf(&b, "| part | time | calls |\n| --- | --- | --- |\n")
+	fmt.Fprintf(&b, "| commit, end to end | %v | 1 |\n", (el / time.Duration(n)).Round(time.Microsecond))
+	fmt.Fprintf(&b, "| host work outside the publish (object write, namespace edit, refs edit, reads) | %v | |\n", (el/time.Duration(n) - cas).Round(time.Microsecond))
+	fmt.Fprintf(&b, "| publish (CompareAndSetRoot) | %v | %.2f |\n", cas.Round(time.Microsecond), cnt(&e.counted.cas))
+	fmt.Fprintf(&b, "| . pack finish+upload+fsync (Put packs/) | %v | %.2f |\n", pack.Round(time.Microsecond), cnt(&t.packPut))
+	fmt.Fprintf(&b, "| . index object (Put index/, beside the pack) | %v | %.2f |\n", index.Round(time.Microsecond), cnt(&t.indexPut))
+	fmt.Fprintf(&b, "| . root swap (SwapRoot: temp, fsync, rename, dir fsync) | %v | %.2f |\n", swap.Round(time.Microsecond), cnt(&t.swap))
+	fmt.Fprintf(&b, "| . root reads (Root) | %v | %.2f |\n", root.Round(time.Microsecond), cnt(&t.root))
+	fmt.Fprintf(&b, "| . manifest and the rest (seal, compaction, pack build, waits) | %v | |\n", rest.Round(time.Microsecond))
+	fmt.Fprintf(&b, "| reads from the backend (Get) | %v | %.2f |\n", per(&t.get).Round(time.Microsecond), cnt(&t.get))
+	return b.String()
+}
+
+func concurrent(c config, backend string, writers int) (row, error) {
+	ctx := context.Background()
+	e, err := newEnv(c, backend)
+	if err != nil {
+		return row{}, err
+	}
+	defer e.close()
+	head, err := e.v.Head(ctx, e.me, vcs.MainBranch)
+	if err != nil {
+		return row{}, err
+	}
+	for w := range writers {
+		if err := e.v.CreateBranch(ctx, e.me, fmt.Sprintf("w%02d", w), head.Hash); err != nil {
+			return row{}, err
+		}
+	}
+	e.counted.lost.Store(0)
+	var (
+		mu    sync.Mutex
+		lat   []time.Duration
+		first error
+		wg    sync.WaitGroup
+	)
+	deadline := time.Now().Add(c.duration)
+	t0 := time.Now()
+	for w := range writers {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			branch := fmt.Sprintf("w%02d", w)
+			var mine []time.Duration
+			for i := 0; time.Now().Before(deadline); i++ {
+				s := time.Now()
+				if err := e.commitOne(ctx, branch, fmt.Sprintf("%s/%06d", branch, i), c.objectSize); err != nil {
+					mu.Lock()
+					if first == nil {
+						first = err
+					}
+					mu.Unlock()
+					return
+				}
+				mine = append(mine, time.Since(s))
+			}
+			mu.Lock()
+			lat = append(lat, mine...)
+			mu.Unlock()
+		}()
+	}
+	wg.Wait()
+	el := time.Since(t0)
+	if first != nil {
+		return row{}, first
+	}
+	return row{backend: backend, run: "concurrent", writers: writers, count: len(lat), rate: float64(len(lat)) / el.Seconds(),
+		p50: percentile(lat, .5), p99: percentile(lat, .99), lost: e.counted.lost.Load()}, nil
+}
+
+func bulk(c config, backend string) (row, error) {
+	ctx := context.Background()
+	e, err := newEnv(c, backend)
+	if err != nil {
+		return row{}, err
+	}
+	defer e.close()
+	size := int64(c.bulkMiB) << 20
+	src := make([]byte, size) // generated first: the source must not be what is measured
+	cc := mrand.NewChaCha8([32]byte{7})
+	_, _ = cc.Read(src)
+	t0 := time.Now()
+	root, err := mblob.Write(ctx, e.chunks, strings.NewReader(string(src)), e.geo.Stream())
+	if err != nil {
+		return row{}, err
+	}
+	w := time.Since(t0)
+	t1 := time.Now()
+	if err := e.commitRef(ctx, vcs.MainBranch, "bulk.bin", root); err != nil {
+		return row{}, err
+	}
+	cm := time.Since(t1)
+	return row{backend: backend, run: fmt.Sprintf("bulk %d MiB then commit", c.bulkMiB), writers: 1, count: 1, rate: 1 / cm.Seconds(),
+		p50: cm, p99: cm, note: fmt.Sprintf("(write %v, %.0f MB/s)", w.Round(time.Millisecond), float64(size)/1e6/w.Seconds())}, nil
+}
+
+// --- the fsync floor ---
+
+type floor struct{ p50, p99, linkP50 time.Duration }
+
+// fsyncFloor is what the disk under dir takes to make 4 KiB durable: a
+// write and an fsync, and the same with the link and the directory fsync
+// a blob/local Put adds.
+func fsyncFloor(dir string) (floor, error) {
+	d, err := os.MkdirTemp(dir, "fsync-")
+	if err != nil {
+		return floor{}, err
+	}
+	defer os.RemoveAll(d)
+	buf := make([]byte, 4096)
+	var plain, linked []time.Duration
+	for i := range 200 {
+		t0 := time.Now()
+		p := filepath.Join(d, fmt.Sprintf("f%d", i))
+		f, err := os.Create(p)
+		if err != nil {
+			return floor{}, err
+		}
+		if _, err := f.Write(buf); err != nil {
+			return floor{}, err
+		}
+		if err := f.Sync(); err != nil {
+			return floor{}, err
+		}
+		_ = f.Close()
+		plain = append(plain, time.Since(t0))
+		t1 := time.Now()
+		f, err = os.Create(p + "t")
+		if err != nil {
+			return floor{}, err
+		}
+		_, _ = f.Write(buf)
+		_ = f.Sync()
+		_ = f.Close()
+		if err := os.Link(p+"t", p+"l"); err != nil {
+			return floor{}, err
+		}
+		df, err := os.Open(d)
+		if err != nil {
+			return floor{}, err
+		}
+		_ = df.Sync()
+		_ = df.Close()
+		linked = append(linked, time.Since(t1))
+	}
+	return floor{p50: percentile(plain, .5).Round(time.Microsecond), p99: percentile(plain, .99).Round(time.Microsecond),
+		linkP50: percentile(linked, .5).Round(time.Microsecond)}, nil
+}
