@@ -173,7 +173,8 @@ func Open(ctx context.Context, o Options) (*Store, error) {
 }
 
 // refresh reads the current manifest and loads any index objects it lists
-// that this store has not loaded. When GC has expired packs since the
+// that this store has not loaded; a root whose version is the one the
+// store last took is not opened again. When GC has expired packs since the
 // manifest this store knew (gcGen moved), the index is rebuilt from the
 // manifest's index objects and the packs built here and not yet published,
 // so it names nothing in a deleted pack. Published chunks past
@@ -183,6 +184,15 @@ func (s *Store) refresh(ctx context.Context) error {
 	r, err := s.o.Blobs.Root(ctx)
 	if err != nil {
 		return err
+	}
+	// Versions never repeat (blob.BlobStore), so the version this store
+	// last took is the manifest it holds, with every index object it
+	// lists loaded: there is nothing to open.
+	s.mu.Lock()
+	unmoved := r.Version != blob.NoVersion && r.Version == s.ver
+	s.mu.Unlock()
+	if unmoved {
+		return nil
 	}
 	var m manifest
 	if r.Version != blob.NoVersion {
