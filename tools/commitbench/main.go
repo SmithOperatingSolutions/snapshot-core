@@ -5,6 +5,7 @@
 //
 //	go run ./tools/commitbench                      # everything, both backends
 //	go run ./tools/commitbench -backends local -only single -cpuprofile cpu.prof
+//	go run ./tools/commitbench -backends mem -only batch -batch 10000 -cpuprofile cpu.prof -memprofile mem.prof
 //
 // The stack is the one repo.Open builds (repo.Init writes the config and the
 // first root; packstore.Open on blob.NoDelete of the store, then vcs.Open),
@@ -41,6 +42,7 @@ import (
 	mrand "math/rand/v2"
 	"os"
 	"path/filepath"
+	"runtime"
 	"runtime/pprof"
 	"slices"
 	"strconv"
@@ -76,6 +78,7 @@ type config struct {
 	duration   time.Duration
 	bulkMiB    int
 	cpuprofile string
+	memprofile string
 	objectSize int
 }
 
@@ -88,9 +91,16 @@ func run() int {
 	flag.StringVar(&c.dir, "dir", os.TempDir(), "where blob/local stores are created (and removed afterwards)")
 	flag.DurationVar(&c.duration, "duration", 20*time.Second, "length of each single-writer and concurrent run (the owner's bound: a run takes under a minute)")
 	flag.IntVar(&c.bulkMiB, "bulk", 256, "MiB written before the bulk run's commit")
-	flag.StringVar(&c.cpuprofile, "cpuprofile", "", "write a CPU profile of the single-writer run on the first backend here")
+	flag.StringVar(&c.cpuprofile, "cpuprofile", "", "write a CPU profile of the single-writer run on the first backend here (without -only single: of the first batch run's write phase)")
+	flag.StringVar(&c.memprofile, "memprofile", "", "write an allocation profile of the first batch run's write phase on the first backend here (with -only batch)")
 	flag.IntVar(&c.objectSize, "object", 100, "bytes in each small object")
 	flag.Parse()
+	if c.memprofile != "" {
+		// Set once, before anything allocates, and finer than the default:
+		// the objects are small. The profile counts from here, so it holds
+		// the setup too, a small share of a batch's allocations.
+		runtime.MemProfileRate = 4096
+	}
 	c.backends = strings.Split(*backends, ",")
 	c.only = map[string]bool{}
 	for _, o := range strings.Split(*only, ",") {
@@ -164,8 +174,15 @@ func bench(c config) error {
 			}
 		}
 		if c.only["batch"] {
-			for _, n := range c.batches {
-				r, err := batch(c, b, n)
+			for j, n := range c.batches {
+				var prof profiles
+				if i == 0 && j == 0 {
+					prof.mem = c.memprofile
+					if !c.only["single"] {
+						prof.cpu = c.cpuprofile
+					}
+				}
+				r, err := batch(c, b, n, prof)
 				if err != nil {
 					return fmt.Errorf("%s batch of %d: %w", b, n, err)
 				}
@@ -565,9 +582,50 @@ func bulk(c config, backend string) (row, error) {
 		p50: cm, p99: cm, note: fmt.Sprintf("(write %v, %.0f MB/s)", w.Round(time.Millisecond), float64(size)/1e6/w.Seconds())}, nil
 }
 
+// profiles names where a batch run writes its profiles of the write phase
+// ("": none).
+type profiles struct{ cpu, mem string }
+
+// start begins the profiles; the function it returns ends them and writes
+// the allocation profile.
+func (p profiles) start() (func() error, error) {
+	var cpu *os.File
+	if p.cpu != "" {
+		f, err := os.Create(p.cpu)
+		if err != nil {
+			return nil, err
+		}
+		if err := pprof.StartCPUProfile(f); err != nil {
+			_ = f.Close()
+			return nil, err
+		}
+		cpu = f
+	}
+	return func() error {
+		if cpu != nil {
+			pprof.StopCPUProfile()
+			if err := cpu.Close(); err != nil {
+				return err
+			}
+		}
+		if p.mem == "" {
+			return nil
+		}
+		f, err := os.Create(p.mem)
+		if err != nil {
+			return err
+		}
+		if err := pprof.Lookup("allocs").WriteTo(f, 0); err != nil {
+			_ = f.Close()
+			return err
+		}
+		return f.Close()
+	}, nil
+}
+
 // batch writes n small objects into one branch's namespace through one
 // editor, flushes it once, and commits once: the host that batches.
-func batch(c config, backend string, n int) (string, error) {
+func batch(c config, backend string, n int, prof profiles) (string, error) {
 	ctx := context.Background()
 	e, err := newEnv(c, backend)
 	if err != nil {
@@ -587,6 +645,10 @@ func batch(c config, backend string, n int) (string, error) {
 	}
 	ed := ns.Editor()
 	body := make([]byte, c.objectSize)
+	stop, err := prof.start()
+	if err != nil {
+		return "", err
+	}
 	t0 := time.Now()
 	for i := range n {
 		_, _ = rand.Read(body)
@@ -599,6 +661,9 @@ func batch(c config, backend string, n int) (string, error) {
 		}
 	}
 	write := time.Since(t0)
+	if err := stop(); err != nil {
+		return "", err
+	}
 	t1 := time.Now()
 	if ns, err = ed.Flush(ctx); err != nil {
 		return "", err
