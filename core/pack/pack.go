@@ -234,12 +234,12 @@ func (w *Writer) Add(h hash.Hash, data []byte) error {
 }
 
 // Compress is the payload a chunk is stored as: zstd when that is shorter,
-// else the bytes themselves. Safe to call from many goroutines at once.
+// else the bytes themselves; a chunk under RawBelow is not tried (D13). Safe to call from many goroutines at once.
 // The encoder writes into a scratch buffer kept from call to call, so a
 // chunk that does not compress costs no allocation, and one that does
 // costs its compressed size.
 func (c *Codec) Compress(data []byte) (payload []byte, codec uint8) {
-	if len(data) == 0 {
+	if len(data) < RawBelow {
 		return data, CodecRaw
 	}
 	scratch := c.scratch.Get().([]byte)
