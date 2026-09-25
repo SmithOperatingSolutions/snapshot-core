@@ -171,6 +171,7 @@ packages have no gate: their callers exercise them.
 - [x] Crash harness: kill mid-write 1,000 times; reopened store is at the old or new root (`TestCrashDuringCommitLeavesOldOrNew`, 1,000 weekly)
 - [x] `Put` of 1 MiB + 1 byte returns `ErrTooLarge` (`TooLarge`)
 - [x] (port rule) A closed store refuses every call with `ErrClosed` (`ClosedRefusesEveryCall`)
+- [x] Aging (snapshot-engine#1, finding 3): a refresh of an unmoved root opens no manifest (`TestARefreshOfAnUnmovedRootOpensNoManifest`); one that loses an index object to a newer manifest reads it (`TestARefreshThatLosesAnIndexObjectToANewerManifestReadsIt`); publishes compact small index objects (`TestPublishesCompactSmallIndexObjects`), large ones are not merged (`TestLargeIndexObjectsAreNotMerged`), and a reader indexes each pack once (`TestAReaderOfCompactedIndexObjectsIndexesEachPackOnce`); small commits allocate for small packs (`TestSmallCommitsAllocateForSmallPacks`). Mutants under `# aging`
 
 ### L0 backends
 - [x] Every backend runs the full contract suite in CI (S3 against a real server per push; real S3 weekly): mem, local, multivol, s3 against SeaweedFS on every push (MinIO until 2026-09-24, D11); the real provider weekly (`TestContractAgainstRealS3`, `TestARepositoryRunsOnTheRealProvider`, green in the weekly run of 2026-09-23; #4)

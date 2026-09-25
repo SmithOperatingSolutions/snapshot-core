@@ -192,8 +192,11 @@ can refuse them) and a fuzz target.
   `cdc.Parallel` reads and marks the stream on its own goroutines and the
   caller's places the cuts and stores in stream order, so the stream is
   the same at any worker count; at most about 2×Workers chunks and a few
-  blocks are in flight. The pending pack's buffer is allocated at the
-  pack's size once. Measured on an i7-1360P (`TestSlowThroughputOnLocalDisk`,
+  blocks are in flight. A pending pack's buffer starts at about what the
+  last pending pack held (at least 64 KiB) and doubles as it fills, up to the
+  pack's size: the packs a large write cuts full start the next at the pack's
+  size, so each frame is copied once, and a small publish allocates for a
+  small pack. Measured on an i7-1360P (`TestSlowThroughputOnLocalDisk`,
   the weekly run): a gibibyte of random data writes to `blob/local` at 262
   MB/s where it wrote at 114, compressible text at 485 where it wrote at
   188, a one-byte re-snapshot deduplicates at 322; in memory on sixteen
@@ -249,7 +252,28 @@ can refuse them) and a fuzz target.
   sized to what is left to copy, not to a pack (#14: at the pack's size,
   as the store's pending pack is since #10, it was 32 MiB whatever the
   repack copied).
-- The manifest lists every index object until GC compacts them (§9).
+- **Publishes compact small index objects.** An index object's tier is its
+  estimated size's power of eight over 1 KiB; one of 512 KiB or more is large
+  and never merged again. When a publish finds eight objects in a tier (its
+  own pending ones included), it reads them, writes their packs, as listed,
+  into one object, and swaps in a manifest naming that object in their place,
+  lowest tier first; at most 64 merge in one publish, read sixteen at a time.
+  The manifest lists at most 28 small objects plus the large ones, and a
+  pack's entry is rewritten at most four times. GC rewrites index objects only
+  when a pack expires or is repacked, so without this a repository with no
+  garbage listed one per publish until the manifest refused at 100,000. The
+  new list locates exactly the packs the old one did, each once; a swap that
+  loses leaves the merged objects orphans, GC's swap from a replaced version
+  loses and starts over, and the replaced objects are orphans GC deletes. A
+  refresh that finds a listed object gone reads the root again and, if it
+  moved, refreshes from the newer manifest (at most three in one refresh). A
+  reader loading a merged object skips the packs its index holds already, so
+  nothing counts twice against `IndexInMemory`.
+- **A refresh whose root has not moved opens nothing.** Versions never
+  repeat, so a root whose version the store last took (by its own refresh or
+  publish) is the manifest it holds. What the root read itself costs is the
+  backend's: memory clones the root value, `blob/local` reads the root file,
+  S3 is one GET, `multivol` reads its primary's, `split` its root store's.
 
 *(The prolly tree, the version graph and merge are §7–8; GC is §9.)*
 
