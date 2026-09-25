@@ -145,6 +145,20 @@ replace: func WithLen(r io.Reader, n int) io.Reader { return struct{ io.Reader }
 pkg: ./core/stream
 run: ^TestRegression_SC41_AHintedShortStreamWritesLikeABytesReader$
 
+id: cdc-undercounting-lener-read-in-full-blocks
+file: core/cdc/cdc.go
+find: if c.full >= 2 { // it yields more than it said it held (#41)
+replace: if c.full >= 1<<30 { // it yields more than it said it held (#41)
+pkg: ./core/cdc
+run: ^TestALenerThatUndercountsIsCutTheSameAndReadInFullBlocks$
+
+id: cdc-full-blocks-only-once-it-yields-more
+file: core/cdc/cdc.go
+find: if c.full >= 2 { // it yields more than it said it held (#41)
+replace: if c.full >= 1 { // it yields more than it said it held (#41)
+pkg: ./core/stream
+run: ^TestRegression_SC41_AHintedShortStreamWritesLikeABytesReader$
+
 id: wire-varint-minimal
 file: core/wire/wire.go
 find: case n > 1 && r.b[r.off+n-1] == 0:

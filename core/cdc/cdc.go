@@ -77,6 +77,7 @@ type Chunker struct {
 
 	buf  []byte // the chunk being cut
 	rd   []byte // the read buffer
+	full int    // reads in a row that filled a read buffer smaller than readSize
 	rpos int
 	rend int
 	eof  bool
@@ -100,6 +101,9 @@ type Lener interface{ Len() int }
 // than that. A 100-byte stream costs a few hundred bytes, where both
 // buffers at full size, 576 KiB by default, were zeroed for each. The
 // size decides only how much a read asks for, never where a cut falls.
+// A Lener that undercounts (a wrong size hint, #41) is read in blocks of
+// the full size once two reads in a row have filled the smaller buffer:
+// the first may be all it holds, the second shows it holds more.
 func New(r io.Reader, g Geometry) (*Chunker, error) {
 	if err := g.Validate(); err != nil {
 		return nil, err
@@ -200,9 +204,17 @@ func (c *Chunker) fill() error {
 			c.rerr, c.eof = nil, true // no further reads after a terminal error
 			return err
 		}
+		if c.full >= 2 { // it yields more than it said it held (#41)
+			c.rd, c.full = make([]byte, readSize), 0
+		}
 		n, err := c.r.Read(c.rd)
 		if n > 0 {
 			c.rpos, c.rend = 0, n
+		}
+		if n == len(c.rd) && n < readSize {
+			c.full++
+		} else {
+			c.full = 0
 		}
 		switch {
 		case errors.Is(err, io.EOF):
