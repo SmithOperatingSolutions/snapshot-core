@@ -2,7 +2,11 @@ package dedup
 
 import (
 	"errors"
+	"fmt"
+	"strings"
 	"testing"
+
+	"github.com/SmithOperatingSolutions/snapshot-core/core/hash"
 
 	"github.com/SmithOperatingSolutions/snapshot-core/core/pack"
 	"github.com/SmithOperatingSolutions/snapshot-core/core/seal"
@@ -50,6 +54,81 @@ func TestRegression_SC26_AnEntryWhoseStoredLengthDisagreesWithItsRawIsRefused(t 
 			t.Errorf("%s decoded (stored %d bytes for a %d-byte chunk; err=%v): a stored length not tied to the "+
 				"raw one lets an index entry make GC repack allocate up to a gibibyte before reading a byte, "+
 				"and a chunk read ask the backend for all of it", label, e.stored, e.raw, err)
+		}
+	}
+}
+
+// #26: pack's own index decoder lays a pack's frames out: none overlaps
+// another or the header, and none reaches past the index offset into the
+// index. dedup checked each frame alone against the pack's end, less the
+// trailer, with an offset sum that could wrap. An index object could list
+// two chunks in one frame, or a chunk in the pack's index: a put
+// deduplicates against it and stores nothing, and the chunk never reads
+// back (at most one frame at an offset authenticates).
+func TestRegression_SC26_IndexFramesLieWhereTheirPackHoldsThem(t *testing.T) {
+	kr, _ := seal.NewKeyring()
+	repo := seal.RepoID{27}
+	decodes := func(p []byte) error {
+		name, blob := sealPlain(t, kr, repo, p)
+		_, err := DecodeObject(kr, repo, name, blob)
+		return err
+	}
+
+	// Positive control, a real pack: its frames are adjacent from the
+	// header right up to its index, so its size is the smallest that
+	// holds them. One byte less and the last frame reaches into the index.
+	c, err := pack.NewCodec()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close()
+	w, err := pack.NewWriterSized(kr, repo, c, 1<<20, 64<<10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < 40; i++ {
+		d := []byte(fmt.Sprintf("chunk %d %s", i, strings.Repeat("z", 10*i)))
+		if err := w.Add(hash.Sum(d), d); err != nil {
+			t.Fatal(err)
+		}
+	}
+	built, err := w.Finish()
+	if err != nil {
+		t.Fatal(err)
+	}
+	real, err := encodePlain([]pack.Info{built.Info})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := decodes(real); err != nil {
+		t.Fatalf("positive control: a real pack's record (%d chunks, %d bytes) is refused: %v", len(built.Info.Entries), built.Info.Size, err)
+	}
+	short := built.Info
+	short.Size--
+	shortPlain, _ := encodePlain([]pack.Info{short})
+
+	// Positive control by hand: two adjacent frames, [40,80) and [80,120),
+	// then the sealed index (magic 4, version 2, count 1, two entries of
+	// hash 32 + three one-byte uvarints + codec 1, seal 28: 107 bytes),
+	// then the 16-byte trailer. 243 bytes; 242 is one too few.
+	e1 := ent{hash: 1, off: pack.HeaderSize, stored: 40, raw: 12}
+	e2 := ent{hash: 2, off: pack.HeaderSize + 40, stored: 40, raw: 12}
+	if err := decodes(plain(rec{sum: 1, size: 243, entries: []ent{e1, e2}})); err != nil {
+		t.Fatalf("positive control: adjacent frames right up to the index offset are refused: %v", err)
+	}
+
+	overlapping := ent{hash: 2, off: pack.HeaderSize + 39, stored: 40, raw: 12}
+	for label, p := range map[string][]byte{
+		"a frame overlapping the one before it":       plain(rec{sum: 1, size: 1000, entries: []ent{e1, overlapping}}),
+		"a frame overlapping the one after it":        plain(rec{sum: 1, size: 1000, entries: []ent{{hash: 1, off: pack.HeaderSize + 39, stored: 40, raw: 12}, {hash: 2, off: pack.HeaderSize, stored: 40, raw: 12}}}),
+		"two chunks in one frame":                     plain(rec{sum: 1, size: 1000, entries: []ent{e1, {hash: 2, off: pack.HeaderSize, stored: 40, raw: 12}}}),
+		"a frame reaching a byte into the index":      plain(rec{sum: 1, size: 242, entries: []ent{e1, e2}}),
+		"a real pack's frames, a byte into its index": shortPlain,
+		"an offset whose sum with its length wraps":   plain(rec{sum: 1, size: 1000, entries: []ent{{hash: 1, off: 1<<64 - 20, stored: 40, raw: 12}}}),
+	} {
+		if err := decodes(p); !errors.Is(err, ErrCorrupt) {
+			t.Errorf("%s decoded (err=%v): a put deduplicates against a chunk listed where its pack cannot hold "+
+				"it, stores nothing, and the chunk never reads back", label, err)
 		}
 	}
 }
