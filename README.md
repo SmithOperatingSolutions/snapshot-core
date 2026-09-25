@@ -158,6 +158,15 @@ mise run redcheck     # every test: commit fails without its feat:/fix:
 mise run mutate       # every checked-in mutant is killed
 ```
 
+The fuzz step runs half the cores' worth of workers, at most four, each under
+a soft 2 GiB `GOMEMLIMIT`; `FUZZPARALLEL` and `FUZZMEMLIMIT` (or `-fuzzparallel`
+and `-fuzzmemlimit`) change both. To keep a long local run from taking the
+machine down with it, give it a hard ceiling of its own:
+
+```
+systemd-run --user --scope -p MemoryMax=16G -p MemorySwapMax=0 mise run ci
+```
+
 Changes land test-first: a `test(pkg):` commit that fails on assertions, then
 the `feat(pkg):` or `fix(pkg):` that makes it pass; a test for behavior that
 already exists names the mutant it kills. See [`CONTRIBUTING.md`](CONTRIBUTING.md)
