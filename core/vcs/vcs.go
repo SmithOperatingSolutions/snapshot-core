@@ -1137,3 +1137,8 @@ func (r *Repo) ResolveConflict(ctx context.Context, p auth.Principal, branch, pa
 	}
 	return fmt.Errorf("vcs: the working set of %s kept changing", branch)
 }
+
+// CommitNamespace is Commit of a namespace an editor flushed.
+func (r *Repo) CommitNamespace(ctx context.Context, p auth.Principal, branch string, prev WorkingSet, n *object.Namespace, message string) (Commit, error) {
+	return Commit{}, errors.New("vcs: CommitNamespace is not implemented")
+}

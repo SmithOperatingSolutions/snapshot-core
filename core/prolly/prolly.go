@@ -320,3 +320,11 @@ func (e *Editor) Flush(ctx context.Context) (*Map, error) {
 	e.m, e.edits = m, map[string]*[]byte{}
 	return m, nil
 }
+
+// Changes reports what the flush that made m changed: the root of the map
+// it edited and the keys whose values differ between the two, in key
+// order: what Diff of the two reports. ok is false for a map no flush made
+// (Open, Empty), for which a caller must diff.
+func (m *Map) Changes() (base hash.Hash, keys [][]byte, ok bool) {
+	return hash.Hash{}, nil, false
+}
