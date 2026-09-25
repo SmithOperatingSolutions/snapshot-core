@@ -3,6 +3,7 @@ package packstore_test
 import (
 	"bytes"
 	"context"
+	"errors"
 	"io"
 	"strings"
 	"sync/atomic"
@@ -10,6 +11,7 @@ import (
 
 	"github.com/SmithOperatingSolutions/snapshot-core/core/blob"
 	"github.com/SmithOperatingSolutions/snapshot-core/core/blob/mem"
+	"github.com/SmithOperatingSolutions/snapshot-core/core/chunk"
 	"github.com/SmithOperatingSolutions/snapshot-core/core/chunk/packstore"
 	"github.com/SmithOperatingSolutions/snapshot-core/core/hash"
 )
@@ -101,4 +103,51 @@ func TestRegression_SC26_AChunkReadStopsAtItsRange(t *testing.T) {
 	if err == nil {
 		t.Errorf("a chunk read whose backend sent more than the range asked returned %d bytes and no error", len(got))
 	}
+}
+
+// #26: a backend that sends more than the range asked for is at fault, not
+// the pack: the read is refused as the backend's error, never as
+// chunk.ErrCorrupt, which tells an operator the stored data is damaged and
+// sends them to restore it. A backend that sends one byte fewer than the
+// range is the corrupt case and the positive control of the classification.
+func TestRegression_SC26_AnOverrunningBackendIsNotReportedAsCorruptData(t *testing.T) {
+	inner, kr := mem.New(), keyring(t)
+	w := open(t, inner, kr)
+	h, err := w.Put(ctx, payload("overrun", 4000))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := w.CompareAndSetRoot(ctx, hash.Hash{}, h); err != nil {
+		t.Fatal(err)
+	}
+	read := func(bs blob.BlobStore) error {
+		s, err := packstore.Open(ctx, packstore.Options{Blobs: bs, Keys: kr, Repo: repo})
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer s.Close()
+		_, err = s.Get(ctx, h)
+		return err
+	}
+	if err := read(&rangeShort{BlobStore: inner}); !errors.Is(err, chunk.ErrCorrupt) {
+		t.Fatalf("positive control: a frame a byte short of its range read as %v, want ErrCorrupt", err)
+	}
+	if err := read(&rangeOverrun{BlobStore: inner, extra: 1}); err == nil || errors.Is(err, chunk.ErrCorrupt) {
+		t.Errorf("a backend that sent a byte past a frame's range: %v; want the backend's error, not ErrCorrupt "+
+			"(the pack is intact; an operator told it is corrupt restores data that is not damaged)", err)
+	}
+}
+
+// rangeShort answers a ranged pack read with one byte fewer than asked.
+type rangeShort struct{ blob.BlobStore }
+
+func (b *rangeShort) Get(ctx context.Context, name string, off, n int64) (io.ReadCloser, error) {
+	rc, err := b.BlobStore.Get(ctx, name, off, n)
+	if err != nil || !strings.HasPrefix(name, "packs/") || n < 1 {
+		return rc, err
+	}
+	return struct {
+		io.Reader
+		io.Closer
+	}{io.LimitReader(rc, n-1), rc}, nil
 }

@@ -5046,3 +5046,10 @@ find: frame, err := io.ReadAll(io.LimitReader(rc, want+1))
 replace: frame, err := io.ReadAll(rc)
 pkg: ./core/chunk/packstore
 run: ^TestRegression_SC26_AChunkReadStopsAtItsRange$
+
+id: packstore-frame-overrun-is-the-backends
+file: core/chunk/packstore/packstore.go
+find: if int64(len(frame)) > want {
+replace: if false {
+pkg: ./core/chunk/packstore
+run: ^TestRegression_SC26_AnOverrunningBackendIsNotReportedAsCorruptData$
