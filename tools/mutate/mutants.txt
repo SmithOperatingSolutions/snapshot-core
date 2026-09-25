@@ -4621,15 +4621,15 @@ id: model-accumulates-asks-the-model
 file: core/model/port.go
 find: return ok && a.Accumulates()
 replace: return ok && (a.Accumulates() || true)
-pkg: ./core/merge
-run: ^TestAnAccumulatingModelIsAskedAboutTheSameChangeOnBothSides$
+pkg: ./core/model
+run: ^TestAModelAccumulatesWhenItSaysSo$
 
 id: model-a-registry-accumulates-with-one-model
 file: core/model/port.go
 find: if Accumulates(m) {\n\t\t\treturn true
 replace: if false && Accumulates(m) {\n\t\t\treturn true
-pkg: ./core/merge
-run: ^TestAnAccumulatingModelIsAskedAboutTheSameChangeOnBothSides$
+pkg: ./core/model
+run: ^TestAModelAccumulatesWhenItSaysSo$
 
 id: merge-the-same-change-is-taken-once-otherwise
 file: core/merge/merge.go
