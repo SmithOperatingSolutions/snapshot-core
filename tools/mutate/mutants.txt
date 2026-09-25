@@ -5348,3 +5348,24 @@ find: return prolly.Walk(w.ctx, w.rd, conflictsMap(w.o.Config), ws.Merge.Conflic
 replace: return prolly.Walk(w.ctx, w.rd, w.o.Config, ws.Merge.Conflicts,
 pkg: ./core/vcs
 run: ^TestAConflictRecordIsReadUpToTheLargestMergeWrites$
+
+id: vcs-commit-checks-stored-working
+file: core/vcs/vcs.go
+find: for _, from := range []hash.Hash{stored.Working, stored.Staged, head.Namespace} {
+replace: for _, from := range []hash.Hash{stored.Staged, head.Namespace} {
+pkg: ./core/vcs
+run: ^TestCommitAsksForWhatEachStoredNamespaceChanges$
+
+id: vcs-commit-checks-stored-staged
+file: core/vcs/vcs.go
+find: for _, from := range []hash.Hash{stored.Working, stored.Staged, head.Namespace} {
+replace: for _, from := range []hash.Hash{stored.Working, head.Namespace} {
+pkg: ./core/vcs
+run: ^TestCommitAsksForWhatEachStoredNamespaceChanges$
+
+id: vcs-commit-checks-head
+file: core/vcs/vcs.go
+find: for _, from := range []hash.Hash{stored.Working, stored.Staged, head.Namespace} {
+replace: for _, from := range []hash.Hash{stored.Working, stored.Staged} {
+pkg: ./core/vcs
+run: ^TestCommitAsksForWhatEachStoredNamespaceChanges$

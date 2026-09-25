@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/SmithOperatingSolutions/snapshot-core/core/auth"
+	"github.com/SmithOperatingSolutions/snapshot-core/core/hash"
 	"github.com/SmithOperatingSolutions/snapshot-core/core/object"
 	"github.com/SmithOperatingSolutions/snapshot-core/core/vcs"
 )
@@ -198,4 +199,81 @@ func TestAWriteNeedsTheBranchAsWellAsItsPaths(t *testing.T) {
 	if now, _ := r.WorkingSet(ctx, bob, main); now.Hash != ws.Hash {
 		t.Fatal("a refused write changed main's working set")
 	}
+}
+
+// Commit replaces the working and staged namespaces and moves the head, so
+// it asks for write on what each of the three changes: a path only the
+// stored working namespace holds a change to (bob's commit would drop
+// alice's uncommitted edit), one only the stored staged namespace holds a
+// change to (it would drop what she staged), and one only the head lacks
+// (it would commit her change). Bob, kept out of secret/, is refused each
+// with ErrDenied and the head stays; the same shape under public/ goes
+// through.
+func TestCommitAsksForWhatEachStoredNamespaceChanges(t *testing.T) {
+	for _, c := range []struct {
+		name string
+		// stage leaves a change at path in the stored working set and
+		// returns the namespace bob commits.
+		stage func(f *fixture, path string) vcs.WorkingSet
+		bobs  func(f *fixture, ws vcs.WorkingSet) hash.Hash
+	}{
+		{"working", func(f *fixture, path string) vcs.WorkingSet {
+			f.putWorking(vcs.MainBranch, path, f.obj(8, "alice's edit"))
+			return f.ws(vcs.MainBranch)
+		}, func(f *fixture, _ vcs.WorkingSet) hash.Hash { return f.head(vcs.MainBranch).Namespace }},
+		{"staged", func(f *fixture, path string) vcs.WorkingSet {
+			f.put(vcs.MainBranch, path, f.obj(8, "alice's edit"))
+			ws := f.ws(vcs.MainBranch)
+			next := ws
+			next.Working = f.head(vcs.MainBranch).Namespace
+			if _, err := f.r.UpdateWorkingSet(ctx, alice, vcs.MainBranch, ws, next); err != nil {
+				t.Fatal(err)
+			}
+			return f.ws(vcs.MainBranch)
+		}, func(f *fixture, _ vcs.WorkingSet) hash.Hash { return f.head(vcs.MainBranch).Namespace }},
+		{"head", func(f *fixture, path string) vcs.WorkingSet {
+			f.put(vcs.MainBranch, path, f.obj(8, "alice's edit"))
+			return f.ws(vcs.MainBranch)
+		}, func(_ *fixture, ws vcs.WorkingSet) hash.Hash { return ws.Working }},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			for _, path := range []string{"public/notes", "secret/plan"} {
+				f := newFixture(t)
+				o := f.o
+				o.Authorizer = fenced{who: bob.ID, prefix: "path:main:secret/"}
+				r, err := vcs.Open(ctx, f.s, o)
+				if err != nil {
+					t.Fatal(err)
+				}
+				f.r = r
+				f.put(vcs.MainBranch, "public/notes", f.obj(8, "base"))
+				f.put(vcs.MainBranch, "secret/plan", f.obj(8, "base"))
+				f.commit(vcs.MainBranch, "base")
+				ws := c.stage(f, path)
+				head := f.head(vcs.MainBranch)
+				_, err = f.r.Commit(ctx, bob, vcs.MainBranch, ws, c.bobs(f, ws), "bob")
+				if path == "public/notes" {
+					if err != nil {
+						t.Fatalf("positive control: bob's commit over alice's change to %s: %v", path, err)
+					}
+					continue
+				}
+				if !errors.Is(err, auth.ErrDenied) {
+					t.Fatalf("bob's commit, which changes alice's %s namespace at %s, = %v, want ErrDenied", c.name, path, err)
+				}
+				if f.head(vcs.MainBranch).Hash != head.Hash {
+					t.Fatal("a refused commit moved the head")
+				}
+			}
+		})
+	}
+}
+
+func (f *fixture) ws(branch string) vcs.WorkingSet {
+	f.t.Helper()
+	ws, err := f.r.WorkingSet(ctx, alice, branch)
+	if err != nil {
+		f.t.Fatal(err)
+	}
+	return ws
 }
