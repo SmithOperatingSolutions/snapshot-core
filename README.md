@@ -147,6 +147,26 @@ Go 1.27 or later, `CGO_ENABLED=0`, no cgo anywhere; the one third-party
 engine dependency, disknexus-engine, is pinned by tag and upgraded only
 deliberately, in its own pull request.
 
+**v0.1.2 (unreleased).** What changes for a host or a model:
+
+- **Breaking:** `stream.ReadAll(ctx, rd, ref, limit)` takes the longest
+  stream its caller will hold and refuses a longer one unread
+  (`stream.ErrTooLarge`); a caller of the three-argument form must pass a
+  limit (#23).
+- `prolly.Config.MaxValue` bounds the values a map takes and reads, default
+  `prolly.DefaultMaxValue` (64 MiB); a longer one is
+  `prolly.ErrValueTooLarge`. Maps that held longer values need a larger
+  limit set to read them. The version graph holds its refs to 32 bytes and
+  its conflict records to the longest Merge writes.
+- `model.Accumulator`: a model that says it accumulates is asked to merge
+  the same change made on both sides (a counter each side added one to
+  merges to two more); every other model is not, as before.
+- `vcs.ErrConflictTooLarge`: Merge refuses a conflict larger than a
+  conflict record holds before it writes anything (#27).
+- `tools/ci`'s fuzz step runs half the cores' workers, at most four, each
+  under `GOMEMLIMIT`: `-fuzzparallel`/`FUZZPARALLEL` and
+  `-fuzzmemlimit`/`FUZZMEMLIMIT` (#22).
+
 ## Developing
 
 ```
