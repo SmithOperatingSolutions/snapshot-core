@@ -2,6 +2,7 @@ package packstore
 
 import (
 	"bytes"
+	"encoding/binary"
 	"errors"
 	"fmt"
 	"os"
@@ -331,35 +332,32 @@ func TestJournalLimitsAreAcceptedAtTheLimit(t *testing.T) {
 // frames of raw bytes up to the chunk limit, the last one sized to fit.
 func fillTo(t testing.TB, kr *seal.Keyring, n int) []byte {
 	t.Helper()
-	budget := n - journalHeaderLen - pack.FrameOverhead
+	uv := func(v int) int { return len(binary.AppendUvarint(nil, uint64(v))) }
+	cost := func(stored int) int { return hash.Size + uv(stored-pack.FrameOverhead) + 1 + uv(stored) + stored }
 	p := validPlain(nil)
 	p.counted, p.countedList = 0, nil
-	base := len(p.encode())
-	var frames []jframe
-	used := base
-	for used < budget {
-		room := budget - used - hash.Size - 1 - 5 - 5 // the frame's hash, codec and two uvarints at most
-		size := min(room, maxFrameStored)
-		if size < pack.FrameOverhead {
-			t.Fatalf("fillTo: cannot fill the last %d bytes", budget-used)
-		}
-		f := jframe{h: hash.Sum([]byte{byte(len(frames))}), raw: uint32(size - pack.FrameOverhead), codec: pack.CodecRaw, sealed: make([]byte, size)}
-		frames = append(frames, f)
-		p.frames, p.frameList = uint64(len(frames)), frames
-		used = len(p.encode())
+	left := n - journalHeaderLen - pack.FrameOverhead - len(p.encode())
+	var sizes []int
+	for left > cost(maxFrameStored)+cost(pack.FrameOverhead) {
+		sizes = append(sizes, maxFrameStored)
+		left -= cost(maxFrameStored)
 	}
+	last := left - hash.Size - 1
+	for last > pack.FrameOverhead && cost(last) != left {
+		last--
+	}
+	if cost(last) != left {
+		t.Fatalf("fillTo: cannot fill the last %d bytes", left)
+	}
+	sizes = append(sizes, last)
+	for i, size := range sizes {
+		p.frameList = append(p.frameList, jframe{h: hash.Sum([]byte{byte(i)}), raw: uint32(size - pack.FrameOverhead),
+			codec: pack.CodecRaw, sealed: make([]byte, size)})
+	}
+	p.frames = uint64(len(p.frameList))
 	b := p.encode()
-	if len(b) != budget {
-		// Shorten the last frame by what the uvarints took less than assumed.
-		over := len(b) - budget
-		last := &frames[len(frames)-1]
-		last.sealed = last.sealed[:len(last.sealed)-over]
-		last.raw = uint32(len(last.sealed) - pack.FrameOverhead)
-		p.frameList = frames
-		b = p.encode()
-	}
-	if len(b) != budget {
-		t.Fatalf("fillTo: %d bytes, want %d", len(b), budget)
+	if got := len(b) + journalHeaderLen + pack.FrameOverhead; got != n {
+		t.Fatalf("fillTo: a record of %d bytes, want %d", got, n)
 	}
 	return b
 }

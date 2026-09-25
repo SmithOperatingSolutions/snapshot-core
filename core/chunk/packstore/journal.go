@@ -4,7 +4,6 @@ import (
 	"errors"
 	"fmt"
 
-	"github.com/SmithOperatingSolutions/snapshot-core/core/chunk"
 	"github.com/SmithOperatingSolutions/snapshot-core/core/hash"
 	"github.com/SmithOperatingSolutions/snapshot-core/core/pack"
 	"github.com/SmithOperatingSolutions/snapshot-core/core/seal"
@@ -66,7 +65,48 @@ var errJournalCorrupt = errors.New("packstore: a journal record authenticates an
 
 // seal encodes and seals the record.
 func (r *jrecord) seal(kr *seal.Keyring, repo seal.RepoID) ([]byte, error) {
-	return make([]byte, journalHeaderLen+pack.FrameOverhead), nil
+	var p wire.Writer
+	p.Raw([]byte(journalPlainMagic))
+	p.U16(journalV1)
+	p.Raw(r.expected[:])
+	p.Raw(r.next[:])
+	p.U64(r.gcGen)
+	p.Raw(r.salt[:])
+	p.Uvarint(uint64(len(r.frames)))
+	for _, f := range r.frames {
+		p.Raw(f.h[:])
+		p.Uvarint(uint64(f.raw))
+		p.U8(f.codec)
+		p.Uvarint(uint64(len(f.sealed)))
+		p.Raw(f.sealed)
+	}
+	p.Uvarint(uint64(len(r.counted)))
+	for _, h := range r.counted {
+		p.Raw(h[:])
+	}
+	plain := p.Bytes()
+	if len(plain)+journalHeaderLen+pack.FrameOverhead > maxJournal {
+		return nil, fmt.Errorf("packstore: a journal record of %d bytes, over %d", len(plain), maxJournal)
+	}
+	salt, err := seal.NewSalt()
+	if err != nil {
+		return nil, err
+	}
+	key, err := kr.Key(seal.Journal, repo, salt)
+	if err != nil {
+		return nil, err
+	}
+	defer key.Destroy()
+	var h wire.Writer
+	h.Raw([]byte(journalMagic))
+	h.U16(journalV1)
+	h.U32(uint32(len(plain) + pack.FrameOverhead))
+	h.Raw(salt[:])
+	sealed, err := key.Seal(h.Bytes(), plain)
+	if err != nil {
+		return nil, err
+	}
+	return append(h.Bytes(), sealed...), nil
 }
 
 // decodeJournal returns the records of a journal up to the last complete
@@ -76,9 +116,83 @@ func (r *jrecord) seal(kr *seal.Keyring, repo seal.RepoID) ([]byte, error) {
 // A record that authenticates and does not decode, and one that does not
 // follow on from the record before it, are errJournalCorrupt.
 func decodeJournal(kr *seal.Keyring, repo seal.RepoID, b []byte) (records []jrecord, used int, err error) {
-	return nil, 0, nil
+	for used+journalHeaderLen <= len(b) {
+		hb := b[used : used+journalHeaderLen]
+		h := wire.NewReader(hb)
+		magic, v, n := h.Fixed(4), h.U16(), h.U32()
+		var salt seal.Salt
+		copy(salt[:], h.Fixed(len(salt)))
+		if h.Done() != nil || string(magic) != journalMagic || v != journalV1 ||
+			n > maxJournal-journalHeaderLen || int(n) > len(b)-used-journalHeaderLen {
+			break // debris, or a record cut short
+		}
+		key, err := kr.Key(seal.Journal, repo, salt)
+		if err != nil {
+			return nil, 0, err
+		}
+		plain, err := key.Open(hb, b[used+journalHeaderLen:used+journalHeaderLen+int(n)])
+		key.Destroy()
+		if err != nil {
+			break // torn, or not this repository's
+		}
+		r, err := decodeRecord(plain)
+		if err != nil {
+			return nil, 0, err
+		}
+		if len(records) > 0 && r.expected != records[len(records)-1].next {
+			return nil, 0, fmt.Errorf("%w: record %d replaced root %s, and the one before set %s", errJournalCorrupt,
+				len(records), r.expected.Short(), records[len(records)-1].next.Short())
+		}
+		records = append(records, r)
+		used += journalHeaderLen + int(n)
+	}
+	return records, used, nil
 }
 
-var _ = fmt.Errorf
-var _ = chunk.ErrCorrupt
-var _ = wire.NewReader
+// decodeRecord decodes a record's plaintext. No count sizes an allocation:
+// every frame and hash is read from bytes that are there.
+func decodeRecord(plain []byte) (jrecord, error) {
+	var r jrecord
+	p := wire.NewReader(plain)
+	magic, v := p.Fixed(4), p.U16()
+	copy(r.expected[:], p.Fixed(hash.Size))
+	copy(r.next[:], p.Fixed(hash.Size))
+	r.gcGen = p.U64()
+	copy(r.salt[:], p.Fixed(len(r.salt)))
+	frames := p.Uvarint()
+	if p.Err() != nil || string(magic) != journalPlainMagic || v != journalV1 || frames > pack.MaxChunksPerPack {
+		return jrecord{}, fmt.Errorf("%w: header", errJournalCorrupt)
+	}
+	for i := uint64(0); i < frames; i++ {
+		var f jframe
+		copy(f.h[:], p.Fixed(hash.Size))
+		raw := p.Uvarint()
+		f.codec = p.U8()
+		stored := p.Uvarint()
+		if p.Err() != nil || raw > pack.MaxChunkSize || f.codec > pack.CodecZstd || stored > maxFrameStored {
+			return jrecord{}, fmt.Errorf("%w: frame %d", errJournalCorrupt, i)
+		}
+		f.raw = uint32(raw)
+		f.sealed = p.Fixed(int(stored))
+		if p.Err() != nil {
+			return jrecord{}, fmt.Errorf("%w: frame %d", errJournalCorrupt, i)
+		}
+		r.frames = append(r.frames, f)
+	}
+	counted := p.Uvarint()
+	if p.Err() != nil || counted > maxCounted {
+		return jrecord{}, fmt.Errorf("%w: counted", errJournalCorrupt)
+	}
+	for i := uint64(0); i < counted; i++ {
+		var h hash.Hash
+		copy(h[:], p.Fixed(hash.Size))
+		if p.Err() != nil {
+			return jrecord{}, fmt.Errorf("%w: counted %d", errJournalCorrupt, i)
+		}
+		r.counted = append(r.counted, h)
+	}
+	if err := p.Done(); err != nil {
+		return jrecord{}, fmt.Errorf("%w: %w", errJournalCorrupt, err)
+	}
+	return r, nil
+}
