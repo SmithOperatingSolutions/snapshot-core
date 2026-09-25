@@ -2,7 +2,6 @@ package prolly
 
 import (
 	"context"
-	"math"
 
 	"github.com/SmithOperatingSolutions/snapshot-core/core/chunk"
 	"github.com/SmithOperatingSolutions/snapshot-core/core/hash"
@@ -13,13 +12,14 @@ import (
 // first: its nodes (never leaves; each read, when visit says to go on into
 // it, and checked as a read checks it) and the chunks of its long values'
 // streams, as stream.Walk names them. When value is not nil, each value of
-// a leaf Walk goes into is handed to it, long ones read whole, so a caller
-// can walk what values name.
+// a leaf Walk goes into is handed to it, long ones read whole (at most the
+// Config's MaxValue, else ErrValueTooLarge), so a caller can walk what
+// values name.
 func Walk(ctx context.Context, rd chunk.Reader, c Config, root hash.Hash, visit func(h hash.Hash, leaf bool) (bool, error), value func(key, val []byte) error) error {
 	if _, err := c.rule(); err != nil {
 		return err
 	}
-	w := walker{ctx: ctx, rd: rd, limit: c.InlineLimit, visit: visit, value: value}
+	w := walker{ctx: ctx, rd: rd, limit: c.InlineLimit, maxValue: c.maxValue(), visit: visit, value: value}
 	deeper, err := visit(root, false)
 	if err != nil || !deeper {
 		return err
@@ -35,11 +35,12 @@ func Walk(ctx context.Context, rd chunk.Reader, c Config, root hash.Hash, visit 
 }
 
 type walker struct {
-	ctx   context.Context
-	rd    chunk.Reader
-	limit int
-	visit func(h hash.Hash, leaf bool) (bool, error)
-	value func(key, val []byte) error
+	ctx      context.Context
+	rd       chunk.Reader
+	limit    int // inline
+	maxValue int
+	visit    func(h hash.Hash, leaf bool) (bool, error)
+	value    func(key, val []byte) error
 }
 
 func (w *walker) read(h hash.Hash) (*node, error) {
@@ -93,7 +94,7 @@ func (w *walker) leafValue(e entry) error {
 	v := e.val.inline
 	if e.val.ref != nil {
 		var err error
-		if v, err = stream.ReadAll(w.ctx, w.rd, *e.val.ref, math.MaxUint64); err != nil {
+		if v, err = readValue(w.ctx, w.rd, *e.val.ref, w.maxValue); err != nil {
 			return err
 		}
 	}
