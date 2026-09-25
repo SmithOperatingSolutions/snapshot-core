@@ -990,7 +990,7 @@ file: core/chunk/packstore/packstore.go
 find: if m.root != expected && attempt == 0 {
 replace: if false && m.root != expected && attempt == 0 {
 pkg: ./core/chunk/packstore
-run: ^TestStaleViewIsRefreshedBeforeAConflict$
+run: ^TestARootThatMovesAndReturnsDuringTheUploadStillPublishes$
 
 id: packstore-verifies-cache-hits
 file: core/chunk/packstore/packstore.go
@@ -4693,3 +4693,25 @@ find: if d, err = decide(co.Key, co, ct); err != nil {
 replace: if d, err = decide(co.Key, co, ct); bytes.Equal(co.To, ct.To) {\n\t\t\t\td, err = Decision{}, nil\n\t\t\t} else if err != nil {
 pkg: ./model/mapobject
 run: ^TestAResolverIsAskedAboutTheSameValueOnBothSides$
+
+# commit contention
+id: packstore-a-loser-learns-before-it-writes
+file: core/chunk/packstore/packstore.go
+find: } else if !ok {\n\t\treturn chunk.ErrRootConflict
+replace: } else if !ok && false {\n\t\treturn chunk.ErrRootConflict
+pkg: ./core/chunk/packstore
+run: ^TestALoserLearnsBeforeItWrites$
+
+id: packstore-the-check-reads-a-root-that-moved
+file: core/chunk/packstore/packstore.go
+find: \tif same {\n\t\treturn root == expected, nil
+replace: \tif same || true {\n\t\treturn root == expected, nil
+pkg: ./core/chunk/packstore
+run: ^(TestALoserLearnsBeforeItWrites|TestStaleViewIsRefreshedBeforeAConflict)$
+
+id: packstore-a-swap-after-the-upload-still-loses
+file: core/chunk/packstore/packstore.go
+find: \t\tif m.root != expected {\n\t\t\treturn chunk.ErrRootConflict // the root moved
+replace: \t\tif false {\n\t\t\treturn chunk.ErrRootConflict // the root moved
+pkg: ./core/chunk/packstore
+run: ^TestARootThatMovesDuringTheUploadStillLosesTheSwap$
