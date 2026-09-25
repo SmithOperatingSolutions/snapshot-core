@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"runtime"
 	"testing"
 	"time"
 
@@ -237,5 +238,38 @@ func TestAReaderOfCompactedIndexObjectsIndexesEachPackOnce(t *testing.T) {
 	}
 	if st.Chunks != commits {
 		t.Fatalf("a spilled reader of %d chunks counts %d: it indexed the packs of merged index objects in memory beside its table", commits, st.Chunks)
+	}
+}
+
+// Every publish leaves the store to start a new pending pack, and a pending
+// pack's buffer was allocated at the pack's size (#10), 32 MiB zeroed for a
+// one-row commit: about 3 ms of a commit on memory. A pending pack starts
+// at about what the last one held and grows to the pack's size as it
+// fills, so a store making small commits allocates for small packs.
+func TestSmallCommitsAllocateForSmallPacks(t *testing.T) {
+	const commits = 20
+	s := open(t, mem.New(), keyring(t))
+	root, err := s.Put(ctx, []byte("warm up"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.CompareAndSetRoot(ctx, hash.Hash{}, root); err != nil {
+		t.Fatal(err)
+	}
+	var before, after runtime.MemStats
+	runtime.ReadMemStats(&before)
+	for i := range commits {
+		h, err := s.Put(ctx, []byte(fmt.Sprintf("one small row %d", i)))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := s.CompareAndSetRoot(ctx, root, h); err != nil {
+			t.Fatal(err)
+		}
+		root = h
+	}
+	runtime.ReadMemStats(&after)
+	if per := (after.TotalAlloc - before.TotalAlloc) / commits; per > 2<<20 {
+		t.Fatalf("a one-chunk commit allocates %d KiB, want under 2 MiB: its pending pack is sized at the pack (%d MiB), not at what it holds", per>>10, packstore.DefaultPackSize>>20)
 	}
 }
