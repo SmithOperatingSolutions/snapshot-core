@@ -59,7 +59,9 @@ var (
 	ErrMergeState          = errors.New("vcs: only merging, resolving, committing and abandoning change a merge in progress")
 	ErrNoMerge             = errors.New("vcs: no merge in progress")
 	// ErrConflictTooLarge refuses a merge whose model reported a conflict
-	// larger than a conflict record holds; nothing is written.
+	// larger than a conflict record holds (10,000 model conflicts at one
+	// path, each located in 4,096 bytes with a 1,024-byte reason); the
+	// branch is left as it was.
 	ErrConflictTooLarge = errors.New("vcs: a model reported a conflict too large to record")
 	// ErrSessionLost is the chunk store's: GC deleted writes the repository
 	// had not published, and the host must reopen it and write again.
@@ -966,6 +968,11 @@ func (r *Repo) Merge(ctx context.Context, p auth.Principal, branch string, their
 	res, err := merge.Merge(ctx, r.o.Registry, ns[0], ns[1], ns[2], r.s, merge.Options{MaxConflicts: r.o.MaxConflicts})
 	if err != nil {
 		return merge.Result{}, err
+	}
+	for _, c := range res.Conflicts { // before anything is written
+		if err := recordable(c); err != nil {
+			return merge.Result{}, err
+		}
 	}
 	if err := r.checkPaths(ctx, p, branch, ws.Working, res.Merged.Root()); err != nil {
 		return merge.Result{}, err

@@ -181,6 +181,25 @@ func encodeConflict(c merge.Conflict) []byte {
 	return w.Bytes()
 }
 
+// recordable refuses a conflict larger than its record holds, under the
+// limits decodeConflict reads it back with: written, it would leave a merge
+// state whose conflicts do not read. The message names neither the path
+// nor the model's text.
+func recordable(c merge.Conflict) error {
+	if len(c.Model) > maxModelConflicts {
+		return fmt.Errorf("%w: %d model conflicts at one path, limit %d", ErrConflictTooLarge, len(c.Model), maxModelConflicts)
+	}
+	for i, mc := range c.Model {
+		if len(mc.Location) > maxLocationLen {
+			return fmt.Errorf("%w: model conflict %d locates itself in %d bytes, limit %d", ErrConflictTooLarge, i, len(mc.Location), maxLocationLen)
+		}
+		if len(mc.Reason) > maxReasonLen {
+			return fmt.Errorf("%w: model conflict %d gives a %d-byte reason, limit %d", ErrConflictTooLarge, i, len(mc.Reason), maxReasonLen)
+		}
+	}
+	return nil
+}
+
 func decodeConflict(path string, b []byte) (merge.Conflict, error) {
 	r := wire.NewReader(b)
 	c := merge.Conflict{Path: path, Kind: merge.Kind(r.U8())}
