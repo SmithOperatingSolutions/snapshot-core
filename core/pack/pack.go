@@ -46,6 +46,7 @@ const (
 	MaxPackSize      = 1 << 30
 	HeaderSize       = 40
 	TrailerSize      = 16
+	FrameOverhead    = sealOverhead // what sealing adds to a frame's payload
 )
 
 // Codecs.

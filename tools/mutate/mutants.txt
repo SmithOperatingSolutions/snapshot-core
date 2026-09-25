@@ -5018,3 +5018,24 @@ find: case p.Threads < 1 || p.Threads > maxArgonThread:
 replace: case p.Threads < 1:
 pkg: ./core/seal
 run: ^TestRegression_SC25_AKeyFileAtTheCeilingIsAccepted$
+
+id: dedup-raw-frame-is-chunk-plus-seal
+file: core/dedup/dedup.go
+find: return stored == raw+pack.FrameOverhead
+replace: return stored >= raw+pack.FrameOverhead
+pkg: ./core/dedup
+run: ^TestRegression_SC26_AnEntryWhoseStoredLengthDisagreesWithItsRawIsRefused$
+
+id: dedup-compressed-frame-is-smaller
+file: core/dedup/dedup.go
+find: return stored >= pack.FrameOverhead && stored < raw+pack.FrameOverhead
+replace: return stored >= pack.FrameOverhead
+pkg: ./core/dedup
+run: ^TestRegression_SC26_AnEntryWhoseStoredLengthDisagreesWithItsRawIsRefused$
+
+id: dedup-compressed-frame-holds-a-seal
+file: core/dedup/dedup.go
+find: return stored >= pack.FrameOverhead && stored < raw+pack.FrameOverhead
+replace: return stored < raw+pack.FrameOverhead
+pkg: ./core/dedup
+run: ^TestRegression_SC26_AnEntryWhoseStoredLengthDisagreesWithItsRawIsRefused$

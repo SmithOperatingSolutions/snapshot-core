@@ -131,6 +131,7 @@ func decodePlain(b []byte) ([]pack.Info, error) {
 			off, stored, raw := r.Uvarint(), r.Uvarint(), r.Uvarint()
 			e.Codec = r.U8()
 			if r.Err() != nil || off < pack.HeaderSize || off+stored > framesEnd || raw > pack.MaxChunkSize ||
+				!frameLengthsAgree(e.Codec, stored, raw) ||
 				(e.Codec != pack.CodecRaw && e.Codec != pack.CodecZstd) ||
 				(j > 0 && p.Entries[j-1].Hash.Compare(e.Hash) >= 0) {
 				return nil, fmt.Errorf("%w: pack %d entry %d", ErrCorrupt, i, j)
@@ -144,6 +145,21 @@ func decodePlain(b []byte) ([]pack.Info, error) {
 		return nil, fmt.Errorf("%w: %w", ErrCorrupt, err)
 	}
 	return packs, nil
+}
+
+// frameLengthsAgree ties a frame's sealed length to its chunk's, as pack's
+// own index decoder does: a raw frame is the chunk plus the seal, a
+// compressed one is smaller than that (#26: untied, an entry could claim a
+// gibibyte frame for a kibibyte chunk, and GC repack allocates the claim
+// before reading). An unknown codec is the codec check's to refuse.
+func frameLengthsAgree(codec uint8, stored, raw uint64) bool {
+	switch codec {
+	case pack.CodecRaw:
+		return stored == raw+pack.FrameOverhead
+	case pack.CodecZstd:
+		return stored >= pack.FrameOverhead && stored < raw+pack.FrameOverhead
+	}
+	return true
 }
 
 // EncodeObject seals a batch of pack records into an index object.
