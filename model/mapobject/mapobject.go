@@ -32,10 +32,12 @@ type Spec struct {
 	Check func(key, value []byte) error
 }
 
-// Resolver decides one key both sides changed from base. It returns the
-// value to store and put true; put false with reason "" keeps ours as it
-// is (the sides agree); a reason names a conflict for the person resolving
-// it, and the key stays as ours.
+// Resolver decides one key both sides changed from base, the same value on
+// both sides included, so a model whose values add (a counter) can add both
+// changes; such a model says so to the namespace merge with
+// model.Accumulator. It returns the value to store and put true; put false
+// with reason "" keeps ours as it is (the sides agree); a reason names a
+// conflict for the person resolving it, and the key stays as ours.
 type Resolver func(key []byte, ours, theirs prolly.Change) (value []byte, put bool, reason string)
 
 // Decision is a Decider's answer for one key both sides changed.

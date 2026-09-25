@@ -106,6 +106,9 @@ type Store struct {
 	sessGen     uint64                // the gcGen those puts began under
 	uploaded    map[string]time.Time  // this store's unpublished packs and index objects, dated by o.Clock
 	lost        error                 // chunk.ErrSessionLost once GC deleted unpublished work: writes refuse
+	opens       int                   // manifests refresh has opened (tests count them)
+	objEst      map[[32]byte]int      // index objects loaded or written here, by estimated size (compaction)
+	lastPack    int                   // the size the last pending pack reached: the next one starts there
 }
 
 // maxInFlight bounds the packs finishing or uploading at once (#10): a
@@ -154,7 +157,7 @@ func Open(ctx context.Context, o Options) (*Store, error) {
 		return nil, err
 	}
 	s := &Store{o: o, codec: codec, mem: dedup.New(), inflight: map[string][]byte{}, slots: make(chan struct{}, maxInFlight),
-		loaded: map[[32]byte]bool{}, keys: map[seal.Salt]*pack.Keys{}, condemned: map[string]bool{},
+		loaded: map[[32]byte]bool{}, objEst: map[[32]byte]int{}, keys: map[seal.Salt]*pack.Keys{}, condemned: map[string]bool{},
 		unpublished: map[string]pack.Info{}, inIndex: map[[32]byte][]string{}, deduped: map[hash.Hash]bool{},
 		uploaded: map[string]time.Time{}}
 	switch {
@@ -172,16 +175,51 @@ func Open(ctx context.Context, o Options) (*Store, error) {
 }
 
 // refresh reads the current manifest and loads any index objects it lists
-// that this store has not loaded. When GC has expired packs since the
+// that this store has not loaded; a root whose version is the one the
+// store last took is not opened again. When GC has expired packs since the
 // manifest this store knew (gcGen moved), the index is rebuilt from the
 // manifest's index objects and the packs built here and not yet published,
 // so it names nothing in a deleted pack. Published chunks past
 // o.IndexInMemory are indexed on disk (#6): the table is built when they
 // first pass the bound, and again at every rebuild.
+//
+// An index object the manifest lists can be gone by the time it is loaded:
+// a newer manifest replaced it and it was deleted (GC deletes the ones it
+// rewrote a grace window later, and an orphan at any time). The refresh
+// then reads the root again and, if it moved, starts over from it.
 func (s *Store) refresh(ctx context.Context) error {
 	r, err := s.o.Blobs.Root(ctx)
 	if err != nil {
 		return err
+	}
+	for attempt := 1; ; attempt++ {
+		err = s.refreshFrom(ctx, r)
+		if err == nil || !errors.Is(err, blob.ErrNotFound) || attempt == refreshAttempts {
+			return err
+		}
+		again, rerr := s.o.Blobs.Root(ctx)
+		if rerr != nil || again.Version == r.Version {
+			return err // gone from the manifest in force: not a race
+		}
+		r = again
+	}
+}
+
+// refreshAttempts bounds the manifests one refresh reads when each names
+// an index object gone by the time it is loaded.
+const refreshAttempts = 3
+
+// refreshFrom is refresh from root r, read from the backend.
+func (s *Store) refreshFrom(ctx context.Context, r blob.Root) error {
+	var err error
+	// Versions never repeat (blob.BlobStore), so the version this store
+	// last took is the manifest it holds, with every index object it
+	// lists loaded: there is nothing to open.
+	s.mu.Lock()
+	unmoved := r.Version != blob.NoVersion && r.Version == s.ver
+	s.mu.Unlock()
+	if unmoved {
+		return nil
 	}
 	var m manifest
 	if r.Version != blob.NoVersion {
@@ -190,6 +228,9 @@ func (s *Store) refresh(ctx context.Context) error {
 		}
 	}
 	s.mu.Lock()
+	if r.Version != blob.NoVersion {
+		s.opens++
+	}
 	rebuild := s.ver != blob.NoVersion && m.seq > s.man.seq && m.gcGen != s.man.gcGen
 	var toLoad [][32]byte
 	for _, sum := range m.indexes {
@@ -214,6 +255,9 @@ func (s *Store) refresh(ctx context.Context) error {
 		infos, err := s.loadIndex(ctx, sum)
 		if err != nil {
 			return err
+		}
+		if !rebuild {
+			infos = s.unindexed(infos)
 		}
 		total += entries(infos)
 		if total > s.o.IndexInMemory {
@@ -282,8 +326,59 @@ func (s *Store) refresh(ctx context.Context) error {
 	if newer {
 		s.man, s.ver = m, r.Version
 		s.condemned = cond
+		s.forgetReplacedLocked()
 	}
 	return nil
+}
+
+// forgetReplacedLocked drops what the store noted of index objects the
+// manifest no longer lists, once they outnumber the listed ones: publishes
+// replace objects as fast as they add them (compaction), and a long
+// session would otherwise keep a note of every object it ever saw. Callers
+// hold s.mu.
+func (s *Store) forgetReplacedLocked() {
+	listed := len(s.man.indexes) + len(s.sessionIdx)
+	if max(len(s.loaded), len(s.objEst)) <= 2*listed+64 {
+		return
+	}
+	keep := make(map[[32]byte]bool, listed)
+	for _, l := range [][][32]byte{s.man.indexes, s.sessionIdx} {
+		for _, sum := range l {
+			keep[sum] = true
+		}
+	}
+	for sum := range s.loaded {
+		if !keep[sum] {
+			delete(s.loaded, sum)
+		}
+	}
+	for sum := range s.objEst {
+		if !keep[sum] {
+			delete(s.objEst, sum)
+		}
+	}
+}
+
+// unindexed is the packs of infos the store's index does not hold: a
+// merged index object lists packs the objects it replaced listed, which
+// are indexed already and must not count against o.IndexInMemory again,
+// nor sit in memory beside the table on disk.
+func (s *Store) unindexed(infos []pack.Info) []pack.Info {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	out := infos[:0:0]
+	for _, info := range infos {
+		if s.mem.HasPack(info.Name) {
+			continue
+		}
+		if s.disk != nil {
+			if sum, err := dedup.PackSum(info.Name); err == nil && s.disk.listed[sum] {
+				continue
+			}
+		}
+		out = append(out, info)
+	}
+	return out
 }
 
 // addPacks adds packs to an index, those still in service first, so a chunk
@@ -341,8 +436,16 @@ func (s *Store) hasLocked(h hash.Hash) (bool, error) {
 	return false, nil
 }
 
+// loadIndex loads an index object and notes its size for compaction.
 func (s *Store) loadIndex(ctx context.Context, sum [32]byte) ([]pack.Info, error) {
-	return loadIndex(ctx, s.o, sum)
+	infos, err := loadIndex(ctx, s.o, sum)
+	if err != nil {
+		return nil, err
+	}
+	s.mu.Lock()
+	s.objEst[sum] = objectSize(infos)
+	s.mu.Unlock()
+	return infos, nil
 }
 
 // loadIndex reads and opens one index object the manifest lists.
@@ -375,9 +478,17 @@ func (s *Store) Location(h hash.Hash) (packName string, off, n int64, ok bool) {
 	return loc.Pack.Name, int64(loc.Entry.Offset), int64(loc.Entry.StoredLen), true
 }
 
+// newWriter starts a pending pack sized at about what the last one held,
+// at least minPending, and growing to the pack's size as it fills: packs
+// cut full by a large write start the next at the pack's size, so its
+// frames are never copied (#10), and a publish of a few rows allocates for
+// a few rows, not for a pack.
 func (s *Store) newWriter() (*pack.Writer, error) {
-	return pack.NewWriter(s.o.Keys, s.o.Repo, s.codec, s.o.PackSize)
+	return pack.NewWriterSized(s.o.Keys, s.o.Repo, s.codec, s.o.PackSize, max(s.lastPack, minPending))
 }
+
+// minPending is the least a pending pack's buffer starts at.
+const minPending = 64 << 10
 
 // finishPendingLocked names and builds the pending pack on the caller's
 // goroutine, makes its chunks locatable, and keeps its bytes readable
@@ -386,6 +497,7 @@ func (s *Store) finishPendingLocked() (*pack.Built, error) {
 	if s.pending == nil || s.pending.Count() == 0 {
 		return nil, nil
 	}
+	s.lastPack = s.pending.Size()
 	b, err := s.pending.Finish()
 	s.pending = nil
 	if err != nil {
@@ -407,6 +519,7 @@ func (s *Store) takePendingLocked() *pack.Writer {
 	if w == nil || w.Count() == 0 {
 		return nil
 	}
+	s.lastPack = w.Size()
 	s.finishing = append(s.finishing, w)
 	s.finishers.Add(1)
 	return w
@@ -770,10 +883,16 @@ func (s *Store) frame(ctx context.Context, h hash.Hash) (dedup.Location, []byte,
 	if err != nil {
 		return loc, nil, nil, err
 	}
-	frame, err := io.ReadAll(rc)
+	// One byte past the range, not whatever the backend sends: an endpoint
+	// that ignores Range would stream the whole pack (#26).
+	want := int64(loc.Entry.StoredLen)
+	frame, err := io.ReadAll(io.LimitReader(rc, want+1))
 	_ = rc.Close()
 	if err != nil {
 		return loc, nil, nil, err
+	}
+	if int64(len(frame)) > want {
+		return loc, nil, nil, fmt.Errorf("packstore: reading %s: the backend sent more than the %d bytes asked for", loc.Pack.Name, want)
 	}
 	return loc, frame, keys, nil
 }
@@ -879,6 +998,14 @@ func (s *Store) CompareAndSetRoot(ctx context.Context, expected, next hash.Hash)
 		return fmt.Errorf("%w: %s", chunk.ErrRootMissing, next.Short())
 	}
 	s.mu.Unlock()
+	// A writer that lost the race learns it before it writes: nothing is
+	// finished or uploaded for a root that has already moved. The root can
+	// still move after this, which the swap below finds, as before.
+	if ok, err := s.rootIs(ctx, expected); err != nil {
+		return err
+	} else if !ok {
+		return chunk.ErrRootConflict
+	}
 	// Every finisher has landed its pack or left it to retry here.
 	s.finishers.Wait()
 	s.mu.Lock()
@@ -953,7 +1080,11 @@ func (s *Store) CompareAndSetRoot(ctx context.Context, expected, next hash.Hash)
 		upd := m
 		upd.seq = m.seq + 1
 		upd.root = next
-		upd.indexes = mergeIndexes(m.indexes, pending)
+		indexes, merged, err := s.compact(ctx, mergeIndexes(m.indexes, pending))
+		if err != nil {
+			return err
+		}
+		upd.indexes = indexes
 		if len(upd.indexes) > maxIndexes {
 			return fmt.Errorf("packstore: the manifest lists %d index objects, over %d: run GC to compact", len(upd.indexes), maxIndexes)
 		}
@@ -965,6 +1096,7 @@ func (s *Store) CompareAndSetRoot(ctx context.Context, expected, next hash.Hash)
 		if err == nil {
 			s.mu.Lock()
 			s.man, s.ver = upd, nv
+			merged.landed(s)
 			for _, sum := range pending {
 				for _, name := range s.inIndex[sum] {
 					delete(s.unpublished, name)
@@ -974,6 +1106,7 @@ func (s *Store) CompareAndSetRoot(ctx context.Context, expected, next hash.Hash)
 				delete(s.uploaded, indexName(sum))
 			}
 			s.sessionIdx = s.sessionIdx[len(pending):]
+			s.forgetReplacedLocked()
 			s.deduped, s.sessGen = map[hash.Hash]bool{}, upd.gcGen
 			s.mu.Unlock()
 			return nil
@@ -984,6 +1117,28 @@ func (s *Store) CompareAndSetRoot(ctx context.Context, expected, next hash.Hash)
 		// Someone else changed the manifest: refresh and re-apply.
 	}
 	return chunk.ErrRootConflict
+}
+
+// rootIs reports whether the backend's root is still expected. It reads the
+// root and decrypts the manifest only when the root's version moved since
+// this store last read it.
+func (s *Store) rootIs(ctx context.Context, expected hash.Hash) (bool, error) {
+	r, err := s.o.Blobs.Root(ctx)
+	if err != nil {
+		return false, err
+	}
+	s.mu.Lock()
+	same, root := r.Version == s.ver, s.man.root
+	s.mu.Unlock()
+	if same {
+		return root == expected, nil
+	}
+	if err := s.refresh(ctx); err != nil {
+		return false, err
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.man.root == expected, nil
 }
 
 // Stats implements chunk.Store.
@@ -1066,6 +1221,7 @@ func (s *Store) recordSessionIndex(w *indexWriter) {
 	for _, obj := range w.written {
 		s.sessionIdx = append(s.sessionIdx, obj.sum)
 		s.loaded[obj.sum] = true
+		s.objEst[obj.sum] = obj.est
 		s.inIndex[obj.sum] = obj.packs
 		s.uploaded[indexName(obj.sum)] = s.o.Clock()
 	}

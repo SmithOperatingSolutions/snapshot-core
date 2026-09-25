@@ -711,10 +711,12 @@ type indexWriter struct {
 	session int           // packstore's publish: the session packs taken from the queue
 }
 
-// indexObject is one index object written and the packs it lists.
+// indexObject is one index object written, the packs it lists and its
+// estimated size.
 type indexObject struct {
 	sum   [32]byte
 	packs []string
+	est   int
 }
 
 func (w *indexWriter) add(info pack.Info) error {
@@ -743,7 +745,7 @@ func (w *indexWriter) flush() error {
 	if err != nil {
 		return err
 	}
-	obj := indexObject{sum: sum}
+	obj := indexObject{sum: sum, est: w.size}
 	for _, p := range w.batch {
 		obj.packs = append(obj.packs, p.Name)
 	}

@@ -216,6 +216,7 @@ func TestConfigIsValidated(t *testing.T) {
 		"negative inline limit":     {Nodes: good.Nodes, InlineLimit: -1, Stream: good.Stream},
 		"inline limit over 512 KiB": {Nodes: good.Nodes, InlineLimit: 512<<10 + 1, Stream: good.Stream},
 		"unusable node geometry":    {Nodes: boundary.Geometry{Min: 1, Target: 2, Max: 3}, InlineLimit: 100, Stream: good.Stream},
+		"negative value limit":      {Nodes: good.Nodes, InlineLimit: good.InlineLimit, Stream: good.Stream, MaxValue: -1},
 	} {
 		if _, err := prolly.Empty(ctx, s, c); err == nil {
 			t.Errorf("Empty with %s succeeded", name)

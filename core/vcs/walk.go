@@ -23,7 +23,7 @@ func Walk(ctx context.Context, rd chunk.Reader, o Options, root hash.Hash, visit
 		return errors.New("vcs: a repository needs a model registry")
 	}
 	w := &walker{ctx: ctx, rd: rd, o: o, visit: visit, kinds: map[hash.Hash]byte{}}
-	err := prolly.Walk(ctx, rd, o.Config, root, visit, func(key, val []byte) error {
+	err := prolly.Walk(ctx, rd, refsMap(o.Config), root, visit, func(key, val []byte) error {
 		if len(val) != hash.Size {
 			return corrupt("ref %s holds %d bytes", key, len(val))
 		}
@@ -111,7 +111,7 @@ func (w *walker) workingSet(h hash.Hash) error {
 		}
 	}
 	w.commits = append(w.commits, ws.Merge.Base, ws.Merge.Theirs)
-	return prolly.Walk(w.ctx, w.rd, w.o.Config, ws.Merge.Conflicts, w.visit, func(key, val []byte) error {
+	return prolly.Walk(w.ctx, w.rd, conflictsMap(w.o.Config), ws.Merge.Conflicts, w.visit, func(key, val []byte) error {
 		c, err := decodeConflict(string(key), val)
 		if err != nil {
 			return err
