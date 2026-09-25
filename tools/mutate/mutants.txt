@@ -5899,3 +5899,4 @@ find: if ok && s.condemned[loc.Pack.Name] {\n\t\t\tcarry = append(carry, h)
 replace: if ok && s.condemned[loc.Pack.Name] && false {\n\t\t\tcarry = append(carry, h)
 pkg: ./core/chunk/packstore
 run: ^TestRegression_SC34_ACountedChunkOnlyARepackedPackHoldsSurvivesItsExpiry$
+

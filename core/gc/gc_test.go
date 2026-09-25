@@ -81,6 +81,10 @@ type world struct {
 	r     *vcs.Repo
 	jump  atomic.Int64 // GC's clock, ahead of real time, in nanoseconds
 	skew  atomic.Int64 // the backend's clock, ahead of GC's, in nanoseconds
+	// journal: the writer commits through the journal (#34), on a view of
+	// the backend that can be killed as its process would be.
+	journal bool
+	writer  *killable
 }
 
 // clocked is a blob store that stamps each object by the backend's clock,
@@ -178,11 +182,205 @@ func worldFor(t tb) *world {
 	if w.reg, err = model.NewRegistry(note{}, mute{}); err != nil {
 		t.Fatal(err)
 	}
-	w.s = w.store()
+	w.s = w.writerStore()
 	if w.r, err = vcs.Init(ctx, w.s, alice, w.vcs()); err != nil {
 		t.Fatal(err)
 	}
 	return w
+}
+
+// journalWorldFor is worldFor with the writer committing through the
+// journal, publishing only when it closes (the test publishes by closing
+// it, and kills it as a crash would).
+func journalWorldFor(t tb) *world {
+	t.Helper()
+	w := &world{t: t, journal: true}
+	w.clock = &clocked{BlobStore: mem.New(), stamps: map[string]time.Time{}, phases: map[string]string{},
+		now: func() time.Time { return time.Now().Add(w.jumped() + w.skewed()) }}
+	w.blobs = w.clock
+	w.clock.during("opening the repository")
+	var err error
+	if w.keys, err = seal.NewKeyring(); err != nil {
+		t.Fatal(err)
+	}
+	if w.reg, err = model.NewRegistry(note{}, mute{}); err != nil {
+		t.Fatal(err)
+	}
+	w.s = w.writerStore()
+	if w.r, err = vcs.Init(ctx, w.s, alice, w.vcs()); err != nil {
+		t.Fatal(err)
+	}
+	return w
+}
+
+// writerStore is the writer's chunk store: store() without the journal;
+// with it, a journaled store on a killable view of the backend.
+func (w *world) writerStore() *packstore.Store {
+	w.t.Helper()
+	if !w.journal {
+		return w.store()
+	}
+	k := &killable{BlobStore: w.blobs}
+	s, err := packstore.Open(ctx, packstore.Options{Blobs: k, Keys: w.keys, Repo: repo, PackSize: 4 << 10,
+		Journal: true, JournalInterval: time.Hour})
+	if err != nil {
+		w.t.Fatalf("opening the writer with the journal: %v", err)
+	}
+	w.writer = k
+	w.shut = append(w.shut, func() { _ = s.Close() })
+	return s
+}
+
+// kill ends the writer as kill -9 would: its view of the backend refuses
+// everything from now on, and its journal is released unpublished.
+func (w *world) kill() {
+	if w.writer != nil {
+		w.writer.kill()
+	}
+}
+
+// publish lands what the writer journaled, by closing it, and opens it
+// again.
+func (w *world) publish() {
+	w.t.Helper()
+	if err := w.s.Close(); err != nil {
+		w.t.Fatalf("closing the writer: %v", err)
+	}
+	w.reopenWriter()
+}
+
+func (w *world) reopenWriter() {
+	w.t.Helper()
+	w.s = w.writerStore()
+	r, err := vcs.Open(ctx, w.s, w.vcs())
+	if err != nil {
+		w.t.Fatal(err)
+	}
+	w.r = r
+}
+
+var errDead = errors.New("the writer's process is dead")
+
+// killable is a writer's view of the backend that can die with it.
+type killable struct {
+	blob.BlobStore
+	dead     atomic.Bool
+	mu       sync.Mutex
+	journals []blob.Journal
+}
+
+func (k *killable) kill() {
+	k.dead.Store(true)
+	k.mu.Lock()
+	defer k.mu.Unlock()
+	for _, j := range k.journals {
+		_ = j.Close()
+	}
+}
+
+func (k *killable) Put(ctx context.Context, name string, r io.Reader, size int64) error {
+	if k.dead.Load() {
+		return errDead
+	}
+	return k.BlobStore.Put(ctx, name, r, size)
+}
+
+func (k *killable) Get(ctx context.Context, name string, off, n int64) (io.ReadCloser, error) {
+	if k.dead.Load() {
+		return nil, errDead
+	}
+	return k.BlobStore.Get(ctx, name, off, n)
+}
+
+func (k *killable) Stat(ctx context.Context, name string) (blob.Info, error) {
+	if k.dead.Load() {
+		return blob.Info{}, errDead
+	}
+	return k.BlobStore.Stat(ctx, name)
+}
+
+func (k *killable) List(ctx context.Context, prefix, after string, limit int) ([]blob.Info, error) {
+	if k.dead.Load() {
+		return nil, errDead
+	}
+	return k.BlobStore.List(ctx, prefix, after, limit)
+}
+
+func (k *killable) Root(ctx context.Context) (blob.Root, error) {
+	if k.dead.Load() {
+		return blob.Root{}, errDead
+	}
+	return k.BlobStore.Root(ctx)
+}
+
+func (k *killable) SwapRoot(ctx context.Context, expected blob.Version, next []byte) (blob.Version, error) {
+	if k.dead.Load() {
+		return blob.NoVersion, errDead
+	}
+	return k.BlobStore.SwapRoot(ctx, expected, next)
+}
+
+func (k *killable) OpenJournal(ctx context.Context) (blob.Journal, error) {
+	if k.dead.Load() {
+		return nil, errDead
+	}
+	j, err := k.BlobStore.(blob.Journaler).OpenJournal(ctx)
+	if err != nil {
+		return nil, err
+	}
+	k.mu.Lock()
+	k.journals = append(k.journals, j)
+	k.mu.Unlock()
+	return deadJournal{j, k}, nil
+}
+
+func (k *killable) HoldJournal(ctx context.Context) (int64, func(), error) {
+	if k.dead.Load() {
+		return 0, nil, errDead
+	}
+	return k.BlobStore.(blob.Journaler).HoldJournal(ctx)
+}
+
+type deadJournal struct {
+	blob.Journal
+	k *killable
+}
+
+func (d deadJournal) Read(ctx context.Context, limit int64) ([]byte, error) {
+	if d.k.dead.Load() {
+		return nil, errDead
+	}
+	return d.Journal.Read(ctx, limit)
+}
+
+func (d deadJournal) Append(ctx context.Context, b []byte) error {
+	if d.k.dead.Load() {
+		return errDead
+	}
+	return d.Journal.Append(ctx, b)
+}
+
+func (d deadJournal) Reset(ctx context.Context) error {
+	if d.k.dead.Load() {
+		return errDead
+	}
+	return d.Journal.Reset(ctx)
+}
+
+func (d deadJournal) Close() error {
+	if d.k.dead.Load() {
+		return nil // released when it died
+	}
+	return d.Journal.Close()
+}
+
+// The clocked store keeps its backend's journal (#34).
+func (c *clocked) OpenJournal(ctx context.Context) (blob.Journal, error) {
+	return c.BlobStore.(blob.Journaler).OpenJournal(ctx)
+}
+
+func (c *clocked) HoldJournal(ctx context.Context) (int64, func(), error) {
+	return c.BlobStore.(blob.Journaler).HoldJournal(ctx)
 }
 
 func (w *world) close() {
@@ -269,12 +467,8 @@ func (w *world) tryPut(branch, path string, ref object.Ref) error {
 // its session was lost.
 func (w *world) reopen() {
 	w.t.Helper()
-	w.s = w.store()
-	r, err := vcs.Open(ctx, w.s, w.vcs())
-	if err != nil {
-		w.t.Fatal(err)
-	}
-	w.r = r
+	w.kill() // a journal writer's session ends as its process would
+	w.reopenWriter()
 }
 
 // root is the refs root the store sees.
@@ -850,4 +1044,15 @@ func waitForPacks(t tb, bs blob.BlobStore, n int) {
 		}
 		time.Sleep(time.Millisecond)
 	}
+}
+
+// published is the root the backend's manifest names, as another process
+// sees it.
+func (w *world) published() hash.Hash {
+	w.t.Helper()
+	h, err := w.store().Root(ctx)
+	if err != nil {
+		w.t.Fatal(err)
+	}
+	return h
 }

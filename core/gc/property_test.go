@@ -11,6 +11,7 @@ import (
 	"pgregory.net/rapid"
 
 	"github.com/SmithOperatingSolutions/snapshot-core/core/blob"
+	"github.com/SmithOperatingSolutions/snapshot-core/core/chunk/packstore"
 	"github.com/SmithOperatingSolutions/snapshot-core/core/gc"
 	"github.com/SmithOperatingSolutions/snapshot-core/core/hash"
 	"github.com/SmithOperatingSolutions/snapshot-core/core/object"
@@ -35,6 +36,10 @@ type history struct {
 	collects int      // collections run
 	log      []string // what each collection reported
 	repacked int      // packs repacked by collections
+	// With the journal (#34):
+	crashes  int // writers killed with commits in the journal, reopened by a replay
+	replayed int // of those, journals GC replayed across two grace windows before the writer reopened
+	beside   int // collections run while the writer held commits in its journal
 }
 
 var (
@@ -96,7 +101,11 @@ func (h *history) head(branch string) vcs.Commit {
 
 func (h *history) step(rt *rapid.T) {
 	b := rapid.SampledFrom(h.branches).Draw(rt, "branch")
-	op := rapid.IntRange(0, 13).Draw(rt, "op")
+	last := 13
+	if h.w.journal {
+		last = 15
+	}
+	op := rapid.IntRange(0, last).Draw(rt, "op")
 	h.steps++
 	h.w.clock.during(fmt.Sprintf("step %d, op %d on %s", h.steps, op, b))
 	switch op {
@@ -169,11 +178,22 @@ func (h *history) step(rt *rapid.T) {
 		}
 		h.tags = append(h.tags, tag)
 	case 10:
-		h.w.addJump(rapid.SampledFrom([]time.Duration{0, grace / 2, grace + time.Minute}).Draw(rt, "wait"))
+		wait := rapid.SampledFrom([]time.Duration{0, grace / 2, grace + time.Minute}).Draw(rt, "wait")
+		if h.w.journal && wait >= grace {
+			h.w.publish() // a journal publishes within its interval, long before a grace window
+		}
+		h.w.addJump(wait)
 		h.collect()
+	case 14:
+		h.crash(false)
+	case 15:
+		h.crash(true)
 	case 12:
 		h.diverge(rt, b)
 	case 13:
+		if h.w.journal {
+			return // a writer that holds its work past a grace window: the journal's store publishes within its interval
+		}
 		// A slow writer: the pack it uploads sits unpublished past the grace
 		// window, GC deletes it as an orphan, and the publish loses the
 		// session; the host reopens and edits again.
@@ -196,6 +216,9 @@ func (h *history) step(rt *rapid.T) {
 			return e.Put(path, ref)
 		})
 	case 11:
+		if h.w.journal {
+			return // the same: an edit spanning grace windows is the slow writer's case
+		}
 		// An edit that spans two collections a grace window apart: what its
 		// put counted on may be condemned and expire before it publishes.
 		path, content := rapid.SampledFrom(paths).Draw(rt, "path"), rapid.SampledFrom(contents).Draw(rt, "content")
@@ -252,8 +275,41 @@ func (h *history) others(b string) []string {
 	return out
 }
 
+// crash kills a journal writer and opens it again: the root it reports
+// afterwards is the one it reported before, every commit it acknowledged
+// replayed. With gcFirst, GC runs across two grace windows before the
+// writer reopens: GC's own open must replay the journal the dead writer
+// left, or it would mark from a root that does not reach what the
+// journaled commits counted on, and delete it.
+func (h *history) crash(gcFirst bool) {
+	w := h.w
+	before := w.root()
+	published := w.published()
+	w.kill()
+	if before != published {
+		h.crashes++
+	}
+	if gcFirst {
+		if before != published {
+			h.replayed++
+		}
+		for range 2 {
+			w.addJump(grace + time.Minute)
+			h.collect()
+		}
+	}
+	w.clock.during(fmt.Sprintf("step %d, reopening the writer after a crash", h.steps))
+	w.reopenWriter()
+	if after := w.root(); after != before {
+		w.t.Fatalf("after a crash the writer's root is %s, want %s, the one it reported: acknowledged commits were lost", after.Short(), before.Short())
+	}
+}
+
 // collect runs GC and checks the whole repository still reads.
 func (h *history) collect() gcReport {
+	if h.w.journal && h.w.writer != nil && !h.w.writer.dead.Load() && h.w.root() != h.w.published() {
+		h.beside++
+	}
 	h.collects++
 	h.w.clock.during(fmt.Sprintf("collection %d", h.collects))
 	rep, err := h.w.gc()
@@ -289,7 +345,43 @@ func (r gcReport) quiet() bool {
 // down to every object's content.
 func (h *history) readsWhole() {
 	w := h.w
+	if !w.journal {
+		h.readsFrom(w.store(), h.branches, h.tags)
+		return
+	}
+	// With the journal, a fresh store reads what is published, and the
+	// writer, unless it is dead, reads that and what it journaled.
 	s := w.store()
+	r, err := vcs.Open(ctx, s, w.vcs())
+	if err != nil {
+		w.t.Fatalf("after GC the repository does not open: %v", err)
+	}
+	branches, err := r.Branches(ctx, alice)
+	if err != nil {
+		w.t.Fatal(err)
+	}
+	names, err := r.Tags(ctx, alice)
+	if err != nil {
+		w.t.Fatal(err)
+	}
+	var tags []vcs.Tag
+	for _, n := range names {
+		tag, err := r.Tag(ctx, alice, n)
+		if err != nil {
+			w.t.Fatalf("after GC tag %s does not read: %v", n, err)
+		}
+		tags = append(tags, tag)
+	}
+	h.readsFrom(s, branches, tags)
+	if w.writer != nil && !w.writer.dead.Load() {
+		h.readsFrom(w.s, h.branches, h.tags)
+	}
+}
+
+// readsFrom is readsWhole through the store s, for the branches and tags
+// given.
+func (h *history) readsFrom(s *packstore.Store, branches []string, tags []vcs.Tag) {
+	w := h.w
 	r, err := vcs.Open(ctx, s, w.vcs())
 	if err != nil {
 		w.t.Fatalf("after GC the repository does not open: %v", err)
@@ -336,7 +428,7 @@ func (h *history) readsWhole() {
 			}
 		}
 	}
-	for _, b := range h.branches {
+	for _, b := range branches {
 		head, err := r.Head(ctx, alice, b)
 		if err != nil {
 			w.t.Fatalf("after GC branch %s: %v", b, err)
@@ -366,7 +458,7 @@ func (h *history) readsWhole() {
 			}
 		}
 	}
-	for _, t := range h.tags {
+	for _, t := range tags {
 		if _, err := s.Get(ctx, t.Hash); err != nil {
 			w.t.Fatalf("after GC tag %s does not read: %v", t.Hash.Short(), err)
 		}
@@ -444,6 +536,56 @@ func TestGCSafetyProperty(t *testing.T) {
 	}
 	if repacked.Load() == 0 {
 		t.Fatal("no history repacked a pack: the property did not reach repacking")
+	}
+}
+
+// The GC safety property with the writer committing through the journal
+// (#34, DESIGN §9): GC runs beside a journal writer as beside any writer
+// (its unpublished commits are within the grace window: the journal
+// publishes within its interval, so the history publishes before any
+// grace window passes); a writer killed with commits in its journal
+// reopens at the root it reported; and a journal a dead writer left is
+// replayed by GC's own open before it marks, so GC across two grace
+// windows deletes nothing the journaled commits reach.
+func TestGCSafetyPropertyWithTheJournal(t *testing.T) {
+	var cases, collected, crashes, replayed, beside, lost atomic.Int64
+	rapid.Check(t, func(rt *rapid.T) {
+		cases.Add(1)
+		w := journalWorldFor(rt)
+		defer w.close()
+		h := &history{w: w, branches: []string{vcs.MainBranch}}
+		for range rapid.IntRange(5, 40).Draw(rt, "steps") {
+			h.step(rt)
+		}
+		w.publish()
+		quiet := 0
+		for ; quiet < maxQuietWindows; quiet++ {
+			w.addJump(grace + time.Minute)
+			if h.collect().quiet() {
+				break
+			}
+		}
+		if quiet == maxQuietWindows {
+			rt.Fatalf("%d grace windows after the last write, every collection still did something: GC does not converge\n%s", maxQuietWindows, strings.Join(h.log[max(0, len(h.log)-maxQuietWindows):], "\n"))
+		}
+		h.converged(rt)
+		if h.deleted > 0 {
+			collected.Add(1)
+		}
+		crashes.Add(int64(h.crashes))
+		replayed.Add(int64(h.replayed))
+		beside.Add(int64(h.beside))
+		lost.Add(int64(h.lost))
+	})
+	n := cases.Load()
+	if collected.Load()*2 < n {
+		t.Fatalf("GC deleted something in %d of %d histories: the property did not reach collection", collected.Load(), n)
+	}
+	if crashes.Load() == 0 || replayed.Load() == 0 || beside.Load() == 0 {
+		t.Fatalf("over %d histories: %d crashes with commits journaled, %d journals GC replayed, %d collections beside a journal holding commits: the property did not reach the journal", n, crashes.Load(), replayed.Load(), beside.Load())
+	}
+	if lost.Load() != 0 {
+		t.Fatalf("%d sessions were lost to GC with the journal: a writer that publishes within its interval never outlasts a grace window", lost.Load())
 	}
 }
 
