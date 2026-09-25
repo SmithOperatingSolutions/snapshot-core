@@ -998,3 +998,24 @@ func TestACancelledCommitLeavesNothing(t *testing.T) {
 	}
 }
 
+// A sync that fails fails every commit waiting on it, and the store's
+// writes after: what those commits wrote may or may not be on disk.
+func TestAFailedSyncFailsItsCommits(t *testing.T) {
+	c := &syncCounting{Store: mem.New()}
+	kr := keyring(t)
+	s := openJournaled(t, c, kr, time.Hour)
+	first := commit(t, s, hash.Hash{}, payload("first", 100))
+	c.mu.Lock()
+	c.failSync = errors.New("disk gone")
+	c.mu.Unlock()
+	h, err := s.Put(ctx, payload("second", 100))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.CompareAndSetRoot(ctx, first, h); err == nil {
+		t.Fatal("a commit whose sync failed reported success")
+	}
+	if _, err := s.Put(ctx, payload("third", 100)); err == nil {
+		t.Fatal("a put after a failed sync succeeded: the journal cannot be trusted with another commit")
+	}
+}

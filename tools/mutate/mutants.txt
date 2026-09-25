@@ -5969,3 +5969,31 @@ find: \t_, err := j.f.Write(b)\n\treturn err
 replace: \treturn nil
 pkg: ./core/blob/local
 run: ^TestJournalContract$
+
+id: packstore-journal-commit-waits-for-its-sync
+file: core/chunk/packstore/journal.go
+find: for s.jsynced < ticket && s.jsyncErr == nil {
+replace: for false && s.jsynced < ticket && s.jsyncErr == nil {
+pkg: ./core/chunk/packstore
+run: ^TestCommitsThatQueueShareAnFsync$
+
+id: packstore-journal-waiters-share-a-sync
+file: core/chunk/packstore/journal.go
+find: \t\tif s.jsyncing {\n\t\t\ts.jcond.Wait()\n\t\t\tcontinue\n\t\t}\n
+replace: 
+pkg: ./core/chunk/packstore
+run: ^TestCommitsThatQueueShareAnFsync$
+
+id: packstore-cancelled-commit-writes-nothing
+file: core/chunk/packstore/packstore.go
+find: \tif err := ctx.Err(); err != nil {\n\t\treturn err // nothing written\n\t}\n
+replace: 
+pkg: ./core/chunk/packstore
+run: ^TestACancelledCommitLeavesNothing$
+
+id: packstore-journal-failed-sync-fails-commits
+file: core/chunk/packstore/journal.go
+find: \t\tif err != nil {\n\t\t\ts.jsyncErr = err\n\t\t} else if target > s.jsynced {
+replace: \t\tif err != nil {\n\t\t\ts.jsynced = target\n\t\t} else if target > s.jsynced {
+pkg: ./core/chunk/packstore
+run: ^TestAFailedSyncFailsItsCommits$
