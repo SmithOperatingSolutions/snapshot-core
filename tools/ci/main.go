@@ -21,7 +21,9 @@ import (
 	"os/exec"
 	"os/signal"
 	"regexp"
+	"runtime"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -72,6 +74,8 @@ func run() int {
 	c := &config{required: map[string]bool{}}
 	flag.StringVar(&c.base, "base", "", "red-check branch point (default: main, else origin/main, else the root commit)")
 	flag.StringVar(&c.fuzzTime, "fuzztime", envOr("FUZZTIME", "30s"), "time per fuzz target")
+	flag.IntVar(&c.fuzzParallel, "fuzzparallel", envInt("FUZZPARALLEL", defaultFuzzParallel(runtime.NumCPU())), "fuzz workers per target: half the cores, at most 4 (env FUZZPARALLEL)")
+	flag.StringVar(&c.fuzzMemLimit, "fuzzmemlimit", envOr("FUZZMEMLIMIT", "2GiB"), "GOMEMLIMIT for each fuzz worker, a soft limit so it collects garbage before it grows (env FUZZMEMLIMIT)")
 	flag.IntVar(&c.crashIterations, "crash-iterations", 100, "kill -9 iterations per crash harness (weekly: 1000)")
 	product := flag.String("product", "core/,model/", "comma-separated directories that are the product: gated, fuzzed, crash-tested, measured")
 	adapters := flag.String("adapters", "core/dnx,core/blob/s3", "comma-separated product packages that adapt a third-party API (an 80% coverage gate)")
@@ -320,13 +324,20 @@ func stepFuzz(ctx context.Context, c *config) error {
 
 // defaultFuzzParallel is how many fuzz workers a target gets on a machine
 // with cpus cores.
+// with cpus cores: half of them, at most four. Go's own default is one per
+// core, and each worker can reach gigabytes (#22).
 func defaultFuzzParallel(cpus int) int {
-	return cpus
+	return max(1, min(4, cpus/2))
 }
 
-// fuzzCommand is the environment and go arguments that fuzz one target.
+// fuzzCommand is the environment and go arguments that fuzz one target:
+// c.fuzzParallel workers, each under a soft memory limit of c.fuzzMemLimit
+// (the coordinator passes its environment to the workers it starts).
 func fuzzCommand(c *config, pkg, name string) (env, args []string) {
-	return nil, []string{"test", "-run", "^$", "-fuzz", "^" + name + "$", "-fuzztime", c.fuzzTime, pkg}
+	env = []string{"GOMEMLIMIT=" + c.fuzzMemLimit}
+	args = []string{"test", "-run", "^$", "-fuzz", "^" + name + "$", "-fuzztime", c.fuzzTime,
+		"-parallel", strconv.Itoa(c.fuzzParallel), pkg}
+	return env, args
 }
 
 func stepMutate(ctx context.Context, _ *config) error {
@@ -488,6 +499,14 @@ func output(ctx context.Context, env []string, name string, args ...string) (str
 func envOr(k, def string) string {
 	if v := os.Getenv(k); v != "" {
 		return v
+	}
+	return def
+}
+
+// envInt is the environment variable k as a positive integer, else def.
+func envInt(k string, def int) int {
+	if n, err := strconv.Atoi(os.Getenv(k)); err == nil && n > 0 {
+		return n
 	}
 	return def
 }
