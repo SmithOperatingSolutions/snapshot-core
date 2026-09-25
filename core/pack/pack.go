@@ -341,6 +341,16 @@ func (w *Writer) Get(h hash.Hash) ([]byte, bool, error) {
 	return data, true, err
 }
 
+// Frame is a chunk's sealed frame in an unfinished pack.
+type Frame struct {
+	Entry
+	Sealed []byte // the writer's bytes: read them before the writer is finished
+}
+
+// FramesSince lists the frames added after the first n, in the order they
+// were added.
+func (w *Writer) FramesSince(n int) []Frame { return nil }
+
 // Finish seals the index and returns the pack.
 func (w *Writer) Finish() (Built, error) {
 	if w.finished {

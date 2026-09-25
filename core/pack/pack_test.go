@@ -403,3 +403,48 @@ func TestAChunkUnderTheRawCutoffIsStoredRaw(t *testing.T) {
 		t.Fatalf("the v1 golden pack holds codecs %v: it no longer proves an old reader's two frame kinds", gk)
 	}
 }
+
+// A journal records what a commit added to the pending pack (#34): the
+// writer lists the frames added after a mark, in the order they were
+// added, each opening to its chunk under the pack's keys.
+func TestAWriterListsTheFramesAddedSinceAMark(t *testing.T) {
+	kr, c := fixture(t)
+	w, err := pack.NewWriter(kr, repo, c, 8<<20)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cs := chunks()
+	for _, ch := range cs[:3] {
+		if err := w.Add(ch.h, ch.data); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := w.Add(cs[0].h, cs[0].data); !errors.Is(err, pack.ErrDup) {
+		t.Fatalf("a duplicate Add = %v, want ErrDup", err)
+	}
+	for _, ch := range cs[3:] {
+		if err := w.Add(ch.h, ch.data); err != nil {
+			t.Fatal(err)
+		}
+	}
+	keys, err := pack.DeriveKeys(kr, repo, w.Salt())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, mark := range []int{0, 2, len(cs)} {
+		got := w.FramesSince(mark)
+		if len(got) != len(cs)-mark {
+			t.Fatalf("FramesSince(%d) lists %d frames, want %d: a journal would miss or repeat a commit's chunks", mark, len(got), len(cs)-mark)
+		}
+		for i, f := range got {
+			want := cs[mark+i]
+			if f.Hash != want.h {
+				t.Fatalf("FramesSince(%d)[%d] is %s, want %s: frames out of the order they were added", mark, i, f.Hash.Short(), want.h.Short())
+			}
+			data, err := pack.OpenFrame(keys, c, f.Entry, f.Sealed)
+			if err != nil || !bytes.Equal(data, want.data) {
+				t.Fatalf("FramesSince(%d)[%d] does not open to its chunk under the pack's keys (%v): a replay would read another chunk", mark, i, err)
+			}
+		}
+	}
+}
