@@ -4594,3 +4594,39 @@ find: func (r *Repo) ResolveConflict(ctx context.Context, p auth.Principal, bran
 replace: func (r *Repo) ResolveConflict(ctx context.Context, p auth.Principal, branch, path string, to *object.Ref) error {\n\tif err := r.branchCheck(ctx, p, auth.Write, branch); err != nil {
 pkg: ./core/vcs
 run: ^TestMergingIsItsOwnAction$
+
+# identical changes
+id: merge-identical-sides-ask-an-accumulating-model
+file: core/merge/merge.go
+find: case ours.Root() == theirs.Root() && !reg.Accumulates():
+replace: case ours.Root() == theirs.Root():
+pkg: ./core/merge
+run: ^TestAnAccumulatingModelIsAskedAboutTheSameChangeOnBothSides$
+
+id: merge-the-same-change-asks-an-accumulating-model
+file: core/merge/merge.go
+find: ours.To == theirs.To && !z.accumulates(ours):
+replace: ours.To == theirs.To:
+pkg: ./core/merge
+run: ^TestAnAccumulatingModelIsAskedAboutTheSameChangeOnBothSides$
+
+id: merge-the-same-add-is-taken-once
+file: core/merge/merge.go
+find: if c.From.Model != c.To.Model {\n\t\treturn false\n\t}
+replace: if false {\n\t\treturn false\n\t}
+pkg: ./core/merge
+run: ^TestAnAccumulatingModelIsAskedAboutTheSameChangeOnBothSides$
+
+id: model-accumulates-asks-the-model
+file: core/model/port.go
+find: return ok && a.Accumulates()
+replace: return ok && (a.Accumulates() || true)
+pkg: ./core/merge
+run: ^TestAnAccumulatingModelIsAskedAboutTheSameChangeOnBothSides$
+
+id: model-a-registry-accumulates-with-one-model
+file: core/model/port.go
+find: if Accumulates(m) {\n\t\t\treturn true
+replace: if false && Accumulates(m) {\n\t\t\treturn true
+pkg: ./core/merge
+run: ^TestAnAccumulatingModelIsAskedAboutTheSameChangeOnBothSides$

@@ -60,20 +60,25 @@ type Options struct {
 }
 
 // Merge merges theirs into ours, over base. When one side did not change,
-// the other is the result and nothing is read. Otherwise the two diffs from
-// base are zipped: what only theirs changed is applied to ours, what only
-// ours changed is already there, and a path both changed is decided by the
-// Engine Spec's table, asking the model when base, ours and theirs share
-// one. A model's error, or more than MaxConflicts conflicts, aborts it.
+// the other is the result and nothing is read, and so when both made the
+// same changes, unless a registered model accumulates (model.Accumulator).
+// Otherwise the two diffs from base are zipped: what only theirs changed is
+// applied to ours, what only ours changed is already there, and a path both
+// changed is decided by the Engine Spec's table, asking the model when base,
+// ours and theirs share one. The same change on both sides is taken once,
+// except a change within a model that accumulates, which the model merges.
+// A model's error, or more than MaxConflicts conflicts, aborts it.
 func Merge(ctx context.Context, reg *model.Registry, base, ours, theirs *object.Namespace, rw chunk.ReadWriter, o Options) (Result, error) {
 	if o.MaxConflicts == 0 {
 		o.MaxConflicts = DefaultMaxConflicts
 	}
 	switch {
-	case base.Root() == theirs.Root() || ours.Root() == theirs.Root():
+	case base.Root() == theirs.Root():
 		return Result{Merged: ours}, nil
 	case base.Root() == ours.Root():
 		return Result{Merged: theirs}, nil
+	case ours.Root() == theirs.Root() && !reg.Accumulates():
+		return Result{Merged: ours}, nil // the same changes on both sides, taken once
 	}
 	dOurs, err := object.Diff(ctx, base, ours)
 	if err != nil {
@@ -144,7 +149,7 @@ func (z *zipper) take(c object.Change) error {
 func (z *zipper) both(ours, theirs object.Change) error {
 	oGone, tGone := ours.Kind == prolly.Removed, theirs.Kind == prolly.Removed
 	switch {
-	case oGone && tGone, !oGone && !tGone && ours.To == theirs.To:
+	case oGone && tGone, !oGone && !tGone && ours.To == theirs.To && !z.accumulates(ours):
 		return nil // the same change on both sides: ours already has it
 	case oGone || tGone:
 		return z.conflict(DeleteEdit, ours, theirs, nil)
@@ -172,6 +177,17 @@ func (z *zipper) both(ours, theirs object.Change) error {
 	}
 	z.res.Stats.Modified++
 	return z.ed.Put(ours.Path, object.Ref{Model: m.ID(), Root: r.Root})
+}
+
+// accumulates says whether the same change on both sides is still for the
+// model to merge: a change within one model that accumulates. An add is
+// not, having no base (model 0) to count from, nor a change of model.
+func (z *zipper) accumulates(c object.Change) bool {
+	if c.From.Model != c.To.Model {
+		return false
+	}
+	m, err := z.reg.Resolve(c.To.Model, c.To.Root.Format)
+	return err == nil && model.Accumulates(m)
 }
 
 // conflict records a path; ours stays in the merged namespace.
