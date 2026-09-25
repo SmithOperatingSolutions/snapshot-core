@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	mrand "math/rand/v2"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -428,6 +429,83 @@ func TestHostsWriteObjectsThroughTheRepository(t *testing.T) {
 	}
 	if s := g.Stream(); s.CDC != o.Geometry.CDC || s.Nodes != o.Geometry.Nodes {
 		t.Fatalf("Stream() = %+v", s)
+	}
+}
+
+// #40: a host writing through the repository gets the write path the
+// version graph's own store offers, not a narrower one: the chunk store it
+// is handed prepares chunks apart from storing them (chunk.Preparer, so
+// stream.Write hashes and compresses on every core) and can be told a
+// stream is over (chunk.Flusher, so the pack holding a big write's last
+// chunks uploads beside the host's next work, not inside its next commit).
+// It still cannot swap the root.
+func TestAHostWritingThroughTheRepositoryGetsTheParallelPathAndFlush(t *testing.T) {
+	blobs := mem.New()
+	o := options(t, blobs, keyring(t))
+	o.Geometry = repo.Geometry{CDC: cdc.Geometry{Min: 4 << 10, Max: 256 << 10, Mask: 0x3FFF},
+		Nodes: boundary.Geometry{Min: 256, Target: 2048, Max: 8192}, InlineLimit: 1000, PackSize: 1 << 20}
+	r := initRepo(t, o)
+	defer r.Close()
+	c := r.Chunks()
+	if _, swaps := c.(interface {
+		CompareAndSetRoot(context.Context, hash.Hash, hash.Hash) error
+	}); swaps {
+		t.Fatal("the chunk store a host is handed can swap the root")
+	}
+	p, ok := c.(chunk.Preparer)
+	if !ok {
+		t.Fatal("the chunk store a host is handed is not a chunk.Preparer: every stream a host writes through the repository is hashed and compressed on one goroutine")
+	}
+	data := []byte("a chunk prepared on a host's goroutine")
+	prep, err := p.Prepare(data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	h, err := p.PutPrepared(ctx, prep)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if h != hash.Sum(data) || prep.Hash() != h || prep.Len() != len(data) {
+		t.Fatalf("a prepared chunk stored under %s (prepared %s, %d bytes), want %s, %d bytes", h.Short(), prep.Hash().Short(), prep.Len(), hash.Sum(data).Short(), len(data))
+	}
+	if got, err := c.Get(ctx, h); err != nil || !bytes.Equal(got, data) {
+		t.Fatalf("the prepared chunk reads back %q, %v", got, err)
+	}
+
+	f, ok := c.(chunk.Flusher)
+	if !ok {
+		t.Fatal("the chunk store a host is handed is not a chunk.Flusher: the pack holding a host's last chunks uploads only inside its next commit")
+	}
+	packs := func() int {
+		infos, err := blobs.List(ctx, "packs/", "", blob.MaxListPage)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return len(infos)
+	}
+	before := packs()
+	// A quarter of a pack, incompressible: over the eighth Flush uploads,
+	// under the size that sends a pack on its own.
+	src := mrand.NewChaCha8([32]byte{40})
+	for range 4 {
+		b := make([]byte, 64<<10)
+		_, _ = src.Read(b)
+		if _, err := c.Put(ctx, b); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if n := packs(); n != before {
+		t.Fatalf("a quarter of a pack uploaded %d packs before any flush: the fixture does not hold the pack back", n-before)
+	}
+	if err := f.Flush(ctx); err != nil {
+		t.Fatal(err)
+	}
+	deadline := time.Now().Add(5 * time.Second)
+	for packs() == before {
+		if time.Now().After(deadline) {
+			t.Fatal("five seconds after a host flushed a quarter of a pack, no pack was uploaded: it waits for the next commit")
+		}
+		time.Sleep(5 * time.Millisecond)
 	}
 }
 
