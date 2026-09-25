@@ -4686,3 +4686,10 @@ find: case r.Root != want:\n\t\treturn fmt.Errorf("root %+v, want %+v", r.Root, 
 replace: case r.Root != want && false:\n\t\treturn fmt.Errorf("root %+v, want %+v", r.Root, want)
 pkg: ./model/contract
 run: ^TestIdentityVerdict$
+
+id: mapobject-the-same-value-goes-to-the-resolver
+file: model/mapobject/mapobject.go
+find: if d, err = decide(co.Key, co, ct); err != nil {
+replace: if d, err = decide(co.Key, co, ct); bytes.Equal(co.To, ct.To) {\n\t\t\t\td, err = Decision{}, nil\n\t\t\t} else if err != nil {
+pkg: ./model/mapobject
+run: ^TestAResolverIsAskedAboutTheSameValueOnBothSides$
