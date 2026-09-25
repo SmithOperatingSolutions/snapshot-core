@@ -482,3 +482,6 @@ func ReadAll(ctx context.Context, rd chunk.Reader, ref Ref, limit uint64) ([]byt
 	}
 	return buf.Bytes(), nil
 }
+
+// ErrTooLarge is returned for a stream longer than its reader will hold.
+var ErrTooLarge = errors.New("stream: longer than the reader's limit")
