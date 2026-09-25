@@ -194,16 +194,23 @@ func IndexObjects(ctx context.Context, o Options) (int, error) {
 
 // Abandon drops the store as a process that died would: the journal is
 // released without a publish, and nothing is written.
-func Abandon(s *Store) { _ = s.Close() }
+func Abandon(s *Store) {
+	_ = s.closeJournal(false)
+	_ = s.Close()
+}
 
 // HoldPublish makes the background publisher call f before it publishes.
-func HoldPublish(s *Store, f func()) {}
+func HoldPublish(s *Store, f func()) { s.holdPublish = f }
 
 // PublishJournal runs the background publish now.
-func PublishJournal(s *Store) error { return nil }
+func PublishJournal(s *Store) error { return s.publishNow(context.Background()) }
 
 // JournalRecords is how many commits the store's journal holds.
-func JournalRecords(s *Store) int { return 0 }
+func JournalRecords(s *Store) int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.jrecords
+}
 
 // PublishedRoot is the root the backend's manifest names: what another
 // process sees.
@@ -251,5 +258,34 @@ func ForceRoot(ctx context.Context, o Options, root hash.Hash) error {
 // is listed under another chunk's hash, sealed under the right key: only
 // the replay's reading of the frame can refuse it.
 func ForgeJournalFrame(ctx context.Context, bs blob.Journaler, kr *seal.Keyring, repo seal.RepoID) error {
+	j, err := bs.OpenJournal(ctx)
+	if err != nil {
+		return err
+	}
+	defer j.Close()
+	b, err := j.Read(ctx, maxJournal)
+	if err != nil {
+		return err
+	}
+	recs, _, err := decodeJournal(kr, repo, b)
+	if err != nil {
+		return err
+	}
+	if len(recs) == 0 || len(recs[len(recs)-1].frames) == 0 {
+		return fmt.Errorf("no frame to forge in %d records", len(recs))
+	}
+	recs[len(recs)-1].frames[0].h = hash.Sum([]byte("another chunk"))
+	if err := j.Reset(ctx); err != nil {
+		return err
+	}
+	for i := range recs {
+		sealed, err := recs[i].seal(kr, repo)
+		if err != nil {
+			return err
+		}
+		if err := j.Append(ctx, sealed); err != nil {
+			return err
+		}
+	}
 	return nil
 }

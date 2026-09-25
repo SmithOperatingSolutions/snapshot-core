@@ -447,9 +447,6 @@ func TestAReplayVerifiesItsFrames(t *testing.T) {
 	}
 }
 
-type noJournal struct{ blob.BlobStore }
-
-
 // A replayed journal equals the published state (#34's acceptance): over
 // random runs of commits, background publishes and crashes, a journaled
 // commit never moves the backend's root, a publish lands exactly the last
@@ -466,15 +463,26 @@ func TestAReplayedJournalEqualsThePublishedState(t *testing.T) {
 		defer func() { _ = s.Close() }()
 		datas := map[hash.Hash][]byte{}
 		n := 0
+		// Every root is a chunk of its own, so no root repeats; the other
+		// chunks of a commit are fresh, or one put before again (counted on,
+		// not stored).
+		var order []hash.Hash
 		put := func() hash.Hash {
 			n++
-			d := payload(fmt.Sprintf("prop-%d", n), rapid.IntRange(0, 3000).Draw(rt, "size"))
+			d := payload(fmt.Sprintf("prop-%d", n), rapid.IntRange(1, 3000).Draw(rt, "size"))
 			h, err := s.Put(ctx, d)
 			if err != nil {
 				rt.Fatalf("Put: %v", err)
 			}
 			datas[h] = d
+			order = append(order, h)
 			return h
+		}
+		reput := func() {
+			h := order[rapid.IntRange(0, len(order)-1).Draw(rt, "again")]
+			if _, err := s.Put(ctx, datas[h]); err != nil {
+				rt.Fatalf("Put again: %v", err)
+			}
 		}
 		acked := put()
 		if err := s.CompareAndSetRoot(ctx, hash.Hash{}, acked); err != nil {
@@ -492,10 +500,14 @@ func TestAReplayedJournalEqualsThePublishedState(t *testing.T) {
 		for i := 0; i < steps; i++ {
 			switch rapid.IntRange(0, 3).Draw(rt, "op") {
 			case 0, 1: // commit a few chunks, the last one the root
-				var last hash.Hash
-				for range rapid.IntRange(1, 4).Draw(rt, "chunks") {
-					last = put()
+				for range rapid.IntRange(0, 3).Draw(rt, "chunks") {
+					if rapid.Bool().Draw(rt, "again") {
+						reput()
+					} else {
+						put()
+					}
 				}
+				last := put()
 				if err := s.CompareAndSetRoot(ctx, acked, last); err != nil {
 					rt.Fatalf("step %d: commit: %v", i, err)
 				}

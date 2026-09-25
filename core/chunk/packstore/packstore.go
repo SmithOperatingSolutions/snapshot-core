@@ -127,6 +127,23 @@ type Store struct {
 	opens       int                   // manifests refresh has opened (tests count them)
 	objEst      map[[32]byte]int      // index objects loaded or written here, by estimated size (compaction)
 	lastPack    int                   // the size the last pending pack reached: the next one starts there
+
+	// The commit journal (#34, DESIGN §6): changed under commitMu and mu
+	// both, read under either.
+	journal     blob.Journal  // nil: every commit publishes
+	jroot       hash.Hash     // the newest journaled root
+	jbase       hash.Hash     // the published root the journal builds on
+	jrecords    int           // commits in the journal
+	jbytes      int           // its length
+	jpending    *pack.Writer  // the pending pack jmark counts in
+	jmark       int           // frames of jpending journaled already
+	jcounted    []hash.Hash   // chunks puts counted on since the last record
+	jerr        error         // the journal cannot be trusted any more: writes refuse
+	jkick       chan struct{} // the first commit since a publish wakes the publisher
+	jstop       chan struct{}
+	jdone       chan struct{}
+	jstopOnce   sync.Once
+	holdPublish func() // tests: called by the publisher before it publishes
 }
 
 // maxInFlight bounds the packs finishing or uploading at once (#10): a
@@ -157,6 +174,9 @@ func Open(ctx context.Context, o Options) (*Store, error) {
 	}
 	if o.Clock == nil {
 		o.Clock = time.Now
+	}
+	if o.JournalInterval == 0 {
+		o.JournalInterval = DefaultJournalInterval
 	}
 	if o.IndexInMemory == 0 {
 		o.IndexInMemory = DefaultIndexInMemory
@@ -189,6 +209,10 @@ func Open(ctx context.Context, o Options) (*Store, error) {
 		return nil, err
 	}
 	s.sessGen = s.man.gcGen
+	if err := s.openJournal(ctx); err != nil {
+		_ = s.Close()
+		return nil, err
+	}
 	return s, nil
 }
 
@@ -759,6 +783,10 @@ func (s *Store) PutPrepared(ctx context.Context, cp chunk.Prepared) (hash.Hash, 
 		s.mu.Unlock()
 		return hash.Hash{}, s.lost
 	}
+	if s.jerr != nil {
+		s.mu.Unlock()
+		return hash.Hash{}, s.jerr
+	}
 	if (s.pending != nil && s.pending.Has(h)) || s.finishingHasLocked(h) {
 		s.mu.Unlock()
 		return h, nil
@@ -769,7 +797,11 @@ func (s *Store) PutPrepared(ctx context.Context, cp chunk.Prepared) (hash.Hash, 
 		return hash.Hash{}, err
 	}
 	if ok && !s.condemned[loc.Pack.Name] {
-		// Counted on: the publish checks it survived any collection.
+		// Counted on: the publish checks it survived any collection, and a
+		// journaled commit records it for the replay to check.
+		if s.journal != nil && !s.deduped[h] {
+			s.jcounted = append(s.jcounted, h)
+		}
 		s.deduped[h] = true
 		s.mu.Unlock()
 		return h, nil
@@ -986,6 +1018,9 @@ func (s *Store) Root(ctx context.Context) (hash.Hash, error) {
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.jrecords > 0 {
+		return s.jroot, nil
+	}
 	return s.man.root, nil
 }
 
@@ -1003,6 +1038,10 @@ func (s *Store) CompareAndSetRoot(ctx context.Context, expected, next hash.Hash)
 		s.mu.Unlock()
 		return s.lost
 	}
+	if s.jerr != nil {
+		s.mu.Unlock()
+		return s.jerr
+	}
 	stored := !next.IsZero() && ((s.pending != nil && s.pending.Has(next)) || s.finishingHasLocked(next))
 	if !next.IsZero() && !stored {
 		var err error
@@ -1015,7 +1054,16 @@ func (s *Store) CompareAndSetRoot(ctx context.Context, expected, next hash.Hash)
 		s.mu.Unlock()
 		return fmt.Errorf("%w: %s", chunk.ErrRootMissing, next.Short())
 	}
+	journaled := s.journal != nil
 	s.mu.Unlock()
+	if journaled {
+		return s.journalCommit(ctx, expected, next)
+	}
+	release, err := s.holdJournal(ctx)
+	if err != nil {
+		return err
+	}
+	defer release()
 	// A writer that lost the race learns it before it writes: nothing is
 	// finished or uploaded for a root that has already moved. The root can
 	// still move after this, which the swap below finds, as before.
@@ -1024,6 +1072,13 @@ func (s *Store) CompareAndSetRoot(ctx context.Context, expected, next hash.Hash)
 	} else if !ok {
 		return chunk.ErrRootConflict
 	}
+	return s.publish(ctx, expected, next)
+}
+
+// publish uploads everything the store holds unpublished, writes the index
+// objects that list it, and swaps the manifest to name next, if the root
+// is still expected. Callers hold commitMu.
+func (s *Store) publish(ctx context.Context, expected, next hash.Hash) error {
 	// Every finisher has landed its pack or left it to retry here.
 	s.finishers.Wait()
 	s.mu.Lock()
@@ -1126,6 +1181,7 @@ func (s *Store) CompareAndSetRoot(ctx context.Context, expected, next hash.Hash)
 			s.sessionIdx = s.sessionIdx[len(pending):]
 			s.forgetReplacedLocked()
 			s.deduped, s.sessGen = map[hash.Hash]bool{}, upd.gcGen
+			s.jcounted = nil
 			s.mu.Unlock()
 			return nil
 		}
@@ -1160,7 +1216,11 @@ func (s *Store) rootIs(ctx context.Context, expected hash.Hash) (bool, error) {
 }
 
 // Journaled reports whether the store commits into a journal.
-func (s *Store) Journaled() bool { return false }
+func (s *Store) Journaled() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.journal != nil
+}
 
 // Stats implements chunk.Store.
 func (s *Store) Stats(ctx context.Context) (chunk.Stats, error) {
@@ -1191,6 +1251,7 @@ func (s *Store) isClosed() bool {
 // Close implements chunk.Store. Chunks never published are dropped; a
 // pack still uploading is waited for, so nothing writes after Close.
 func (s *Store) Close() error {
+	jerr := s.closeJournal(true)
 	s.finishers.Wait()
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -1203,7 +1264,7 @@ func (s *Store) Close() error {
 			s.disk = nil
 		}
 	}
-	return err
+	return errors.Join(jerr, err)
 }
 
 // writeSessionIndex writes the index objects for the session's uploaded
