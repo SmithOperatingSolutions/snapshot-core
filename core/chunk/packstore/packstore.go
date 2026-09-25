@@ -326,8 +326,37 @@ func (s *Store) refreshFrom(ctx context.Context, r blob.Root) error {
 	if newer {
 		s.man, s.ver = m, r.Version
 		s.condemned = cond
+		s.forgetReplacedLocked()
 	}
 	return nil
+}
+
+// forgetReplacedLocked drops what the store noted of index objects the
+// manifest no longer lists, once they outnumber the listed ones: publishes
+// replace objects as fast as they add them (compaction), and a long
+// session would otherwise keep a note of every object it ever saw. Callers
+// hold s.mu.
+func (s *Store) forgetReplacedLocked() {
+	listed := len(s.man.indexes) + len(s.sessionIdx)
+	if max(len(s.loaded), len(s.objEst)) <= 2*listed+64 {
+		return
+	}
+	keep := make(map[[32]byte]bool, listed)
+	for _, l := range [][][32]byte{s.man.indexes, s.sessionIdx} {
+		for _, sum := range l {
+			keep[sum] = true
+		}
+	}
+	for sum := range s.loaded {
+		if !keep[sum] {
+			delete(s.loaded, sum)
+		}
+	}
+	for sum := range s.objEst {
+		if !keep[sum] {
+			delete(s.objEst, sum)
+		}
+	}
 }
 
 // unindexed is the packs of infos the store's index does not hold: a
@@ -1071,6 +1100,7 @@ func (s *Store) CompareAndSetRoot(ctx context.Context, expected, next hash.Hash)
 				delete(s.uploaded, indexName(sum))
 			}
 			s.sessionIdx = s.sessionIdx[len(pending):]
+			s.forgetReplacedLocked()
 			s.deduped, s.sessGen = map[hash.Hash]bool{}, upd.gcGen
 			s.mu.Unlock()
 			return nil
