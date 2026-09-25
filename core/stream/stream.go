@@ -115,9 +115,30 @@ func Write(ctx context.Context, w chunk.Writer, r io.Reader, c Config) (Ref, err
 	}
 }
 
-// WithLen returns r with a size hint: n, the length its caller expects the
-// stream to have (#41).
-func WithLen(r io.Reader, n int) io.Reader { return r }
+// WithLen returns r with a size hint: n, the number of bytes its caller
+// expects r to yield (#41). A host whose reader does not say its length (a
+// network stream, a pipe, io.MultiReader) passes it so that a short stream
+// is cut on the caller's goroutine, as a bytes.Reader one is (shortStream).
+//
+// The hint chooses a path and a first read's size, never where a cut falls
+// or what is stored: every byte r yields is read, however many the hint
+// said, and a wrong hint only costs time. r is read through as is.
+func WithLen(r io.Reader, n int) io.Reader { return &hinted{r: r, left: n} }
+
+// hinted is a reader with a size hint; it is a cdc.Lener.
+type hinted struct {
+	r    io.Reader
+	left int // the hint less what has been read, down to 0
+}
+
+func (h *hinted) Read(p []byte) (int, error) {
+	n, err := h.r.Read(p)
+	h.left = max(h.left-n, 0)
+	return n, err
+}
+
+// Len is what the hint says is left.
+func (h *hinted) Len() int { return max(h.left, 0) }
 
 // shortStream is the length under which a stream that says how long it is
 // (cdc.Lener) is cut and stored on the caller's goroutine (#40). Starting
