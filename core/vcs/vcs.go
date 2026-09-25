@@ -192,7 +192,7 @@ func Init(ctx context.Context, s chunk.Store, p auth.Principal, o Options) (*Rep
 	if err != nil {
 		return nil, err
 	}
-	refs, err := prolly.Empty(ctx, s, o.Config)
+	refs, err := prolly.Empty(ctx, s, refsMap(o.Config))
 	if err != nil {
 		return nil, err
 	}
@@ -236,7 +236,7 @@ func (r *Repo) refs(ctx context.Context) (*prolly.Map, error) {
 	if root.IsZero() {
 		return nil, ErrNoRepo
 	}
-	return prolly.Open(ctx, r.s, r.o.Config, root)
+	return prolly.Open(ctx, r.s, refsMap(r.o.Config), root)
 }
 
 func ref(ctx context.Context, m *prolly.Map, key []byte) (hash.Hash, bool, error) {
@@ -513,7 +513,7 @@ func (r *Repo) conflictCount(ctx context.Context, ws WorkingSet) (uint64, error)
 	if ws.Merge == nil {
 		return 0, nil
 	}
-	m, err := prolly.Open(ctx, r.s, r.o.Config, ws.Merge.Conflicts)
+	m, err := prolly.Open(ctx, r.s, conflictsMap(r.o.Config), ws.Merge.Conflicts)
 	if err != nil {
 		return 0, err
 	}
@@ -977,7 +977,7 @@ func (r *Repo) Merge(ctx context.Context, p auth.Principal, branch string, their
 	if err := r.checkPaths(ctx, p, branch, ws.Working, res.Merged.Root()); err != nil {
 		return merge.Result{}, err
 	}
-	conflicts, err := prolly.Empty(ctx, r.s, r.o.Config)
+	conflicts, err := prolly.Empty(ctx, r.s, conflictsMap(r.o.Config))
 	if err != nil {
 		return merge.Result{}, err
 	}
@@ -1040,7 +1040,7 @@ func (r *Repo) Conflicts(ctx context.Context, p auth.Principal, branch string) (
 	if err != nil || ws.Merge == nil {
 		return nil, err
 	}
-	m, err := prolly.Open(ctx, r.s, r.o.Config, ws.Merge.Conflicts)
+	m, err := prolly.Open(ctx, r.s, conflictsMap(r.o.Config), ws.Merge.Conflicts)
 	if err != nil {
 		return nil, err
 	}
@@ -1084,7 +1084,7 @@ func (r *Repo) ResolveConflict(ctx context.Context, p auth.Principal, branch, pa
 		if ws.Merge == nil {
 			return fmt.Errorf("vcs: no merge is in progress on %s", branch)
 		}
-		cm, err := prolly.Open(ctx, r.s, r.o.Config, ws.Merge.Conflicts)
+		cm, err := prolly.Open(ctx, r.s, conflictsMap(r.o.Config), ws.Merge.Conflicts)
 		if err != nil {
 			return err
 		}

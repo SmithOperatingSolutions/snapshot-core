@@ -1,6 +1,7 @@
 package vcs
 
 import (
+	"encoding/binary"
 	"fmt"
 	"time"
 	"unicode/utf8"
@@ -11,6 +12,7 @@ import (
 	"github.com/SmithOperatingSolutions/snapshot-core/core/merge"
 	"github.com/SmithOperatingSolutions/snapshot-core/core/model"
 	"github.com/SmithOperatingSolutions/snapshot-core/core/object"
+	"github.com/SmithOperatingSolutions/snapshot-core/core/prolly"
 	"github.com/SmithOperatingSolutions/snapshot-core/core/wire"
 )
 
@@ -27,6 +29,30 @@ const (
 	maxLocationLen    = 4096
 	maxReasonLen      = 1024
 )
+
+// maxConflictRecord is the longest conflict record the limits allow, and so
+// the longest Merge writes (recordable): kind · three sides present ·
+// maxModelConflicts · that many of the longest location and reason.
+// 51,240,144 bytes.
+func maxConflictRecord() int {
+	uv := func(v uint64) int { return len(binary.AppendUvarint(nil, v)) }
+	return 1 + 3*(1+object.RefSize) + uv(maxModelConflicts) +
+		maxModelConflicts*(uv(maxLocationLen)+maxLocationLen+uv(maxReasonLen)+maxReasonLen)
+}
+
+// refsMap is c for a refs map, whose every value is a hash: no longer
+// value is read or taken.
+func refsMap(c prolly.Config) prolly.Config {
+	c.MaxValue = hash.Size
+	return c
+}
+
+// conflictsMap is c for a working set's conflicts map, whose values are
+// conflict records: none longer than Merge writes is read or taken.
+func conflictsMap(c prolly.Config) prolly.Config {
+	c.MaxValue = maxConflictRecord()
+	return c
+}
 
 func corrupt(format string, args ...any) error {
 	return fmt.Errorf("%w: vcs: %s", chunk.ErrCorrupt, fmt.Sprintf(format, args...))
