@@ -5193,3 +5193,74 @@ find: if err := recordable(c); err != nil {
 replace: if err := recordable(c); err != nil && false {
 pkg: ./core/vcs
 run: ^TestRegression_SC27_AConflictTooLargeToRecordRefusesTheMerge$
+
+# the refs and conflicts maps' value limits
+id: vcs-refs-values-are-hashes
+file: core/vcs/encode.go
+find: c.MaxValue = hash.Size
+replace: c.MaxValue = hash.Size + 1
+pkg: ./core/vcs
+run: ^TestTheRefsMapReadsNoValueLongerThanAHash$
+
+id: vcs-refs-read-under-their-limit
+file: core/vcs/vcs.go
+find: return prolly.Open(ctx, r.s, refsMap(r.o.Config), root)
+replace: return prolly.Open(ctx, r.s, r.o.Config, root)
+pkg: ./core/vcs
+run: ^TestTheRefsMapReadsNoValueLongerThanAHash$
+
+id: vcs-walk-reads-refs-under-their-limit
+file: core/vcs/walk.go
+find: err := prolly.Walk(ctx, rd, refsMap(o.Config), root, visit,
+replace: err := prolly.Walk(ctx, rd, o.Config, root, visit,
+pkg: ./core/vcs
+run: ^TestTheRefsMapReadsNoValueLongerThanAHash$
+
+id: vcs-conflict-records-no-longer-than-merge-writes
+file: core/vcs/encode.go
+find: c.MaxValue = maxConflictRecord()
+replace: c.MaxValue = maxConflictRecord() + 1
+pkg: ./core/vcs
+run: ^TestAConflictRecordIsReadUpToTheLargestMergeWrites$
+
+id: vcs-conflict-records-as-long-as-merge-writes
+file: core/vcs/encode.go
+find: c.MaxValue = maxConflictRecord()
+replace: c.MaxValue = maxConflictRecord() - 1
+pkg: ./core/vcs
+run: ^TestAConflictRecordIsReadUpToTheLargestMergeWrites$
+
+id: vcs-conflict-record-counts-three-sides
+file: core/vcs/encode.go
+find: return 1 + 3*(1+object.RefSize) + uv(maxModelConflicts) +
+replace: return 1 + 2*(1+object.RefSize) + uv(maxModelConflicts) +
+pkg: ./core/vcs
+run: ^TestAConflictRecordIsReadUpToTheLargestMergeWrites$
+
+id: vcs-conflict-record-counts-length-prefixes
+file: core/vcs/encode.go
+find: maxModelConflicts*(uv(maxLocationLen)+maxLocationLen+uv(maxReasonLen)+maxReasonLen)
+replace: maxModelConflicts*(maxLocationLen+uv(maxReasonLen)+maxReasonLen)
+pkg: ./core/vcs
+run: ^TestAConflictRecordIsReadUpToTheLargestMergeWrites$
+
+id: vcs-conflicts-listed-under-their-limit
+file: core/vcs/vcs.go
+find: if err != nil || ws.Merge == nil {\n\t\treturn nil, err\n\t}\n\tm, err := prolly.Open(ctx, r.s, conflictsMap(r.o.Config), ws.Merge.Conflicts)
+replace: if err != nil || ws.Merge == nil {\n\t\treturn nil, err\n\t}\n\tm, err := prolly.Open(ctx, r.s, r.o.Config, ws.Merge.Conflicts)
+pkg: ./core/vcs
+run: ^TestAConflictRecordIsReadUpToTheLargestMergeWrites$
+
+id: vcs-a-resolve-reads-the-conflict-under-its-limit
+file: core/vcs/vcs.go
+find: cm, err := prolly.Open(ctx, r.s, conflictsMap(r.o.Config), ws.Merge.Conflicts)
+replace: cm, err := prolly.Open(ctx, r.s, r.o.Config, ws.Merge.Conflicts)
+pkg: ./core/vcs
+run: ^TestAConflictRecordIsReadUpToTheLargestMergeWrites$
+
+id: vcs-walk-reads-conflicts-under-their-limit
+file: core/vcs/walk.go
+find: return prolly.Walk(w.ctx, w.rd, conflictsMap(w.o.Config), ws.Merge.Conflicts,
+replace: return prolly.Walk(w.ctx, w.rd, w.o.Config, ws.Merge.Conflicts,
+pkg: ./core/vcs
+run: ^TestAConflictRecordIsReadUpToTheLargestMergeWrites$
