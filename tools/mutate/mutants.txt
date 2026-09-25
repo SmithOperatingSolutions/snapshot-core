@@ -2230,8 +2230,8 @@ run: ^TestAnInitThatLosesTheRaceIsErrExists$
 
 id: vcs-update-retries
 file: core/vcs/vcs.go
-find: for attempt := 0; attempt < maxAttempts; attempt++ {\n\t\tm, err := r.refs(ctx)
-replace: for attempt := 0; attempt < 1; attempt++ {\n\t\tm, err := r.refs(ctx)
+find: for attempt := 0; attempt < maxAttempts; attempt++ {\n\t\tif attempt > 0 {\n\t\t\tif err := r.pause(ctx, attempt-1); err != nil {\n\t\t\t\treturn err\n\t\t\t}\n\t\t}\n\t\tm, err := r.refs(ctx)
+replace: for attempt := 0; attempt < 1; attempt++ {\n\t\tif attempt > 0 {\n\t\t\tif err := r.pause(ctx, attempt-1); err != nil {\n\t\t\t\treturn err\n\t\t\t}\n\t\t}\n\t\tm, err := r.refs(ctx)
 pkg: ./core/vcs
 run: ^TestAWriterThatKeepsLosingGivesUp$
 
