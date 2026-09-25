@@ -320,14 +320,12 @@ type Reader struct {
 
 	cur      []byte // the data chunk read last
 	curStart int64
-	path     []held // path[i]: the index node read last at depth Depth-i
-	live     int    // path[:live] are the nodes above cur
+	path     []held // the index nodes above cur, the root first
 }
 
 // held is an index node on the way to the data chunk read last, already
 // checked: where its bytes start in the stream, and where each entry's end.
 type held struct {
-	h     hash.Hash
 	start int64
 	ends  []int64 // ends[i]: one past entry i's last byte, in the stream
 	es    []entry
@@ -341,7 +339,7 @@ func Open(ctx context.Context, rd chunk.Reader, ref Ref) (*Reader, error) {
 	if ref.Depth > maxDepth || ref.Size > math.MaxInt64 {
 		return nil, corrupt("ref: depth %d, size %d", ref.Depth, ref.Size)
 	}
-	r := &Reader{ctx: ctx, rd: rd, ref: ref, path: make([]held, ref.Depth)}
+	r := &Reader{ctx: ctx, rd: rd, ref: ref, path: make([]held, 0, ref.Depth)}
 	if ref.Size == 0 { // the empty stream: its chunk must be the empty chunk
 		b, err := rd.Get(ctx, ref.Root)
 		if err != nil {
@@ -370,13 +368,13 @@ func (r *Reader) chunkAt(pos int64) ([]byte, int64, error) {
 		return r.cur, r.curStart, nil
 	}
 	h, want, start := r.ref.Root, r.ref.Size, int64(0)
-	for r.live > 0 && !r.path[r.live-1].holds(pos) {
-		r.live--
+	for len(r.path) > 0 && !r.path[len(r.path)-1].holds(pos) {
+		r.path = r.path[:len(r.path)-1]
 	}
-	if r.live > 0 {
-		h, want, start = r.path[r.live-1].child(pos)
+	if n := len(r.path); n > 0 {
+		h, want, start = r.path[n-1].child(pos)
 	}
-	for depth := int(r.ref.Depth) - r.live; ; depth-- {
+	for depth := int(r.ref.Depth) - len(r.path); ; depth-- {
 		if depth == 0 {
 			b, err := r.rd.Get(r.ctx, h)
 			if err != nil {
@@ -392,7 +390,7 @@ func (r *Reader) chunkAt(pos int64) ([]byte, int64, error) {
 		if err != nil {
 			return nil, 0, err
 		}
-		r.path[r.live], r.live = n, r.live+1
+		r.path = append(r.path, n)
 		// pos-start < want = the node's sum (callers stay under the Ref's
 		// size, and each level's sum is its parent's entry), so some entry
 		// holds pos.
@@ -401,25 +399,18 @@ func (r *Reader) chunkAt(pos int64) ([]byte, int64, error) {
 }
 
 // node reads and checks the index node h at depth, which its parent says
-// holds want bytes from start. The node read last at this depth is not
-// read again when h names it: its bytes are the same, and were checked.
+// holds want bytes from start.
 func (r *Reader) node(h hash.Hash, depth int, want uint64, start int64) (held, error) {
-	var es []entry
-	if last := r.path[int(r.ref.Depth)-depth]; last.es != nil && last.h == h {
-		es = last.es
-	} else {
-		b, err := r.rd.Get(r.ctx, h)
-		if err != nil {
-			return held{}, err
-		}
-		level, got, err := decodeIndex(b)
-		if err != nil {
-			return held{}, err
-		}
-		if level != depth {
-			return held{}, corrupt("an index node at depth %d is level %d", depth, level)
-		}
-		es = got
+	b, err := r.rd.Get(r.ctx, h)
+	if err != nil {
+		return held{}, err
+	}
+	level, es, err := decodeIndex(b)
+	if err != nil {
+		return held{}, err
+	}
+	if level != depth {
+		return held{}, corrupt("an index node at depth %d is level %d", depth, level)
 	}
 	if depth == int(r.ref.Depth) && len(es) < 2 {
 		return held{}, corrupt("the top index node has one child")
@@ -436,7 +427,7 @@ func (r *Reader) node(h hash.Hash, depth int, want uint64, start int64) (held, e
 		end += int64(e.size) // at most want, which is at most the Ref's size
 		ends[i] = end
 	}
-	return held{h: h, start: start, ends: ends, es: es}, nil
+	return held{start: start, ends: ends, es: es}, nil
 }
 
 // child is the entry of n holding pos: its hash, length and first byte.
