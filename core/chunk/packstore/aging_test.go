@@ -190,3 +190,52 @@ func TestPublishesCompactSmallIndexObjects(t *testing.T) {
 		}
 	}
 }
+
+// A merged index object lists packs a reader has indexed already, from the
+// objects it replaces. The reader indexes each pack once: a reader whose
+// memory bound holds every chunk never spills to disk, and one that has
+// spilled counts each chunk once, not again in memory beside its table.
+func TestAReaderOfCompactedIndexObjectsIndexesEachPackOnce(t *testing.T) {
+	const commits = 300
+	bs, kr := mem.New(), keyring(t)
+	writer := open(t, bs, kr)
+	roomy, tight := t.TempDir(), t.TempDir()
+	reader := func(dir string, bound int) *packstore.Store {
+		s, err := packstore.Open(ctx, packstore.WithBackoff(packstore.Options{Blobs: bs, Keys: kr, Repo: repo, IndexDir: dir, IndexInMemory: bound}, time.Millisecond))
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { _ = s.Close() })
+		return s
+	}
+	inMemory, spilled := reader(roomy, 2*commits), reader(tight, commits*5/6)
+	root := hash.Hash{}
+	for i := range commits {
+		h, err := writer.Put(ctx, []byte(fmt.Sprintf("commit %d", i)))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := writer.CompareAndSetRoot(ctx, root, h); err != nil {
+			t.Fatal(err)
+		}
+		root = h
+		for _, r := range []*packstore.Store{inMemory, spilled} {
+			if got, err := r.Root(ctx); err != nil || got != h {
+				t.Fatalf("a reader's root after commit %d = %s (%v), want %s", i, got.Short(), err, h.Short())
+			}
+		}
+	}
+	if n := len(tables(t, roomy)); n != 0 {
+		t.Fatalf("a reader whose memory bound holds %d chunks spilled %d table(s) for %d: it counted the packs of merged index objects again", 2*commits, n, commits)
+	}
+	if len(tables(t, tight)) == 0 {
+		t.Fatal("fixture: the reader bounded at 250 chunks never spilled")
+	}
+	st, err := spilled.Stats(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if st.Chunks != commits {
+		t.Fatalf("a spilled reader of %d chunks counts %d: it indexed the packs of merged index objects in memory beside its table", commits, st.Chunks)
+	}
+}
