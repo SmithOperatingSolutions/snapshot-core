@@ -25,7 +25,8 @@
 //   - batch: 1,000 and 10,000 small objects written into one branch's
 //     namespace through one editor, flushed once, committed once: writes/s,
 //     the flush, the commit and the publish inside it, and the pack bytes
-//     the commit wrote.
+//     the commit wrote; -reader plain hides each object's length from the
+//     write, -reader hinted hints it with stream.WithLen (#41).
 //
 // Timed runs on a shared machine take the measurement lock and start with
 // the load under 2 (CONTRIBUTING.md, "Heavy runs"); the tool prints the load
@@ -62,6 +63,7 @@ import (
 	"github.com/SmithOperatingSolutions/snapshot-core/core/object"
 	"github.com/SmithOperatingSolutions/snapshot-core/core/repo"
 	"github.com/SmithOperatingSolutions/snapshot-core/core/seal"
+	"github.com/SmithOperatingSolutions/snapshot-core/core/stream"
 	"github.com/SmithOperatingSolutions/snapshot-core/core/vcs"
 	mblob "github.com/SmithOperatingSolutions/snapshot-core/model/blob"
 	"github.com/SmithOperatingSolutions/snapshot-core/model/tree"
@@ -80,6 +82,22 @@ type config struct {
 	cpuprofile string
 	memprofile string
 	objectSize int
+	reader     string
+}
+
+// objectReader is how the batch run hands a small object to the write:
+// "lener" a strings.Reader, which reports its length (cdc.Lener); "plain"
+// the same reader hiding its length, as a network stream or a pipe does;
+// "hinted" that plain reader with its length hinted by stream.WithLen (#41).
+func (c *config) objectReader(body string) io.Reader {
+	switch c.reader {
+	case "plain":
+		return struct{ io.Reader }{strings.NewReader(body)}
+	case "hinted":
+		return stream.WithLen(struct{ io.Reader }{strings.NewReader(body)}, len(body))
+	default:
+		return strings.NewReader(body)
+	}
 }
 
 func run() int {
@@ -94,7 +112,12 @@ func run() int {
 	flag.StringVar(&c.cpuprofile, "cpuprofile", "", "write a CPU profile of the single-writer run on the first backend here (without -only single: of the first batch run's write phase)")
 	flag.StringVar(&c.memprofile, "memprofile", "", "write an allocation profile of the first batch run's write phase on the first backend here (with -only batch)")
 	flag.IntVar(&c.objectSize, "object", 100, "bytes in each small object")
+	flag.StringVar(&c.reader, "reader", "lener", "how the batch run hands each object to the write: lener (a strings.Reader), plain (a reader without a length), hinted (plain, with stream.WithLen)")
 	flag.Parse()
+	if c.reader != "lener" && c.reader != "plain" && c.reader != "hinted" {
+		fmt.Fprintf(os.Stderr, "commitbench: bad -reader %q\n", c.reader)
+		return 2
+	}
 	if c.memprofile != "" {
 		// Set once, before anything allocates, and finer than the default:
 		// the objects are small. The profile counts from here, so it holds
@@ -652,7 +675,7 @@ func batch(c config, backend string, n int, prof profiles) (string, error) {
 	t0 := time.Now()
 	for i := range n {
 		_, _ = rand.Read(body)
-		root, err := mblob.Write(ctx, e.chunks, strings.NewReader(string(body)), e.geo.Stream())
+		root, err := mblob.Write(ctx, e.chunks, c.objectReader(string(body)), e.geo.Stream())
 		if err != nil {
 			return "", err
 		}
