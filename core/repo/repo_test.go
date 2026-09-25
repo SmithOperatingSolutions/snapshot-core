@@ -1119,7 +1119,7 @@ func TestARepositoryOpenedWithTheJournalCommitsThroughIt(t *testing.T) {
 		t.Fatal(err)
 	}
 	oj := o
-	oj.Journal, oj.JournalInterval = true, time.Hour
+	oj.Journal, oj.JournalInterval = packstore.JournalOn, time.Hour
 	rj, err := repo.Open(ctx, oj)
 	if err != nil {
 		t.Fatalf("Open with the journal: %v", err)

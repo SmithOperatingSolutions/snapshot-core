@@ -222,7 +222,7 @@ func (w *world) writerStore() *packstore.Store {
 	}
 	k := &killable{BlobStore: w.blobs}
 	s, err := packstore.Open(ctx, packstore.Options{Blobs: k, Keys: w.keys, Repo: repo, PackSize: 4 << 10,
-		Journal: true, JournalInterval: time.Hour})
+		Journal: packstore.JournalOn, JournalInterval: time.Hour})
 	if err != nil {
 		w.t.Fatalf("opening the writer with the journal: %v", err)
 	}

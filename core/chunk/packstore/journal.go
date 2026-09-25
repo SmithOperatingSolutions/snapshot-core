@@ -214,7 +214,7 @@ func (s *Store) openJournal(ctx context.Context) error {
 	}
 	var j blob.Journal
 	var err error
-	if s.o.Journal {
+	if s.o.Journal.journaled() {
 		// A writer without the journal holds it only around a publish:
 		// wait that out, as a lost manifest swap is waited out.
 		for attempt := 0; ; attempt++ {
@@ -251,7 +251,7 @@ func (s *Store) openJournal(ctx context.Context) error {
 		_ = j.Close()
 		return err
 	}
-	if !s.o.Journal {
+	if !s.o.Journal.journaled() {
 		return j.Close()
 	}
 	s.mu.Lock()

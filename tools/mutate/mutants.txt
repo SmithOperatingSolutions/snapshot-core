@@ -5881,7 +5881,7 @@ run: ^TestARepositoryOpenedWithTheJournalCommitsThroughIt$
 
 id: repo-probe-opens-without-the-journal
 file: core/repo/repo.go
-find: \t\tpo.Journal = false\n
+find: \t\tpo.Journal = packstore.JournalOff\n
 replace: 
 pkg: ./core/repo
 run: ^TestARepositoryOpenedWithTheJournalCommitsThroughIt$

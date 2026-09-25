@@ -69,10 +69,23 @@ type Options struct {
 	// commit it holds (0: DefaultJournalInterval), and at Close (#34,
 	// DESIGN §6). On a backend without one (S3, blob/split) it has no
 	// effect: every commit publishes.
-	Journal         bool
+	Journal         JournalMode
 	JournalInterval time.Duration
 	backoff         time.Duration
 }
+
+// JournalMode says whether a store commits into the backend's journal.
+type JournalMode uint8
+
+// The journal modes.
+const (
+	JournalDefault JournalMode = iota // the backend's default
+	JournalOn                         // where the backend keeps a journal
+	JournalOff                        // every commit publishes
+)
+
+// journaled is whether the mode commits into a journal.
+func (m JournalMode) journaled() bool { return m == JournalOn }
 
 // DefaultJournalInterval is how long a journaled commit waits, at most,
 // before a background publish lands it for other processes.

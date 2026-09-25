@@ -94,7 +94,7 @@ type Options struct {
 	// (blob/local, blob/multivol, blob/mem), publishing in the background
 	// at most JournalInterval later (0: packstore.DefaultJournalInterval)
 	// and at Close (packstore.Options.Journal, #34).
-	Journal         bool
+	Journal         packstore.JournalMode
 	JournalInterval time.Duration
 }
 
@@ -318,7 +318,7 @@ func current(ctx context.Context, o Options) (Config, error) {
 		// A probe: it needs the manifest to authenticate, not the journal
 		// (a writer beside it may hold that, GC's probe included).
 		po := packOptions(o, c)
-		po.Journal = false
+		po.Journal = packstore.JournalOff
 		chunks, err := packstore.Open(ctx, po)
 		if errors.Is(err, packstore.ErrManifest) {
 			continue // the root is not this config's: another Init's, or a race it lost

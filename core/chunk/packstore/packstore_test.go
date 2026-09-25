@@ -417,7 +417,11 @@ func crashChunk(n int) []byte {
 // crashOptions are the chunk store options of a crash harness child and
 // of the parent that reopens after it, with the journal or without.
 func crashOptions(bs blob.BlobStore, kr *seal.Keyring, journal bool) packstore.Options {
-	return packstore.Options{Blobs: bs, Keys: kr, Repo: repo, Journal: journal, JournalInterval: 3 * time.Millisecond}
+	mode := packstore.JournalOff
+	if journal {
+		mode = packstore.JournalOn
+	}
+	return packstore.Options{Blobs: bs, Keys: kr, Repo: repo, Journal: mode, JournalInterval: 3 * time.Millisecond}
 }
 
 func crashChild(dir string) {

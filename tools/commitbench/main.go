@@ -87,7 +87,7 @@ type config struct {
 	objectSize int
 	reader     string
 	flow       string
-	journal    bool
+	journal    string
 	interval   time.Duration
 }
 
@@ -120,7 +120,7 @@ func run() int {
 	flag.IntVar(&c.objectSize, "object", 100, "bytes in each small object")
 	flag.StringVar(&c.reader, "reader", "lener", "how the batch run hands each object to the write: lener (a strings.Reader), plain (a reader without a length), hinted (plain, with stream.WithLen)")
 	flag.StringVar(&c.flow, "flow", "commit", "how a commit is made: commit (CommitNamespace, one publish), two-step (UpdateWorkingSet then CommitWorkingSet), two-step-flushed (their Flushed forms, handed the flush's record)")
-	flag.BoolVar(&c.journal, "journal", false, "commit through the backend's journal (packstore.Options.Journal, #34)")
+	flag.StringVar(&c.journal, "journal", "default", "commit through the backend's journal: on, off or default (packstore.Options.Journal, #34)")
 	flag.DurationVar(&c.interval, "interval", 0, "the journal's publish interval (0: packstore.DefaultJournalInterval)")
 	flag.Parse()
 	if c.reader != "lener" && c.reader != "plain" && c.reader != "hinted" {
@@ -171,7 +171,7 @@ func loadavg() string {
 
 func bench(c config) error {
 	host, _ := os.Hostname()
-	fmt.Printf("commitbench: %s, load %s, %s, journal %v (interval %v)\n", host, loadavg(), time.Now().Format(time.RFC3339), c.journal, c.interval)
+	fmt.Printf("commitbench: %s, load %s, %s, journal %s (interval %v)\n", host, loadavg(), time.Now().Format(time.RFC3339), c.journal, c.interval)
 	if slices.Contains(c.backends, "local") {
 		floor, err := fsyncFloor(c.dir)
 		if err != nil {
@@ -322,7 +322,7 @@ func newEnv(c config, backend string) (*env, error) {
 	// repo.Open's stack, with the two wrappers.
 	e.timed = &timedBlobs{BlobStore: e.raw}
 	e.chunks, err = packstore.Open(ctx, packstore.Options{Blobs: blob.NoDelete(e.timed), Keys: keys, Repo: cfg.RepoID, PackSize: cfg.Geometry.PackSize,
-		Journal: c.journal, JournalInterval: c.interval})
+		Journal: journalMode(c.journal), JournalInterval: c.interval})
 	if err != nil {
 		return nil, err
 	}
@@ -839,4 +839,14 @@ func fsyncFloor(dir string) (floor, error) {
 	}
 	return floor{p50: percentile(plain, .5).Round(time.Microsecond), p99: percentile(plain, .99).Round(time.Microsecond),
 		linkP50: percentile(linked, .5).Round(time.Microsecond)}, nil
+}
+
+func journalMode(s string) packstore.JournalMode {
+	switch s {
+	case "on":
+		return packstore.JournalOn
+	case "off":
+		return packstore.JournalOff
+	}
+	return packstore.JournalDefault
 }

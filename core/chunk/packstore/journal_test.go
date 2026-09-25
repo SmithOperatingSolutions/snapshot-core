@@ -24,7 +24,7 @@ import (
 // died is replayed by the next open.
 
 func journalOptions(bs blob.BlobStore, kr *seal.Keyring, interval time.Duration) packstore.Options {
-	return packstore.WithBackoff(packstore.Options{Blobs: bs, Keys: kr, Repo: repo, Journal: true, JournalInterval: interval}, time.Millisecond)
+	return packstore.WithBackoff(packstore.Options{Blobs: bs, Keys: kr, Repo: repo, Journal: packstore.JournalOn, JournalInterval: interval}, time.Millisecond)
 }
 
 func openJournaled(t testing.TB, bs blob.BlobStore, kr *seal.Keyring, interval time.Duration) *packstore.Store {
