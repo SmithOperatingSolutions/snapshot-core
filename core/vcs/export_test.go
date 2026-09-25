@@ -22,3 +22,10 @@ func Sleep(ctx context.Context, d time.Duration) error { return sleep(ctx, d) }
 var DecodeConflict = decodeConflict
 
 const MaxModelConflicts = maxModelConflicts
+
+// EncodeConflict and EncodeWorkingSet are the record and chunk encoders,
+// for tests that forge what a repository reads.
+var (
+	EncodeConflict   = encodeConflict
+	EncodeWorkingSet = WorkingSet.encode
+)
