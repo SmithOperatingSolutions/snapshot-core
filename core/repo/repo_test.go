@@ -1103,3 +1103,59 @@ func TestOpenTakesTheConfigThatAuthenticatesTheRoot(t *testing.T) {
 		t.Fatalf("GC among the other configs: %v", err)
 	}
 }
+
+// Options.Journal (#34): a repository opened with it commits into the
+// backend's journal. Its own reads see the commit at once, another open
+// sees the published head until the journal is published (at Close here),
+// and GC runs beside it, as beside any writer.
+func TestARepositoryOpenedWithTheJournalCommitsThroughIt(t *testing.T) {
+	o := options(t, mem.New(), keyring(t))
+	r := initRepo(t, o)
+	before, err := r.Head(ctx, alice, vcs.MainBranch)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := r.Close(); err != nil {
+		t.Fatal(err)
+	}
+	oj := o
+	oj.Journal, oj.JournalInterval = true, time.Hour
+	rj, err := repo.Open(ctx, oj)
+	if err != nil {
+		t.Fatalf("Open with the journal: %v", err)
+	}
+	ws, err := rj.WorkingSet(ctx, alice, vcs.MainBranch)
+	if err != nil {
+		t.Fatal(err)
+	}
+	c, err := rj.Commit(ctx, alice, vcs.MainBranch, ws, ws.Working, "journaled")
+	if err != nil {
+		t.Fatalf("Commit: %v", err)
+	}
+	if head, err := rj.Head(ctx, alice, vcs.MainBranch); err != nil || head.Hash != c.Hash {
+		t.Fatalf("the committing repository's head is %v (%v), want the commit it just made", head.Hash.Short(), err)
+	}
+	other, err := repo.Open(ctx, o)
+	if err != nil {
+		t.Fatalf("a second open beside the journal writer: %v", err)
+	}
+	if head, err := other.Head(ctx, alice, vcs.MainBranch); err != nil || head.Hash != before.Hash {
+		t.Fatalf("another open sees head %s (%v), want the published %s until the journal is published: the commit did not journal",
+			head.Hash.Short(), err, before.Hash.Short())
+	}
+	_ = other.Close()
+	if _, err := repo.GC(ctx, alice, o, time.Hour); err != nil {
+		t.Fatalf("GC beside a repository holding the journal: %v", err)
+	}
+	if err := rj.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	after, err := repo.Open(ctx, o)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer after.Close()
+	if head, err := after.Head(ctx, alice, vcs.MainBranch); err != nil || head.Hash != c.Hash {
+		t.Fatalf("after Close another open sees head %s (%v), want the journaled commit %s", head.Hash.Short(), err, c.Hash.Short())
+	}
+}

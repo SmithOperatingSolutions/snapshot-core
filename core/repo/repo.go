@@ -90,6 +90,12 @@ type Options struct {
 	Authorizer auth.Authorizer  // nil denies everything
 	Clock      func() time.Time // nil: time.Now
 	Geometry   Geometry         // Init only; the zero Geometry is DefaultGeometry
+	// Journal commits into the backend's journal where it keeps one
+	// (blob/local, blob/multivol, blob/mem), publishing in the background
+	// at most JournalInterval later (0: packstore.DefaultJournalInterval)
+	// and at Close (packstore.Options.Journal, #34).
+	Journal         bool
+	JournalInterval time.Duration
 }
 
 func (o Options) check() error {
