@@ -406,7 +406,9 @@ stream ref  root [32] · size · depth
   not repo geometry): a longer stream is `ErrValueTooLarge`, refused
   unread, and the editor refuses a longer value (#23). A model whose
   records have a known length sets it: the tree to `EntrySize`, a
-  namespace to `RefSize`. No decoder sizes an allocation from a count it
+  namespace to `RefSize`, the version graph its refs map to a hash's 32
+  bytes and a working set's conflicts map to the longest conflict record
+  Merge writes (§8). No decoder sizes an allocation from a count it
   has not yet decoded (#24). The map and its
   editor are concrete types, not a port: there is one implementation, and
   the chunk store beneath it is the swappable part.
@@ -595,6 +597,14 @@ conflict   kind u8 (1 both changed · 2 delete against edit · 3 add against add
            (present u8 · object reference [46]) × 3 (base, ours, theirs) ·
            model conflicts uvarint (≤ 10,000) · (location (≤ 4 KiB) · reason (≤ 1 KiB)) × that many
 ```
+
+Merge refuses a conflict over any of these limits before it writes
+anything (`ErrConflictTooLarge`, #27), so the longest record it writes is
+51,240,144 bytes: every side present, 10,000 model conflicts, each with the
+longest location and reason. The conflicts map reads and takes no longer
+value (`maxConflictRecord`, derived from the layout and the limits), and
+the refs map none longer than a hash, each refused unread as
+`prolly.ErrValueTooLarge`.
 
 ## 9. Garbage collection (C4, `core/gc`)
 
