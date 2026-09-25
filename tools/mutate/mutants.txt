@@ -5493,3 +5493,94 @@ find: vols, err := s.snapshot()\n\tif err != nil {\n\t\treturn nil, err\n\t}\n\t
 replace: vols, _ := s.snapshot()\n\treturn vols[0].st.OpenJournal(ctx)
 pkg: ./core/blob/multivol
 run: ^TestMissingSecondaryOpensNoJournal$
+
+id: blob-nodelete-keeps-journal
+file: core/blob/journal.go
+find: if j, ok := s.(Journaler); ok {
+replace: if j, ok := s.(Journaler); ok && false {
+pkg: ./core/blob
+run: ^TestNoDeleteKeepsTheJournal$
+
+id: mem-journal-one-writer
+file: core/blob/mem/mem.go
+find: if s.jopen || s.jholds > 0 {
+replace: if false {
+pkg: ./core/blob/mem
+run: ^TestJournalContract$
+
+id: mem-journal-hold-excludes-writer
+file: core/blob/mem/mem.go
+find: if s.jopen {\n\t\treturn 0, nil, blob.ErrJournalBusy
+replace: if false {\n\t\treturn 0, nil, blob.ErrJournalBusy
+pkg: ./core/blob/mem
+run: ^TestJournalContract$
+
+id: mem-journal-read-limit
+file: core/blob/mem/mem.go
+find: if int64(len(j.s.journal)) > limit {
+replace: if false {
+pkg: ./core/blob/mem
+run: ^TestJournalContract$
+
+id: mem-journal-closed-refuses-append
+file: core/blob/mem/mem.go
+find: if j.closed {\n\t\treturn blob.ErrJournalClosed\n\t}\n\tj.s.journal = append
+replace: if false {\n\t\treturn blob.ErrJournalClosed\n\t}\n\tj.s.journal = append
+pkg: ./core/blob/mem
+run: ^TestJournalContract$
+
+id: local-journal-exclusive
+file: core/blob/local/local.go
+find: if err := fsutil.TryLock(f, true); err != nil {
+replace: if err := fsutil.TryLock(f, false); err != nil {
+pkg: ./core/blob/local
+run: ^TestJournalContract$
+
+id: local-journal-hold-shared
+file: core/blob/local/local.go
+find: if err := fsutil.TryLock(f, false); err != nil {
+replace: if err := fsutil.TryLock(f, true); err != nil {
+pkg: ./core/blob/local
+run: ^TestJournalContract$
+
+id: local-journal-read-limit
+file: core/blob/local/local.go
+find: if info.Size() > limit {
+replace: if false {
+pkg: ./core/blob/local
+run: ^TestJournalContract$
+
+id: local-journal-appends-at-the-end
+file: core/blob/local/local.go
+find: os.O_RDWR|os.O_CREATE|os.O_APPEND, filePerm)
+replace: os.O_RDWR|os.O_CREATE, filePerm)
+pkg: ./core/blob/local
+run: ^TestJournalContract$
+
+id: local-journal-reset-truncates
+file: core/blob/local/local.go
+find: if err := j.f.Truncate(0); err != nil {
+replace: if err := j.f.Sync(); err != nil {
+pkg: ./core/blob/local
+run: ^TestJournalContract$
+
+id: local-journal-is-not-an-object
+file: core/blob/local/local.go
+find: func (s *Store) journalPath() string { return filepath.Join(s.dir, journalName) }
+replace: func (s *Store) journalPath() string { return filepath.Join(s.dir, objectsDir, journalName+fileSuffix) }
+pkg: ./core/blob/local
+run: ^TestJournalContract$
+
+id: local-journal-closed-refuses-append
+file: core/blob/local/local.go
+find: if j.closed {\n\t\treturn blob.ErrJournalClosed\n\t}\n\tif _, err := j.f.Write(b)
+replace: if false {\n\t\treturn blob.ErrJournalClosed\n\t}\n\tif _, err := j.f.Write(b)
+pkg: ./core/blob/local
+run: ^TestJournalContract$
+
+id: seal-journal-tag
+file: core/seal/seal.go
+find: \tJournal:   "vdb/journal/v1",\n
+replace: 
+pkg: ./core/seal
+run: ^TestDomainTagsAreTheDocumentedOnes$
