@@ -16,8 +16,9 @@ import (
 // dedup table from chunk hash to a location whose pack is an index into
 // packs. Memory is a record per pack, none per chunk.
 type spilled struct {
-	table *dedup.Table
-	packs []packRef
+	table  *dedup.Table
+	packs  []packRef
+	listed map[[32]byte]bool // the packs in the table, by sum
 }
 
 // packRef is what a location needs of its pack.
@@ -77,12 +78,13 @@ func (s *Store) buildSpilled(ctx context.Context, m manifest, loaded map[[32]byt
 	if err != nil {
 		return nil, err
 	}
-	sp := &spilled{}
+	sp := &spilled{listed: map[[32]byte]bool{}}
 	add := func(info pack.Info) error {
 		sum, err := dedup.PackSum(info.Name)
 		if err != nil {
 			return err
 		}
+		sp.listed[sum] = true
 		pi := uint32(len(sp.packs))
 		sp.packs = append(sp.packs, packRef{sum: sum, salt: info.Salt, size: info.Size})
 		for _, e := range info.Entries {

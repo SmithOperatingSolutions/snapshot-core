@@ -255,6 +255,9 @@ func (s *Store) refreshFrom(ctx context.Context, r blob.Root) error {
 		if err != nil {
 			return err
 		}
+		if !rebuild {
+			infos = s.unindexed(infos)
+		}
 		total += entries(infos)
 		if total > s.o.IndexInMemory {
 			spill, loaded = true, nil
@@ -324,6 +327,28 @@ func (s *Store) refreshFrom(ctx context.Context, r blob.Root) error {
 		s.condemned = cond
 	}
 	return nil
+}
+
+// unindexed is the packs of infos the store's index does not hold: a
+// merged index object lists packs the objects it replaced listed, which
+// are indexed already and must not count against o.IndexInMemory again,
+// nor sit in memory beside the table on disk.
+func (s *Store) unindexed(infos []pack.Info) []pack.Info {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	out := infos[:0:0]
+	for _, info := range infos {
+		if s.mem.HasPack(info.Name) {
+			continue
+		}
+		if s.disk != nil {
+			if sum, err := dedup.PackSum(info.Name); err == nil && s.disk.listed[sum] {
+				continue
+			}
+		}
+		out = append(out, info)
+	}
+	return out
 }
 
 // addPacks adds packs to an index, those still in service first, so a chunk

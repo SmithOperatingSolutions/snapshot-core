@@ -260,6 +260,12 @@ func (x *Index) Add(info pack.Info) {
 	}
 }
 
+// HasPack reports whether the index has had pack name added.
+func (x *Index) HasPack(name string) bool {
+	_, ok := x.byName[name]
+	return ok
+}
+
 // Lookup locates a chunk.
 func (x *Index) Lookup(h hash.Hash) (Location, bool) {
 	l, ok := x.chunks[h]
