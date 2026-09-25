@@ -20,7 +20,11 @@
 //   - concurrent: 4, 16 and 64 writers, each on a branch of its own, so no
 //     working set conflicts, but every commit swaps the one root: commits/s,
 //     p99, and the swaps lost to another writer (each is retried by vcs);
-//   - bulk: a 256 MiB random stream written, then one commit.
+//   - bulk: a 256 MiB random stream written, then one commit;
+//   - batch: 1,000 and 10,000 small objects written into one branch's
+//     namespace through one editor, flushed once, committed once: writes/s,
+//     the flush, the commit and the publish inside it, and the pack bytes
+//     the commit wrote.
 //
 // Timed runs on a shared machine take the measurement lock and start with
 // the load under 2 (CONTRIBUTING.md, "Heavy runs"); the tool prints the load
@@ -68,6 +72,7 @@ type config struct {
 	only       map[string]bool
 	dir        string
 	writers    []int
+	batches    []int
 	duration   time.Duration
 	bulkMiB    int
 	cpuprofile string
@@ -77,7 +82,8 @@ type config struct {
 func run() int {
 	var c config
 	backends := flag.String("backends", "local,mem", "comma-separated backends: local, mem")
-	only := flag.String("only", "single,concurrent,bulk", "comma-separated runs: single, concurrent, bulk")
+	only := flag.String("only", "single,concurrent,bulk,batch", "comma-separated runs: single, concurrent, bulk, batch")
+	batches := flag.String("batch", "1000,10000", "comma-separated object counts for the batch run")
 	writers := flag.String("writers", "4,16,64", "comma-separated writer counts for the concurrent run")
 	flag.StringVar(&c.dir, "dir", os.TempDir(), "where blob/local stores are created (and removed afterwards)")
 	flag.DurationVar(&c.duration, "duration", 20*time.Second, "length of each single-writer and concurrent run (the owner's bound: a run takes under a minute)")
@@ -89,6 +95,14 @@ func run() int {
 	c.only = map[string]bool{}
 	for _, o := range strings.Split(*only, ",") {
 		c.only[strings.TrimSpace(o)] = true
+	}
+	for _, b := range strings.Split(*batches, ",") {
+		n, err := strconv.Atoi(strings.TrimSpace(b))
+		if err != nil || n < 1 {
+			fmt.Fprintf(os.Stderr, "commitbench: bad batch size %q\n", b)
+			return 2
+		}
+		c.batches = append(c.batches, n)
 	}
 	for _, w := range strings.Split(*writers, ",") {
 		n, err := strconv.Atoi(strings.TrimSpace(w))
@@ -126,6 +140,7 @@ func bench(c config) error {
 	}
 	var rows []row
 	var breakdowns []string
+	var batchRows []string
 	for i, b := range c.backends {
 		if c.only["single"] {
 			prof := ""
@@ -148,6 +163,15 @@ func bench(c config) error {
 				rows = append(rows, r)
 			}
 		}
+		if c.only["batch"] {
+			for _, n := range c.batches {
+				r, err := batch(c, b, n)
+				if err != nil {
+					return fmt.Errorf("%s batch of %d: %w", b, n, err)
+				}
+				batchRows = append(batchRows, r)
+			}
+		}
 		if c.only["bulk"] {
 			r, err := bulk(c, b)
 			if err != nil {
@@ -156,9 +180,17 @@ func bench(c config) error {
 			rows = append(rows, r)
 		}
 	}
-	fmt.Printf("\n| backend | run | writers | commits | commits/s | p50 | p99 | lost swaps |\n| --- | --- | --- | --- | --- | --- | --- | --- |\n")
-	for _, r := range rows {
-		fmt.Println(r)
+	if len(rows) > 0 {
+		fmt.Printf("\n| backend | run | writers | commits | commits/s | p50 | p99 | lost swaps |\n| --- | --- | --- | --- | --- | --- | --- | --- |\n")
+		for _, r := range rows {
+			fmt.Println(r)
+		}
+	}
+	if len(batchRows) > 0 {
+		fmt.Printf("\n| backend | objects | write phase | writes/s | flush | commit | publish in it | total | pack bytes the commit wrote |\n| --- | --- | --- | --- | --- | --- | --- | --- | --- |\n")
+		for _, r := range batchRows {
+			fmt.Println(r)
+		}
 	}
 	for _, bd := range breakdowns {
 		fmt.Print("\n" + bd)
@@ -293,6 +325,7 @@ func (e *env) commitRef(ctx context.Context, branch, path string, root model.Roo
 type timedBlobs struct {
 	blob.BlobStore
 	packPut, indexPut, otherPut, swap, root, get stat
+	packBytes                                    atomic.Int64
 }
 
 type stat struct{ n, ns atomic.Int64 }
@@ -310,6 +343,9 @@ func (t *timedBlobs) Put(ctx context.Context, name string, r io.Reader, size int
 	switch {
 	case strings.HasPrefix(name, "packs/"):
 		t.packPut.add(t0)
+		if err == nil {
+			t.packBytes.Add(size)
+		}
 	case strings.HasPrefix(name, "index/"):
 		t.indexPut.add(t0)
 	default:
@@ -527,6 +563,58 @@ func bulk(c config, backend string) (row, error) {
 	cm := time.Since(t1)
 	return row{backend: backend, run: fmt.Sprintf("bulk %d MiB then commit", c.bulkMiB), writers: 1, count: 1, rate: 1 / cm.Seconds(),
 		p50: cm, p99: cm, note: fmt.Sprintf("(write %v, %.0f MB/s)", w.Round(time.Millisecond), float64(size)/1e6/w.Seconds())}, nil
+}
+
+// batch writes n small objects into one branch's namespace through one
+// editor, flushes it once, and commits once: the host that batches.
+func batch(c config, backend string, n int) (string, error) {
+	ctx := context.Background()
+	e, err := newEnv(c, backend)
+	if err != nil {
+		return "", err
+	}
+	defer e.close()
+	if err := e.commitOne(ctx, vcs.MainBranch, "warm", c.objectSize); err != nil {
+		return "", err
+	}
+	ws, err := e.v.WorkingSet(ctx, e.me, vcs.MainBranch)
+	if err != nil {
+		return "", err
+	}
+	ns, err := e.v.Namespace(ctx, ws.Working)
+	if err != nil {
+		return "", err
+	}
+	ed := ns.Editor()
+	body := make([]byte, c.objectSize)
+	t0 := time.Now()
+	for i := range n {
+		_, _ = rand.Read(body)
+		root, err := mblob.Write(ctx, e.chunks, strings.NewReader(string(body)), e.geo.Stream())
+		if err != nil {
+			return "", err
+		}
+		if err := ed.Put(fmt.Sprintf("batch/%06d", i), object.Ref{Model: mblob.ID, Root: root}); err != nil {
+			return "", err
+		}
+	}
+	write := time.Since(t0)
+	t1 := time.Now()
+	if ns, err = ed.Flush(ctx); err != nil {
+		return "", err
+	}
+	flush := time.Since(t1)
+	e.timed.packBytes.Store(0)
+	e.counted.cas.reset()
+	t2 := time.Now()
+	if _, err := e.v.Commit(ctx, e.me, vcs.MainBranch, ws, ns.Root(), "batch"); err != nil {
+		return "", err
+	}
+	cm := time.Since(t2)
+	pub := time.Duration(e.counted.cas.ns.Load())
+	r := func(d time.Duration) time.Duration { return d.Round(10 * time.Microsecond) }
+	return fmt.Sprintf("| %s | %d | %v | %.0f | %v | %v | %v | %v | %d |", backend, n, r(write), float64(n)/write.Seconds(),
+		r(flush), r(cm), r(pub), r(write+flush+cm), e.timed.packBytes.Load()), nil
 }
 
 // --- the fsync floor ---
