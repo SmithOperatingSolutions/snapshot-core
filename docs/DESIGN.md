@@ -515,9 +515,19 @@ working set  0x05 · working [32] · staged [32] · merging u8 (0 or 1) ·
 - Both diffs (base → ours, base → theirs) stream in path order and are
   zipped; memory stays bounded whatever the size of the namespaces.
 - Per path, the Engine Spec's table: one side changed, take it; both made
-  the same change, take it; both changed the same object under one model,
-  ask that model; an add against a different add, a delete against an edit,
-  or two models for one path, a conflict.
+  the same change, take it, unless the object's model accumulates
+  (`model.Accumulator`, beside the frozen port as Walker is), when that
+  model merges it as two changes (a counter each side added one to is two
+  more); both changed the same object under one model, ask that model; an
+  add against a different add, a delete against an edit, or two models for
+  one path, a conflict. An identical add or change of model is taken once
+  whatever the model.
+- Deviation from the Storage Core Spec ("the driver handles … both sides
+  identical"; the contract's "merge(b, o, o) == o"): the spec's own registry
+  row says kv counters add, which taking an identical increment once
+  contradicts. Identical namespaces are still ours without a read unless the
+  registry holds a model that accumulates; `model/contract` requires such a
+  model's merge(b, o, o) to be clean and valid, not o.
 - Conflicts go into the working set (`conflicts`, a prolly map from path to
   record) so a session can resolve them later; a commit is refused while any
   remain. More than 100,000 is `ErrTooManyConflicts`, and a model's error

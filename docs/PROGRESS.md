@@ -135,6 +135,7 @@ packages have no gate: their callers exercise them.
 - [x] A repo opened with a registry that lacks a model its objects use refuses those objects with ErrUnknownModel (`TestAnUnregisteredModelIsUnknownAndNothingIsRead`, `TestResolveKnowsOnlyItsModelsAndFormats`; a format newer than the model knows is refused the same way, `TestDetailNeverHandsAModelAnUnknownFormat`)
 - [x] `model/blob`: both sides edit one file → exactly one conflict; one side edits → clean merge (`TestBothSidesEditingIsOneConflict`)
 - [x] `model/tree`: branch A deletes `x/`, branch B edits `x/y` → delete-vs-edit conflict on `x/y` (`TestDeletingADirectoryAgainstAnEditIsAConflict`)
+- [x] A model can opt in to being asked about identical changes (`model.Accumulator`), so counters incremented on both sides sum (`TestAnAccumulatingModelIsAskedAboutTheSameChangeOnBothSides` in core/merge, `TestIdentityVerdict` in model/contract, `TestAResolverIsAskedAboutTheSameValueOnBothSides` in model/mapobject); snapshot-engine's kv opts in once a release carries it
 - [x] Every registered model passes `model/contract` (`TestContract` in `model/blob` and `model/tree`: identity, round trip, determinism, diff against the edits made, merge identities, garbage refused)
 
 ### Security: disknexus gaps and how the core closes them
