@@ -2212,7 +2212,6 @@ replace: b, err := r.s.Get(ctx, h)\n\tif err != nil && false {\n\t\treturn Commi
 pkg: ./core/vcs
 run: ^TestStoreErrorsSurfaceAndLeaveTheRefs$
 
-
 id: vcs-conflicts-surface-iteration-errors
 file: core/vcs/vcs.go
 find: k, v, ok, err := it.Next()\n\t\tif err != nil || !ok {\n\t\t\treturn out, err
@@ -2240,7 +2239,6 @@ find: if baseHash == theirs { // the branch holds theirs already: nothing to mer
 replace: if baseHash == theirs && false { // the branch holds theirs already: nothing to merge
 pkg: ./core/vcs
 run: ^TestMergingWhatIsAlreadyMergedChangesNothing$
-
 
 id: vcs-branch-names-a-commit
 file: core/vcs/vcs.go
@@ -5488,3 +5486,10 @@ find: 	for _, changed := range paths {
 replace: 	for _, changed := range paths[1:] {
 pkg: ./core/vcs
 run: ^TestTheFlushedWorkingSetCallsAskWhatTheDiffFinds$
+
+id: multivol-readonly-opens-no-journal
+file: core/blob/multivol/multivol.go
+find: vols, err := s.snapshot()\n\tif err != nil {\n\t\treturn nil, err\n\t}\n\treturn vols[0].st.OpenJournal(ctx)
+replace: vols, _ := s.snapshot()\n\treturn vols[0].st.OpenJournal(ctx)
+pkg: ./core/blob/multivol
+run: ^TestMissingSecondaryOpensNoJournal$

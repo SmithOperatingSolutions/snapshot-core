@@ -450,3 +450,21 @@ func TestCrashDuringJournalAppendKeepsWhatReturned(t *testing.T) {
 	_, f := newFixture(t, 3)
 	crashtest.Append(t, f.primary, openStore)
 }
+
+// A store with a volume missing is read-only, and a journal it opened
+// would take commits no publish could land (#34): it opens none.
+func TestMissingSecondaryOpensNoJournal(t *testing.T) {
+	s, f := newFixture(t, 3)
+	j, err := s.OpenJournal(ctx)
+	if err != nil {
+		t.Fatalf("positive control: OpenJournal with every volume present: %v", err)
+	}
+	_ = j.Close()
+	unmount(t, f.vols[2])
+	if j, err := s.OpenJournal(ctx); !errors.Is(err, multivol.ErrVolumeMissing) {
+		if err == nil {
+			_ = j.Close()
+		}
+		t.Fatalf("OpenJournal with a volume missing = %v, want ErrVolumeMissing: commits would be journaled that cannot be published", err)
+	}
+}
