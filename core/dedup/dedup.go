@@ -130,7 +130,7 @@ func decodePlain(b []byte) ([]pack.Info, error) {
 			copy(e.Hash[:], r.Fixed(hash.Size))
 			off, stored, raw := r.Uvarint(), r.Uvarint(), r.Uvarint()
 			e.Codec = r.U8()
-			if r.Err() != nil || off < pack.HeaderSize || off > framesEnd || stored > framesEnd-off || raw > pack.MaxChunkSize ||
+			if r.Err() != nil || off > framesEnd || stored > framesEnd-off || raw > pack.MaxChunkSize ||
 				!frameLengthsAgree(e.Codec, stored, raw) ||
 				(e.Codec != pack.CodecRaw && e.Codec != pack.CodecZstd) ||
 				(j > 0 && p.Entries[j-1].Hash.Compare(e.Hash) >= 0) {

@@ -903,15 +903,15 @@ run: ^TestForgedObjectsAreRefused$
 
 id: dedup-frames-inside-the-pack
 file: core/dedup/dedup.go
-find: off < pack.HeaderSize || off > framesEnd || stored > framesEnd-off ||
-replace: off < pack.HeaderSize || off > framesEnd+1<<40 || stored > framesEnd+1<<40-off ||
+find: r.Err() != nil || off > framesEnd || stored > framesEnd-off ||
+replace: r.Err() != nil || off > framesEnd+1<<40 || stored > framesEnd+1<<40-off ||
 pkg: ./core/dedup
 run: ^TestRegression_SC26_AnEntryCannotWrapIntoPlace$
 
 id: dedup-frames-clear-the-header
 file: core/dedup/dedup.go
-find: r.Err() != nil || off < pack.HeaderSize ||
-replace: r.Err() != nil ||
+find: end := uint64(pack.HeaderSize)
+replace: end := uint64(0)
 pkg: ./core/dedup
 run: ^TestForgedObjectsAreRefused$
 
