@@ -32,6 +32,7 @@ func Run(t *testing.T, newStore Factory) {
 	t.Run("ReadLimit", func(t *testing.T) { journalReadLimit(t, newStore) })
 	t.Run("ClosedRefuses", func(t *testing.T) { journalClosed(t, newStore) })
 	t.Run("IsNotAnObject", func(t *testing.T) { journalNotAnObject(t, newStore) })
+	t.Run("WritesAreReadAndSyncedInOrder", func(t *testing.T) { journalWriteSync(t, newStore) })
 }
 
 func openJournal(t *testing.T, s blob.Journaler) blob.Journal {
@@ -248,6 +249,44 @@ func journalNotAnObject(t *testing.T, newStore Factory) {
 		if _, err := s.Stat(ctx, name); !errors.Is(err, blob.ErrNotFound) {
 			t.Fatalf("Stat(%q) = %v, want ErrNotFound: the journal is reachable as an object", name, err)
 		}
+	}
+}
+
+func journalWriteSync(t *testing.T, newStore Factory) {
+	ctx := context.Background()
+	s, reopen := newStore(t)
+	j := openJournal(t, s)
+	a, b, c := payload("write-a", 3000), payload("write-b", 5000), payload("write-c", 100)
+	for _, x := range [][]byte{a, b} {
+		if err := j.Write(ctx, x); err != nil {
+			t.Fatalf("Write: %v", err)
+		}
+	}
+	want := append(append([]byte(nil), a...), b...)
+	if got := readJournal(t, j); !bytes.Equal(got, want) {
+		t.Fatalf("after two writes the journal reads %d bytes, want the %d written, in order", len(got), len(want))
+	}
+	if err := j.Sync(ctx); err != nil {
+		t.Fatalf("Sync: %v", err)
+	}
+	appendJournal(t, j, c) // an append after writes lands after them
+	want = append(want, c...)
+	if err := j.Close(); err != nil {
+		t.Fatal(err)
+	}
+	j2 := openJournal(t, reopen(t))
+	defer j2.Close()
+	if got := readJournal(t, j2); !bytes.Equal(got, want) {
+		t.Fatalf("opened again, the journal reads %d bytes, want the %d written and synced: commits told they were durable are gone", len(got), len(want))
+	}
+	if err := j2.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := j2.Write(ctx, []byte("x")); !errors.Is(err, blob.ErrJournalClosed) {
+		t.Fatalf("Write after Close = %v, want ErrJournalClosed", err)
+	}
+	if err := j2.Sync(ctx); !errors.Is(err, blob.ErrJournalClosed) {
+		t.Fatalf("Sync after Close = %v, want ErrJournalClosed", err)
 	}
 }
 

@@ -45,6 +45,13 @@ type Journal interface {
 	// keeps everything an Append that returned added; what a crash in
 	// flight leaves of b is a prefix of it.
 	Append(ctx context.Context, b []byte) error
+	// Write adds b at the end, not yet durable: Read sees it at once, a
+	// crash may lose it until a Sync returns. Writes land in order.
+	Write(ctx context.Context, b []byte) error
+	// Sync makes everything written so far durable (one fsync on disk):
+	// commits that wrote while another's fsync was in flight share the
+	// next one (#34).
+	Sync(ctx context.Context) error
 	// Reset empties the journal, durably.
 	Reset(ctx context.Context) error
 	// Close releases the journal. Every other method fails afterwards.

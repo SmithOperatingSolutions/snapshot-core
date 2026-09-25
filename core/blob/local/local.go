@@ -651,3 +651,11 @@ func (j *journal) Close() error {
 
 // JournalByDefault implements blob.Journaler: on, one fsync a commit (#34).
 func (s *Store) JournalByDefault() bool { return true }
+
+// Write implements blob.Journal.
+func (j *journal) Write(ctx context.Context, b []byte) error { return errJournalWriteNotYet }
+
+// Sync implements blob.Journal.
+func (j *journal) Sync(ctx context.Context) error { return errJournalWriteNotYet }
+
+var errJournalWriteNotYet = errors.New("journal: no Write and Sync yet")
