@@ -308,11 +308,17 @@ func stepFuzz(ctx context.Context, c *config) error {
 	}
 	for _, t := range targets {
 		fmt.Printf("--- fuzz %s %s for %s\n", t.pkg, t.name, c.fuzzTime)
-		if err := stream(ctx, nil, "go", "test", "-run", "^$", "-fuzz", "^"+t.name+"$", "-fuzztime", c.fuzzTime, t.pkg); err != nil {
+		env, args := fuzzCommand(c, t.pkg, t.name)
+		if err := stream(ctx, env, "go", args...); err != nil {
 			return fmt.Errorf("%s in %s: %w (minimize the input and check it in under testdata/fuzz)", t.name, t.pkg, err)
 		}
 	}
 	return nil
+}
+
+// fuzzCommand is the environment and go arguments that fuzz one target.
+func fuzzCommand(c *config, pkg, name string) (env, args []string) {
+	return nil, []string{"test", "-run", "^$", "-fuzz", "^" + name + "$", "-fuzztime", c.fuzzTime, pkg}
 }
 
 func stepMutate(ctx context.Context, _ *config) error {
