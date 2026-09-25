@@ -59,7 +59,6 @@ func TestRegression_SC23_ReadAllRefusesAStreamOverItsLimit(t *testing.T) {
 	if err != nil || !bytes.Equal(got, bytes.Repeat(data, 256)) {
 		t.Fatalf("positive control: a %d-byte stream read with a %d-byte limit gave %d bytes, %v", ref.Size, ref.Size, len(got), err)
 	}
-	got = nil
 	const budget = 64 << 10
 	for _, limit := range []uint64{ref.Size - 1, 64 << 10} {
 		var n int
