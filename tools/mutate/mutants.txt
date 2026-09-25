@@ -5573,7 +5573,7 @@ run: ^TestJournalContract$
 
 id: local-journal-closed-refuses-append
 file: core/blob/local/local.go
-find: if j.closed {\n\t\treturn blob.ErrJournalClosed\n\t}\n\tif _, err := j.f.Write(b)
+find: if j.closed.Load() {\n\t\treturn blob.ErrJournalClosed\n\t}\n\tif _, err := j.f.Write(b)
 replace: if false {\n\t\treturn blob.ErrJournalClosed\n\t}\n\tif _, err := j.f.Write(b)
 pkg: ./core/blob/local
 run: ^TestJournalContract$
@@ -5955,3 +5955,17 @@ find: \t\t\ts.o.Journal = JournalOff\n\t\t\treturn nil
 replace: \t\t\treturn err
 pkg: ./core/chunk/packstore
 run: ^TestContractOverEveryBackend$
+
+id: local-journal-sync-refuses-when-closed
+file: core/blob/local/local.go
+find: if j.closed.Load() {\n\t\treturn blob.ErrJournalClosed\n\t}\n\treturn j.f.Sync()
+replace: if false {\n\t\treturn blob.ErrJournalClosed\n\t}\n\treturn j.f.Sync()
+pkg: ./core/blob/local
+run: ^TestJournalContract$
+
+id: local-journal-write-writes
+file: core/blob/local/local.go
+find: \t_, err := j.f.Write(b)\n\treturn err
+replace: \treturn nil
+pkg: ./core/blob/local
+run: ^TestJournalContract$

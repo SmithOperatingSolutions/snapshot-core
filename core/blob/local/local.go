@@ -32,6 +32,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/SmithOperatingSolutions/snapshot-core/core/blob"
@@ -598,11 +599,11 @@ func (s *Store) HoldJournal(ctx context.Context) (int64, func(), error) {
 // journal is an open journal file.
 type journal struct {
 	f      *os.File
-	closed bool
+	closed atomic.Bool
 }
 
 func (j *journal) Read(ctx context.Context, limit int64) ([]byte, error) {
-	if j.closed {
+	if j.closed.Load() {
 		return nil, blob.ErrJournalClosed
 	}
 	info, err := j.f.Stat()
@@ -621,7 +622,7 @@ func (j *journal) Read(ctx context.Context, limit int64) ([]byte, error) {
 
 // Append writes b at the end (O_APPEND) and fsyncs.
 func (j *journal) Append(ctx context.Context, b []byte) error {
-	if j.closed {
+	if j.closed.Load() {
 		return blob.ErrJournalClosed
 	}
 	if _, err := j.f.Write(b); err != nil {
@@ -631,7 +632,7 @@ func (j *journal) Append(ctx context.Context, b []byte) error {
 }
 
 func (j *journal) Reset(ctx context.Context) error {
-	if j.closed {
+	if j.closed.Load() {
 		return blob.ErrJournalClosed
 	}
 	if err := j.f.Truncate(0); err != nil {
@@ -642,20 +643,29 @@ func (j *journal) Reset(ctx context.Context) error {
 
 // Close closes the file, which drops its lock.
 func (j *journal) Close() error {
-	if j.closed {
+	if j.closed.Swap(true) {
 		return nil
 	}
-	j.closed = true
 	return j.f.Close()
 }
 
 // JournalByDefault implements blob.Journaler: on, one fsync a commit (#34).
 func (s *Store) JournalByDefault() bool { return true }
 
-// Write implements blob.Journal.
-func (j *journal) Write(ctx context.Context, b []byte) error { return errJournalWriteNotYet }
+// Write implements blob.Journal: the bytes go to the file (O_APPEND), not
+// yet fsynced.
+func (j *journal) Write(ctx context.Context, b []byte) error {
+	if j.closed.Load() {
+		return blob.ErrJournalClosed
+	}
+	_, err := j.f.Write(b)
+	return err
+}
 
-// Sync implements blob.Journal.
-func (j *journal) Sync(ctx context.Context) error { return errJournalWriteNotYet }
-
-var errJournalWriteNotYet = errors.New("journal: no Write and Sync yet")
+// Sync implements blob.Journal: one fsync for everything written.
+func (j *journal) Sync(ctx context.Context) error {
+	if j.closed.Load() {
+		return blob.ErrJournalClosed
+	}
+	return j.f.Sync()
+}

@@ -36,7 +36,8 @@ type Journaler interface {
 }
 
 // Journal is an open journal. Its methods may be called from one goroutine
-// at a time.
+// at a time, except that a Sync may run beside a Write: a writer groups
+// commits by writing the next record while the last fsync is in flight.
 type Journal interface {
 	// Read returns the whole journal: ErrTooLarge if it is longer than
 	// limit, without reading it.

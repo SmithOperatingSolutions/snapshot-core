@@ -5,7 +5,6 @@ package mem
 import (
 	"bytes"
 	"context"
-	"errors"
 	"fmt"
 	"io"
 	"sort"
@@ -247,10 +246,15 @@ func (j *journal) Close() error {
 // commit is CPU and the journal measured worse with many writers (#34).
 func (s *Store) JournalByDefault() bool { return false }
 
-// Write implements blob.Journal.
-func (j *journal) Write(ctx context.Context, b []byte) error { return errJournalWriteNotYet }
+// Write implements blob.Journal: memory is as durable as it gets.
+func (j *journal) Write(ctx context.Context, b []byte) error { return j.Append(ctx, b) }
 
 // Sync implements blob.Journal.
-func (j *journal) Sync(ctx context.Context) error { return errJournalWriteNotYet }
-
-var errJournalWriteNotYet = errors.New("journal: no Write and Sync yet")
+func (j *journal) Sync(ctx context.Context) error {
+	j.s.mu.Lock()
+	defer j.s.mu.Unlock()
+	if j.closed {
+		return blob.ErrJournalClosed
+	}
+	return nil
+}
