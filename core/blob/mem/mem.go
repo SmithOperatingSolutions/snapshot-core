@@ -5,7 +5,7 @@ package mem
 import (
 	"bytes"
 	"context"
-	"errors"
+	"fmt"
 	"io"
 	"sort"
 	"strings"
@@ -27,6 +27,9 @@ type Store struct {
 	root    []byte
 	version blob.Version
 	mirror  []byte // the root's copy a split store keeps here
+	journal []byte // blob.Journaler
+	jopen   bool   // a writer has the journal open
+	jholds  int    // HoldJournal calls not yet released
 }
 
 // New returns an empty store.
@@ -161,14 +164,80 @@ func (s *Store) ReadMirror(ctx context.Context) ([]byte, error) {
 
 var _ blob.Journaler = (*Store)(nil)
 
-// OpenJournal implements blob.Journaler.
+// OpenJournal implements blob.Journaler. The journal is the store's memory,
+// kept across every handle.
 func (s *Store) OpenJournal(ctx context.Context) (blob.Journal, error) {
-	return nil, errJournalNotYet
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.jopen || s.jholds > 0 {
+		return nil, blob.ErrJournalBusy
+	}
+	s.jopen = true
+	return &journal{s: s}, nil
 }
 
 // HoldJournal implements blob.Journaler.
 func (s *Store) HoldJournal(ctx context.Context) (int64, func(), error) {
-	return 0, nil, errJournalNotYet
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.jopen {
+		return 0, nil, blob.ErrJournalBusy
+	}
+	s.jholds++
+	var once sync.Once
+	return int64(len(s.journal)), func() {
+		once.Do(func() {
+			s.mu.Lock()
+			s.jholds--
+			s.mu.Unlock()
+		})
+	}, nil
 }
 
-var errJournalNotYet = errors.New("mem: no journal yet")
+// journal is the open journal of a memory store.
+type journal struct {
+	s      *Store
+	closed bool
+}
+
+func (j *journal) Read(ctx context.Context, limit int64) ([]byte, error) {
+	j.s.mu.Lock()
+	defer j.s.mu.Unlock()
+	if j.closed {
+		return nil, blob.ErrJournalClosed
+	}
+	if int64(len(j.s.journal)) > limit {
+		return nil, fmt.Errorf("%w: the journal holds %d bytes, over %d", blob.ErrTooLarge, len(j.s.journal), limit)
+	}
+	return bytes.Clone(j.s.journal), nil
+}
+
+func (j *journal) Append(ctx context.Context, b []byte) error {
+	j.s.mu.Lock()
+	defer j.s.mu.Unlock()
+	if j.closed {
+		return blob.ErrJournalClosed
+	}
+	j.s.journal = append(j.s.journal, b...)
+	return nil
+}
+
+func (j *journal) Reset(ctx context.Context) error {
+	j.s.mu.Lock()
+	defer j.s.mu.Unlock()
+	if j.closed {
+		return blob.ErrJournalClosed
+	}
+	j.s.journal = nil
+	return nil
+}
+
+func (j *journal) Close() error {
+	j.s.mu.Lock()
+	defer j.s.mu.Unlock()
+	if !j.closed {
+		j.closed = true
+		j.s.jopen = false
+	}
+	return nil
+}

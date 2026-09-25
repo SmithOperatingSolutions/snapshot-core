@@ -229,7 +229,7 @@ func TestObjectNamesNeverReachOutsideObjects(t *testing.T) {
 		top = append(top, e.Name())
 	}
 	for _, n := range top {
-		if !slices.Contains([]string{".snapshot-core", "objects", "tmp", "root", "root.lock"}, n) {
+		if !slices.Contains([]string{".snapshot-core", "objects", "tmp", "root", "root.lock", "journal"}, n) {
 			t.Errorf("unexpected entry %q at the store's top level", n)
 		}
 	}

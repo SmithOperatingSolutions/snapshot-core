@@ -543,14 +543,22 @@ func (s *Store) SwapRoot(ctx context.Context, expected blob.Version, next []byte
 
 var _ blob.Journaler = (*Store)(nil)
 
-// OpenJournal implements blob.Journaler.
+// OpenJournal implements blob.Journaler: the journal is the primary
+// volume's, beside the root. A read-only store (a volume missing) opens
+// none, since what it journaled could never be published.
 func (s *Store) OpenJournal(ctx context.Context) (blob.Journal, error) {
-	return nil, errJournalNotYet
+	vols, err := s.snapshot()
+	if err != nil {
+		return nil, err
+	}
+	return vols[0].st.OpenJournal(ctx)
 }
 
 // HoldJournal implements blob.Journaler.
 func (s *Store) HoldJournal(ctx context.Context) (int64, func(), error) {
-	return 0, nil, errJournalNotYet
+	p, err := s.primaryStore()
+	if err != nil {
+		return 0, nil, err
+	}
+	return p.HoldJournal(ctx)
 }
-
-var errJournalNotYet = errors.New("multivol: no journal yet")

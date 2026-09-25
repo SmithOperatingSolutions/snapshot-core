@@ -79,6 +79,7 @@ const (
 	tmpDir      = "tmp"
 	rootName    = "root"
 	lockName    = "root.lock"
+	journalName = "journal"
 	fileSuffix  = "~"
 	dirPerm     = fsutil.DirPerm
 	filePerm    = fsutil.FilePerm
@@ -545,14 +546,105 @@ func fsName(magic int64) string {
 
 var _ blob.Journaler = (*Store)(nil)
 
+// The journal is the file journal at the store's top level, beside the
+// root and outside objects/, so no name reaches it and no listing shows
+// it; its writer holds an exclusive flock on it, and a writer publishing
+// without it a shared one (blob.Journaler).
+func (s *Store) journalPath() string { return filepath.Join(s.dir, journalName) }
+
 // OpenJournal implements blob.Journaler.
 func (s *Store) OpenJournal(ctx context.Context) (blob.Journal, error) {
-	return nil, errJournalNotYet
+	f, err := os.OpenFile(s.journalPath(), os.O_RDWR|os.O_CREATE|os.O_APPEND, filePerm)
+	if err != nil {
+		return nil, err
+	}
+	if err := fsutil.TryLock(f, true); err != nil {
+		_ = f.Close()
+		if errors.Is(err, fsutil.ErrLocked) {
+			return nil, blob.ErrJournalBusy
+		}
+		return nil, err
+	}
+	// The file's name is durable before anything is appended to it.
+	if err := fsutil.SyncDir(s.dir); err != nil {
+		_ = f.Close()
+		return nil, err
+	}
+	return &journal{f: f}, nil
 }
 
 // HoldJournal implements blob.Journaler.
 func (s *Store) HoldJournal(ctx context.Context) (int64, func(), error) {
-	return 0, nil, errJournalNotYet
+	f, err := os.OpenFile(s.journalPath(), os.O_RDONLY|os.O_CREATE, filePerm)
+	if err != nil {
+		return 0, nil, err
+	}
+	if err := fsutil.TryLock(f, false); err != nil {
+		_ = f.Close()
+		if errors.Is(err, fsutil.ErrLocked) {
+			return 0, nil, blob.ErrJournalBusy
+		}
+		return 0, nil, err
+	}
+	info, err := f.Stat()
+	if err != nil {
+		_ = f.Close()
+		return 0, nil, err
+	}
+	var once sync.Once
+	return info.Size(), func() { once.Do(func() { _ = f.Close() }) }, nil
 }
 
-var errJournalNotYet = errors.New("local: no journal yet")
+// journal is an open journal file.
+type journal struct {
+	f      *os.File
+	closed bool
+}
+
+func (j *journal) Read(ctx context.Context, limit int64) ([]byte, error) {
+	if j.closed {
+		return nil, blob.ErrJournalClosed
+	}
+	info, err := j.f.Stat()
+	if err != nil {
+		return nil, err
+	}
+	if info.Size() > limit {
+		return nil, fmt.Errorf("%w: the journal holds %d bytes, over %d", blob.ErrTooLarge, info.Size(), limit)
+	}
+	b := make([]byte, info.Size())
+	if _, err := j.f.ReadAt(b, 0); err != nil && !errors.Is(err, io.EOF) {
+		return nil, err
+	}
+	return b, nil
+}
+
+// Append writes b at the end (O_APPEND) and fsyncs.
+func (j *journal) Append(ctx context.Context, b []byte) error {
+	if j.closed {
+		return blob.ErrJournalClosed
+	}
+	if _, err := j.f.Write(b); err != nil {
+		return err
+	}
+	return j.f.Sync()
+}
+
+func (j *journal) Reset(ctx context.Context) error {
+	if j.closed {
+		return blob.ErrJournalClosed
+	}
+	if err := j.f.Truncate(0); err != nil {
+		return err
+	}
+	return j.f.Sync()
+}
+
+// Close closes the file, which drops its lock.
+func (j *journal) Close() error {
+	if j.closed {
+		return nil
+	}
+	j.closed = true
+	return j.f.Close()
+}

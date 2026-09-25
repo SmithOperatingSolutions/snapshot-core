@@ -55,9 +55,26 @@ var ErrJournalClosed = errors.New("blob: the journal is closed")
 // repository runs on a NoDelete store; only core/gc holds the raw one. A
 // store's journal stays reachable through it: a Journaler stays one.
 func NoDelete(s BlobStore) BlobStore {
+	if j, ok := s.(Journaler); ok {
+		return noDeleteJournaler{noDelete{s}, j}
+	}
 	return noDelete{s}
 }
 
 type noDelete struct{ BlobStore }
 
 func (noDelete) Delete(context.Context, string) error { return ErrDeleteForbidden }
+
+// noDeleteJournaler is NoDelete of a store with a journal.
+type noDeleteJournaler struct {
+	noDelete
+	j Journaler
+}
+
+func (n noDeleteJournaler) OpenJournal(ctx context.Context) (Journal, error) {
+	return n.j.OpenJournal(ctx)
+}
+
+func (n noDeleteJournaler) HoldJournal(ctx context.Context) (int64, func(), error) {
+	return n.j.HoldJournal(ctx)
+}

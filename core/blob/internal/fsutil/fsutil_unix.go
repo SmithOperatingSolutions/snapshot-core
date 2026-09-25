@@ -40,6 +40,25 @@ func Lock(path string) (func(), error) {
 	}, nil
 }
 
+// ErrLocked is TryLock's answer when another holder has the lock.
+var ErrLocked = errors.New("fsutil: locked by another holder")
+
+// TryLock takes a flock on f without waiting, exclusive or shared:
+// ErrLocked when it is held in a mode that excludes it, in this process
+// (through another open) or another. The kernel drops it when f is closed
+// or the process dies.
+func TryLock(f *os.File, exclusive bool) error {
+	how := unix.LOCK_SH
+	if exclusive {
+		how = unix.LOCK_EX
+	}
+	err := unix.Flock(int(f.Fd()), how|unix.LOCK_NB)
+	if errors.Is(err, unix.EWOULDBLOCK) {
+		return ErrLocked
+	}
+	return err
+}
+
 // Identity is a directory's device and inode. An unmount or a swap changes it.
 func Identity(path string) (dev, ino uint64, err error) {
 	info, err := os.Stat(path)
