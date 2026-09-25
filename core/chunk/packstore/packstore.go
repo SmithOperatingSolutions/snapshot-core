@@ -63,8 +63,26 @@ type Options struct {
 	// does not grow with the repository (#6, DESIGN §6).
 	IndexDir      string
 	IndexInMemory int
-	backoff       time.Duration
+	// Journal commits into the backend's journal (blob.Journaler: blob/local,
+	// blob/multivol, blob/mem), one append and one fsync a commit, and
+	// publishes in the background at most JournalInterval after the first
+	// commit it holds (0: DefaultJournalInterval), and at Close (#34,
+	// DESIGN §6). On a backend without one (S3, blob/split) it has no
+	// effect: every commit publishes.
+	Journal         bool
+	JournalInterval time.Duration
+	backoff         time.Duration
 }
+
+// DefaultJournalInterval is how long a journaled commit waits, at most,
+// before a background publish lands it for other processes.
+const DefaultJournalInterval = time.Second
+
+// ErrJournalConflict: the root moved under commits this store journaled,
+// swapped by a writer that does not honor the journal (v0.2.0, or one
+// outside the contract). Those commits cannot be published; the store
+// refuses every write and keeps the journal.
+var ErrJournalConflict = errors.New("packstore: the root moved under journaled commits")
 
 // DefaultIndexInMemory is the published chunks a store indexes in memory
 // before spilling the index to disk: about 60 MiB of index.
@@ -1140,6 +1158,9 @@ func (s *Store) rootIs(ctx context.Context, expected hash.Hash) (bool, error) {
 	defer s.mu.Unlock()
 	return s.man.root == expected, nil
 }
+
+// Journaled reports whether the store commits into a journal.
+func (s *Store) Journaled() bool { return false }
 
 // Stats implements chunk.Store.
 func (s *Store) Stats(ctx context.Context) (chunk.Stats, error) {

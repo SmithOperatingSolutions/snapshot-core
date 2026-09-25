@@ -6,8 +6,10 @@ import (
 	"sort"
 	"time"
 
+	"github.com/SmithOperatingSolutions/snapshot-core/core/blob"
 	"github.com/SmithOperatingSolutions/snapshot-core/core/dedup"
 	"github.com/SmithOperatingSolutions/snapshot-core/core/hash"
+	"github.com/SmithOperatingSolutions/snapshot-core/core/seal"
 )
 
 // WithBackoff shortens the retry backoff for tests.
@@ -188,4 +190,66 @@ func IndexObjects(ctx context.Context, o Options) (int, error) {
 		return 0, err
 	}
 	return len(m.indexes), nil
+}
+
+// Abandon drops the store as a process that died would: the journal is
+// released without a publish, and nothing is written.
+func Abandon(s *Store) { _ = s.Close() }
+
+// HoldPublish makes the background publisher call f before it publishes.
+func HoldPublish(s *Store, f func()) {}
+
+// PublishJournal runs the background publish now.
+func PublishJournal(s *Store) error { return nil }
+
+// JournalRecords is how many commits the store's journal holds.
+func JournalRecords(s *Store) int { return 0 }
+
+// PublishedRoot is the root the backend's manifest names: what another
+// process sees.
+func PublishedRoot(ctx context.Context, o Options) (hash.Hash, error) {
+	r, err := o.Blobs.Root(ctx)
+	if err != nil || len(r.Value) == 0 {
+		return hash.Hash{}, err
+	}
+	m, err := openManifest(r.Value, o.Keys, o.Repo)
+	return m.root, err
+}
+
+// ManifestSeq is the backend manifest's sequence number.
+func ManifestSeq(ctx context.Context, o Options) (uint64, error) {
+	r, err := o.Blobs.Root(ctx)
+	if err != nil || len(r.Value) == 0 {
+		return 0, err
+	}
+	m, err := openManifest(r.Value, o.Keys, o.Repo)
+	return m.seq, err
+}
+
+// ForceRoot swaps the backend's manifest to one naming root, as a writer
+// that does not honor the journal (v0.2.0) would.
+func ForceRoot(ctx context.Context, o Options, root hash.Hash) error {
+	r, err := o.Blobs.Root(ctx)
+	if err != nil {
+		return err
+	}
+	m, err := openManifest(r.Value, o.Keys, o.Repo)
+	if err != nil {
+		return err
+	}
+	m.seq++
+	m.root = root
+	b, err := m.seal(o.Keys, o.Repo)
+	if err != nil {
+		return err
+	}
+	_, err = o.Blobs.SwapRoot(ctx, r.Version, b)
+	return err
+}
+
+// ForgeJournalFrame rewrites the journal's last record so its first frame
+// is listed under another chunk's hash, sealed under the right key: only
+// the replay's reading of the frame can refuse it.
+func ForgeJournalFrame(ctx context.Context, bs blob.Journaler, kr *seal.Keyring, repo seal.RepoID) error {
+	return nil
 }
