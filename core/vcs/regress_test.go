@@ -1,4 +1,4 @@
-package vcs
+package vcs_test
 
 import (
 	"errors"
@@ -7,6 +7,7 @@ import (
 
 	"github.com/SmithOperatingSolutions/snapshot-core/core/chunk"
 	"github.com/SmithOperatingSolutions/snapshot-core/core/merge"
+	"github.com/SmithOperatingSolutions/snapshot-core/core/vcs"
 	"github.com/SmithOperatingSolutions/snapshot-core/core/wire"
 )
 
@@ -41,20 +42,20 @@ func TestRegression_SC26_ATruncatedConflictIsRefusedWithoutFillingItsClaim(t *te
 	}
 	// Positive control, at the limit: a record holding every model
 	// conflict it claims decodes them all.
-	full := record(maxModelConflicts, maxModelConflicts)
-	if c, err := decodeConflict("p", full); err != nil || len(c.Model) != maxModelConflicts {
+	full := record(vcs.MaxModelConflicts, vcs.MaxModelConflicts)
+	if c, err := vcs.DecodeConflict("p", full); err != nil || len(c.Model) != vcs.MaxModelConflicts {
 		t.Fatalf("positive control: a conflict record with %d model conflicts decoded %d, %v",
-			maxModelConflicts, len(c.Model), err)
+			vcs.MaxModelConflicts, len(c.Model), err)
 	}
 
-	truncated := record(maxModelConflicts, 0)
-	if _, err := decodeConflict("p", truncated); !errors.Is(err, chunk.ErrCorrupt) {
-		t.Fatalf("a %d-byte conflict record claiming %d model conflicts: %v, want ErrCorrupt", len(truncated), maxModelConflicts, err)
+	truncated := record(vcs.MaxModelConflicts, 0)
+	if _, err := vcs.DecodeConflict("p", truncated); !errors.Is(err, chunk.ErrCorrupt) {
+		t.Fatalf("a %d-byte conflict record claiming %d model conflicts: %v, want ErrCorrupt", len(truncated), vcs.MaxModelConflicts, err)
 	}
 	const budget = 4 << 10
-	if got := allocated(5, func() { _, _ = decodeConflict("p", truncated) }); got > budget {
+	if got := allocated(5, func() { _, _ = vcs.DecodeConflict("p", truncated) }); got > budget {
 		t.Errorf("refusing a %d-byte conflict record claiming %d model conflicts allocated %d bytes (budget %d): "+
 			"every stored conflict a working set lists costs its claim, not its bytes, to read or walk",
-			len(truncated), maxModelConflicts, got, budget)
+			len(truncated), vcs.MaxModelConflicts, got, budget)
 	}
 }
