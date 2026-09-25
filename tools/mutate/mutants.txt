@@ -4637,3 +4637,10 @@ find: ours.To == theirs.To && !z.accumulates(ours):
 replace: ours.To == theirs.To && false:
 pkg: ./core/merge
 run: ^TestAModelThatDoesNotAccumulateIsNotAskedAboutTheSameChange$
+
+id: merge-identical-sides-read-nothing
+file: core/merge/merge.go
+find: case ours.Root() == theirs.Root() && !reg.Accumulates():
+replace: case ours.Root() == theirs.Root() && !reg.Accumulates() && false:
+pkg: ./core/merge
+run: ^TestTheSameChangesOnBothSidesDoNoWork$

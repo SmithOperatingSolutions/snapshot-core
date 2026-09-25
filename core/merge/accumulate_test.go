@@ -144,3 +144,19 @@ func TestAModelThatDoesNotAccumulateIsNotAskedAboutTheSameChange(t *testing.T) {
 		t.Errorf("the merge of the same change on both sides is not that change")
 	}
 }
+
+// Two sides that made the same changes merge to ours without a read when no
+// registered model accumulates, as a fast-forward does.
+func TestTheSameChangesOnBothSidesDoNoWork(t *testing.T) {
+	f := newFixture(t)
+	base := f.ns(map[string]object.Ref{"a": f.obj(7, "a")})
+	same := f.ns(map[string]object.Ref{"a": f.obj(7, "b"), "c": f.obj(7, "c")})
+	f.s.gets.Store(0)
+	r, err := merge.Merge(ctx, f.reg, base, same, same, f.s, merge.Options{})
+	if err != nil || rootOf(r) != same.Root() || len(r.Conflicts) != 0 {
+		t.Fatalf("the same changes on both sides merged to %v (%d conflicts, %v), want them", rootOf(r), len(r.Conflicts), err)
+	}
+	if n := f.s.gets.Load(); n != 0 {
+		t.Errorf("merging the same changes on both sides read %d nodes, want none: every such merge pays for two diffs", n)
+	}
+}
