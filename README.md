@@ -147,7 +147,7 @@ Go 1.27 or later, `CGO_ENABLED=0`, no cgo anywhere; the one third-party
 engine dependency, disknexus-engine, is pinned by tag and upgraded only
 deliberately, in its own pull request.
 
-**v0.1.2 (unreleased).** What changes for a host or a model:
+**v0.2.0.** What changes for a host or a model (a minor version: `stream.ReadAll` changed its signature):
 
 - **Breaking:** `stream.ReadAll(ctx, rd, ref, limit)` takes the longest
   stream its caller will hold and refuses a longer one unread

@@ -5,7 +5,7 @@ every "first failing test" checkbox in both specs. Updated at each milestone
 boundary and whenever a checklist item turns green; the evidence for each item
 is the named test, and the commit that added it carries its red.
 
-**Updated 2026-09-25** (v0.1.2 candidate: #22 to #27, snapshot-engine#1, model.Accumulator) · red-check clean · every checked-in mutant killed ·
+**Updated 2026-09-25** (v0.2.0: #22 to #27, snapshot-engine#1, model.Accumulator) · red-check clean · every checked-in mutant killed ·
 lint clean · every package at or above its coverage gate
 
 ## Milestones
