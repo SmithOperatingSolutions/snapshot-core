@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sync"
 	"time"
 
 	"github.com/SmithOperatingSolutions/snapshot-core/core/blob"
@@ -268,6 +269,7 @@ func (s *Store) openJournal(ctx context.Context) error {
 	if !s.o.Journal.journaled() {
 		return j.Close()
 	}
+	s.jcond = sync.NewCond(&s.jsm)
 	s.mu.Lock()
 	s.journal = j
 	s.jkick, s.jstop, s.jdone = make(chan struct{}, 1), make(chan struct{}), make(chan struct{})
@@ -372,19 +374,19 @@ func (s *Store) holdJournal(ctx context.Context) (func(), error) {
 // journalCommit is CompareAndSetRoot with the journal: one append and one
 // fsync, unless the commit cannot journal, when it publishes, journal and
 // all. Callers hold commitMu and have checked next is stored.
-func (s *Store) journalCommit(ctx context.Context, expected, next hash.Hash) error {
+func (s *Store) journalCommit(ctx context.Context, expected, next hash.Hash) (func() error, error) {
 	// The backend's root: GC may have moved the manifest; only a writer
 	// that does not honor the journal moves the root itself.
 	r, err := s.o.Blobs.Root(ctx)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	s.mu.Lock()
 	moved := r.Version != s.ver
 	s.mu.Unlock()
 	if moved {
 		if err := s.refresh(ctx); err != nil {
-			return err
+			return nil, err
 		}
 	}
 	s.mu.Lock()
@@ -394,26 +396,26 @@ func (s *Store) journalCommit(ctx context.Context, expected, next hash.Hash) err
 	}
 	s.mu.Unlock()
 	if n > 0 && m.root != base {
-		return s.journalFailed(fmt.Errorf("%w: the backend's root is %s, the journal builds on %s", ErrJournalConflict, m.root.Short(), base.Short()))
+		return nil, s.journalFailed(fmt.Errorf("%w: the backend's root is %s, the journal builds on %s", ErrJournalConflict, m.root.Short(), base.Short()))
 	}
 	if cur != expected {
-		return chunk.ErrRootConflict
+		return nil, chunk.ErrRootConflict
 	}
 	if first {
-		return s.publishJournal(ctx, next) // a repository's first root is published
+		return nil, s.publishJournal(ctx, next) // a repository's first root is published
 	}
 	if err := s.carryForward(ctx); err != nil {
-		return err
+		return nil, err
 	}
 	if err := s.survived(m); err != nil {
-		return err
+		return nil, err
 	}
 	s.finishers.Wait()
 	s.mu.Lock()
 	if s.finishErr != nil {
 		err := s.finishErr
 		s.mu.Unlock()
-		return err
+		return nil, err
 	}
 	// A pack that went to the backend since the last publish holds chunks
 	// no record carries, and only an index object can name it: publish.
@@ -438,9 +440,13 @@ func (s *Store) journalCommit(ctx context.Context, expected, next hash.Hash) err
 	if !must {
 		b, err := rec.seal(s.o.Keys, s.o.Repo)
 		if err == nil && s.jbytes+len(b) <= maxJournal {
-			if err := s.journal.Append(ctx, b); err != nil {
-				return s.journalFailed(fmt.Errorf("packstore: appending to the journal (open the repository again to replay what it holds): %w", err))
+			if err := s.journal.Write(ctx, b); err != nil {
+				return nil, s.journalFailed(fmt.Errorf("packstore: writing to the journal (open the repository again to replay what it holds): %w", err))
 			}
+			s.jsm.Lock()
+			s.jwritten += uint64(len(b))
+			ticket := s.jwritten
+			s.jsm.Unlock()
 			s.mu.Lock()
 			s.jcounted = s.jcounted[len(rec.counted):]
 			s.jpending, s.jmark = w, mark
@@ -455,12 +461,12 @@ func (s *Store) journalCommit(ctx context.Context, expected, next hash.Hash) err
 			s.jbytes += len(b)
 			s.jroot = next
 			s.mu.Unlock()
-			return nil
+			return func() error { return s.waitSynced(ticket) }, nil
 		}
 		// Too large to journal (or it would pass the journal's limit):
 		// publish instead.
 	}
-	return s.publishJournal(ctx, next)
+	return nil, s.publishJournal(ctx, next)
 }
 
 // publishJournal publishes everything the store holds with root next, and
@@ -489,7 +495,51 @@ func (s *Store) publishJournal(ctx context.Context, next hash.Hash) error {
 	s.mu.Lock()
 	s.jrecords, s.jbytes, s.jroot, s.jbase, s.jpending, s.jmark = 0, 0, hash.Hash{}, hash.Hash{}, nil, 0
 	s.mu.Unlock()
+	// Every commit written so far is published: durable, synced or not.
+	s.jsm.Lock()
+	s.jsynced = s.jwritten
+	s.jcond.Broadcast()
+	s.jsm.Unlock()
 	return nil
+}
+
+// waitSynced returns once a sync covers the journal up to ticket. One
+// waiter at a time syncs, everything written by then; the rest wait, and
+// the commits written while a sync is in flight share the next.
+func (s *Store) waitSynced(ticket uint64) error {
+	s.mu.Lock()
+	j := s.journal
+	s.mu.Unlock()
+	s.jsm.Lock()
+	for s.jsynced < ticket && s.jsyncErr == nil {
+		if s.jsyncing {
+			s.jcond.Wait()
+			continue
+		}
+		s.jsyncing = true
+		target := s.jwritten
+		s.jsm.Unlock()
+		err := blob.ErrJournalClosed
+		if j != nil {
+			err = j.Sync(context.Background())
+		} // a sync is brief, and a commit written is not taken back
+		s.jsm.Lock()
+		s.jsyncing = false
+		if err != nil {
+			s.jsyncErr = err
+		} else if target > s.jsynced {
+			s.jsynced = target
+		}
+		s.jcond.Broadcast()
+	}
+	done, err := s.jsynced >= ticket, s.jsyncErr
+	s.jsm.Unlock()
+	if done {
+		return nil
+	}
+	s.commitMu.Lock()
+	defer s.commitMu.Unlock()
+	return s.journalFailed(fmt.Errorf("packstore: syncing the journal (open the repository again to replay what it holds): %w", err))
 }
 
 // journalFailed makes err the store's: the journal cannot be trusted with

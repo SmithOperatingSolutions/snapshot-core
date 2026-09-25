@@ -159,6 +159,16 @@ type Store struct {
 	jdone       chan struct{}
 	jstopOnce   sync.Once
 	holdPublish func() // tests: called by the publisher before it publishes
+
+	// Grouped fsync (#34): written and synced count the journal's bytes
+	// since the store opened, never going back; a commit waits until
+	// synced passes what it wrote. Guarded by jsm.
+	jsm      sync.Mutex
+	jcond    *sync.Cond
+	jwritten uint64
+	jsynced  uint64
+	jsyncing bool  // a sync is in flight
+	jsyncErr error // a sync failed: nothing written since is known durable
 }
 
 // maxInFlight bounds the packs finishing or uploading at once (#10): a
@@ -1045,33 +1055,48 @@ func (s *Store) Root(ctx context.Context) (hash.Hash, error) {
 
 // CompareAndSetRoot implements chunk.Store.
 func (s *Store) CompareAndSetRoot(ctx context.Context, expected, next hash.Hash) error {
+	if err := ctx.Err(); err != nil {
+		return err // nothing written
+	}
 	s.commitMu.Lock()
-	defer s.commitMu.Unlock()
+	wait, err := s.compareAndSetRoot(ctx, expected, next)
+	s.commitMu.Unlock()
+	if err != nil || wait == nil {
+		return err
+	}
+	// A journaled commit returns once a sync covers its record: the sync
+	// in flight when it wrote cannot, so it waits for the next, which
+	// every commit written meanwhile shares (#34).
+	return wait()
+}
 
+// compareAndSetRoot is CompareAndSetRoot under commitMu. A journaled commit
+// returns what waits for its record to be synced, to run after the lock.
+func (s *Store) compareAndSetRoot(ctx context.Context, expected, next hash.Hash) (func() error, error) {
 	s.mu.Lock()
 	if s.closed {
 		s.mu.Unlock()
-		return chunk.ErrClosed
+		return nil, chunk.ErrClosed
 	}
 	if s.lost != nil {
 		s.mu.Unlock()
-		return s.lost
+		return nil, s.lost
 	}
 	if s.jerr != nil {
 		s.mu.Unlock()
-		return s.jerr
+		return nil, s.jerr
 	}
 	stored := !next.IsZero() && ((s.pending != nil && s.pending.Has(next)) || s.finishingHasLocked(next))
 	if !next.IsZero() && !stored {
 		var err error
 		if stored, err = s.hasLocked(next); err != nil {
 			s.mu.Unlock()
-			return err
+			return nil, err
 		}
 	}
 	if !stored {
 		s.mu.Unlock()
-		return fmt.Errorf("%w: %s", chunk.ErrRootMissing, next.Short())
+		return nil, fmt.Errorf("%w: %s", chunk.ErrRootMissing, next.Short())
 	}
 	journaled := s.journal != nil
 	s.mu.Unlock()
@@ -1080,18 +1105,18 @@ func (s *Store) CompareAndSetRoot(ctx context.Context, expected, next hash.Hash)
 	}
 	release, err := s.holdJournal(ctx)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	defer release()
 	// A writer that lost the race learns it before it writes: nothing is
 	// finished or uploaded for a root that has already moved. The root can
 	// still move after this, which the swap below finds, as before.
 	if ok, err := s.rootIs(ctx, expected); err != nil {
-		return err
+		return nil, err
 	} else if !ok {
-		return chunk.ErrRootConflict
+		return nil, chunk.ErrRootConflict
 	}
-	return s.publish(ctx, expected, next)
+	return nil, s.publish(ctx, expected, next)
 }
 
 // publish uploads everything the store holds unpublished, writes the index
