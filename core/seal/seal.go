@@ -57,6 +57,7 @@ var tags = [...]string{
 	Index:     "vdb/index/v1",
 	Refs:      "vdb/refs/v1",
 	Config:    "vdb/config/v1",
+	Journal:   "vdb/journal/v1",
 }
 
 // Tag returns the domain's tag, or "" for an invalid domain.

@@ -173,7 +173,7 @@ func TestMasterKeyIsNeverTheAEADKey(t *testing.T) {
 
 func TestInvalidDomainsAreRefused(t *testing.T) {
 	kr := mustKeyring(t)
-	for _, d := range []seal.Domain{0, 6, 200} {
+	for _, d := range []seal.Domain{0, seal.Journal + 1, 200} {
 		if _, err := kr.Key(d, repoA, seal.Salt{}); !errors.Is(err, seal.ErrDomain) {
 			t.Errorf("Key(domain %d) = %v, want ErrDomain: a value sealed in no context can be replayed into any", d, err)
 		}
