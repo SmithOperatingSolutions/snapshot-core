@@ -153,10 +153,16 @@ func mergeIdentities(t *testing.T, s Subject) {
 		"merge(b, b, b) == b": {base, base, base, base},
 	} {
 		r := merge(t, s, tc.b, tc.o, tc.t)
-		if len(r.Conflicts) != 0 || r.Root != tc.want {
-			t.Errorf("%s: root %+v with %d conflicts, want %+v and none", name, r.Root, len(r.Conflicts), tc.want)
+		valid := func(root model.Root) error { return s.Model.Validate(ctx, root, s.Store) }
+		if err := identityVerdict(s.Model, tc.b, tc.o, tc.t, tc.want, r, valid); err != nil {
+			t.Errorf("%s: %v", name, err)
 		}
 	}
+}
+
+// identityVerdict judges a merge identity. (Stub.)
+func identityVerdict(m model.Model, b, o, th, want model.Root, r model.MergeResult, valid func(model.Root) error) error {
+	return errors.New("identityVerdict: not implemented")
 }
 
 // collidingEditsConflict: two edits the model says cannot combine merge to
