@@ -879,6 +879,14 @@ func (s *Store) CompareAndSetRoot(ctx context.Context, expected, next hash.Hash)
 		return fmt.Errorf("%w: %s", chunk.ErrRootMissing, next.Short())
 	}
 	s.mu.Unlock()
+	// A writer that lost the race learns it before it writes: nothing is
+	// finished or uploaded for a root that has already moved. The root can
+	// still move after this, which the swap below finds, as before.
+	if ok, err := s.rootIs(ctx, expected); err != nil {
+		return err
+	} else if !ok {
+		return chunk.ErrRootConflict
+	}
 	// Every finisher has landed its pack or left it to retry here.
 	s.finishers.Wait()
 	s.mu.Lock()
@@ -984,6 +992,28 @@ func (s *Store) CompareAndSetRoot(ctx context.Context, expected, next hash.Hash)
 		// Someone else changed the manifest: refresh and re-apply.
 	}
 	return chunk.ErrRootConflict
+}
+
+// rootIs reports whether the backend's root is still expected. It reads the
+// root and decrypts the manifest only when the root's version moved since
+// this store last read it.
+func (s *Store) rootIs(ctx context.Context, expected hash.Hash) (bool, error) {
+	r, err := s.o.Blobs.Root(ctx)
+	if err != nil {
+		return false, err
+	}
+	s.mu.Lock()
+	same, root := r.Version == s.ver, s.man.root
+	s.mu.Unlock()
+	if same {
+		return root == expected, nil
+	}
+	if err := s.refresh(ctx); err != nil {
+		return false, err
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.man.root == expected, nil
 }
 
 // Stats implements chunk.Store.
