@@ -366,6 +366,16 @@ stream ref  root [32] · size · depth
   an index node of level = depth, with more than one child.
 - Reads verify every chunk by SHA-256 (the chunk store) and every size
   against the bytes actually found (`ErrCorrupt`).
+- An index node may name one chunk many times: a run of identical content
+  cuts into identical chunks, so repetition is valid, and a Ref's size can
+  be many times what its chunks store (#23). The format needs no change for
+  it: every entry carries the bytes under it and every read checks the sum,
+  so a read never yields more than the Ref's size. What bounds a reader is
+  its own limit: `ReadAll` takes one and refuses a longer stream with
+  `ErrTooLarge` before reading any of it. A read keeps the checked nodes
+  above the chunk it read last and descends from the deepest that holds the
+  next position, so reading in order reads each index node once per place
+  it stands, not once per chunk beneath it.
 
 ### Editing and diff
 
@@ -391,7 +401,13 @@ stream ref  root [32] · size · depth
   of an iteration or "no difference", and a flush that failed leaves the
   editor's edits in place to retry.
 - Values over the inline limit are written as streams when the editor
-  flushes; `Get`, iteration and `Diff` read them back whole. The map and its
+  flushes; `Get`, iteration, `Diff` and `Walk`'s values read them back
+  whole, up to the map's `MaxValue` (default 64 MiB, a reader's policy and
+  not repo geometry): a longer stream is `ErrValueTooLarge`, refused
+  unread, and the editor refuses a longer value (#23). A model whose
+  records have a known length sets it: the tree to `EntrySize`, a
+  namespace to `RefSize`. No decoder sizes an allocation from a count it
+  has not yet decoded (#24). The map and its
   editor are concrete types, not a port: there is one implementation, and
   the chunk store beneath it is the swappable part.
 
