@@ -132,3 +132,34 @@ func TestRegression_SC26_IndexFramesLieWhereTheirPackHoldsThem(t *testing.T) {
 		}
 	}
 }
+
+// #26: two guards the layout walk cannot stand in for, since both act
+// before it sees an entry. An offset past 32 bits is refused, not
+// truncated into a place in the pack where it would fit (2^32 + 40 reads
+// as 40); and an index longer than its whole pack is refused rather than
+// wrapping the index offset around to the top of the range, where every
+// frame would end before it. A frame at the same place with a true offset,
+// in a pack that holds it and its index, is the positive control.
+func TestRegression_SC26_AnEntryCannotWrapIntoPlace(t *testing.T) {
+	kr, _ := seal.NewKeyring()
+	repo := seal.RepoID{28}
+	decodes := func(p []byte) error {
+		name, blob := sealPlain(t, kr, repo, p)
+		_, err := DecodeObject(kr, repo, name, blob)
+		return err
+	}
+	empty := ent{hash: 1, off: pack.HeaderSize, stored: frameOverhead, raw: 0}
+	// 40 header + 28 frame + 71 index (4 + 2 + 1 + 32 + 1 + 1 + 1 + 1, sealed) + 16 trailer.
+	if err := decodes(plain(rec{sum: 1, size: 155, entries: []ent{empty}})); err != nil {
+		t.Fatalf("positive control: an empty chunk's frame in a pack of 155 bytes is refused: %v", err)
+	}
+	for label, p := range map[string][]byte{
+		"an offset of 2^32 + 40":                          plain(rec{sum: 1, size: 1000, entries: []ent{{hash: 1, off: 1<<32 + pack.HeaderSize, stored: 40, raw: 12}}}),
+		"an index longer than the pack after its trailer": plain(rec{sum: 1, size: 84, entries: []ent{empty}}),
+	} {
+		if err := decodes(p); !errors.Is(err, ErrCorrupt) {
+			t.Errorf("%s decoded (err=%v): a put deduplicates against a chunk listed where its pack cannot hold "+
+				"it, stores nothing, and the chunk never reads back", label, err)
+		}
+	}
+}

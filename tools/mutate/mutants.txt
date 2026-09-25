@@ -903,10 +903,10 @@ run: ^TestForgedObjectsAreRefused$
 
 id: dedup-frames-inside-the-pack
 file: core/dedup/dedup.go
-find: off < pack.HeaderSize || off+stored > framesEnd ||
-replace: off < pack.HeaderSize || off+stored > framesEnd+1<<40 ||
+find: off < pack.HeaderSize || off > framesEnd || stored > framesEnd-off ||
+replace: off < pack.HeaderSize || off > framesEnd+1<<40 || stored > framesEnd+1<<40-off ||
 pkg: ./core/dedup
-run: ^TestForgedObjectsAreRefused$
+run: ^TestRegression_SC26_AnEntryCannotWrapIntoPlace$
 
 id: dedup-frames-clear-the-header
 file: core/dedup/dedup.go
@@ -5130,3 +5130,10 @@ find: for ; v >= 0x80; v >>= 7 {
 replace: for ; v >= 0x80 && false; v >>= 7 {
 pkg: ./core/dedup
 run: ^TestRegression_SC26_IndexFramesLieWhereTheirPackHoldsThem$
+
+id: dedup-index-fits-in-the-pack
+file: core/dedup/dedup.go
+find: if index > size-pack.TrailerSize { // the index offset would wrap
+replace: if false { // the index offset would wrap
+pkg: ./core/dedup
+run: ^TestRegression_SC26_AnEntryCannotWrapIntoPlace$
