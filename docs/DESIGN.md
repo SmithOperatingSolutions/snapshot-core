@@ -27,6 +27,7 @@ exact commit the spec's package map was reviewed at. That is the pin.
 | D12 | Small objects' write path (2026-09-25, #40) | A stream whose reader says it holds under 256 KiB (`cdc.Lener`) is cut and stored on the caller's goroutine, and `cdc.New` sizes its buffers to the stream; a reader that does not say its length takes the path it took before. `repo.Chunks()` is also a `chunk.Preparer` and `chunk.Flusher` | A 100-byte object's write was about 200 µs of CPU: 24% zeroing the serial chunker's 512 KiB and 64 KiB buffers, which the parallel path built and never used, then the parallel path's 34 goroutines and two 64 KiB blocks for one chunk; now about 7 µs, 30 times the batch rate (`tools/commitbench -only batch`). On that harness the serial path wrote 16 KiB objects 2.6× as fast, 64 KiB 2.0×, 128 KiB 1.6×, 512 KiB 1.3×, 2 MiB even; the bar sits at the prolly inline limit. The size decides only how much a read asks for, never where a cut falls |
 | D13 | A size hint for a reader without a length (2026-09-25, #41) | `stream.WithLen(r, n)` wraps a reader in a `cdc.Lener` reporting the hint less what has been read, so D12's rule applies to it unchanged; `cdc.Chunker` switches to full-size reads after two reads in a row fill a buffer smaller than that | The smallest additive change: one function, no field in `stream.Config` (which is repo geometry, shared by every write) and no option parameter on `stream.Write`; it also sizes the read buffer, which a path flag alone would not (a 64 KiB block per small object). Pre-reading a block to decide was refused: it moves which chunk a failing reader's error lands on relative to `cdc.Parallel`. A wrong hint chooses the path, never a cut: a hint too large takes the parallel path, one too small the serial path, read in 64 KiB blocks from its second read on (`TestRegression_SC41_AWrongHintStoresTheSameStream`, `TestALenerThatUndercountsIsCutTheSameAndReadInFullBlocks`) |
 | D14 | Tiny chunks stored raw (2026-09-26, #42) | `pack.Codec.Compress` returns a chunk under 256 B (`pack.RawBelow`) as a raw frame without trying zstd; 256 B and up are compressed when that is shorter, as before. No format change: raw frames have been in the pack format since v1 and readers of every version read both kinds (`TestAChunkUnderTheRawCutoffIsStoredRaw` reads a pack mixing them and checks the v1 golden holds both; `TestAV1PackStillReads`). New packs differ in bytes from what v0.2.0 wrote for the same input | zstd on a tiny chunk paid the encoder's setup and match-table cache misses (about 2.4 µs of a 7 µs small-object write after #40) to save at most a few dozen bytes. Measured (i7-1360P): Compress costs 0.85–1.1 µs hot on 100–256 B of random data, 3.8–4.0 µs on record-like text, which zstd shrinks from 100 to 87 B and 256 to 127 B; at 1 KiB text shrinks to 261 B and at 4 KiB to 717 B, so a 1 KiB or 4 KiB cutoff would store compressible small data 3.6× to 5.7× larger. `tools/commitbench -only batch` (10,000 100-byte objects, mem): 148–184k to 203–233k writes/s, pack bytes unchanged (2,038,5xx–2,039,9xx, about 204 B per object); single-writer commits (mem) 1,704–1,768 to 1,883–1,891/s. A 4 KiB cutoff measured 2,329/s single-writer and +5% batch pack bytes; 16 KiB 2,410/s and +13%: left to the owner (a per-caller hint for metadata nodes would need core/prolly and packstore's Put) |
+| D15 | What a commit per object costs (2026-09-25, #43) | A flush records what it changed (`prolly.Map.Changes`, `object.Namespace.Changes`): the root it edited and the keys whose values differ, logged by the level-0 merge that already compares each edit with the entry it replaces. `vcs.CommitNamespace` commits a flushed namespace and asks for write on that list against each stored namespace the flush edited, diffing any other; `Commit` diffs each distinct stored namespace once; a map holds the root node it was made from | Profiled on `tools/commitbench -only single -backends mem`: 38% of a commit's CPU was `checkPaths` (three identical diffs after a clean commit), 37% the namespace flush (73% of that `packstore.Put`, most of it zstd), 10% the publish, and reads (every one a SHA-256 and a decode) were 45% across all of it. The list is the diff: the new tree is the canonical tree of the old entries with the edits applied (§7), so the keys whose values differ are exactly what Diff reports (`TestAFlushKnowsWhatItChangedProperty`), and it stands for a diff only against the root the flush edited (`TestCommitNamespaceAsksForEveryChangeTheFlushDidNotSee`). 571 to 423 µs a commit, 1,752 to 2,363 commits a second |
 
 ## 2. How the Engine Spec's L0–L3 land here
 
@@ -413,6 +414,14 @@ stream ref  root [32] · size · depth
   entries match (same key, same child), the child is skipped without being
   read, at the highest level where they match (Dolt's `skipCommon`); two maps
   with equal roots read nothing.
+- A map holds the root node it was made from (decoded and checked by
+  `Open`, built by `Empty` and a flush) and never reads it again: `Get`
+  reads one node per level below it (#43).
+- A flush records what it changed: the root it edited and the keys whose
+  values differ, in key order (`Changes`), exactly what `Diff` of the two
+  maps reports. A put of the stored value, a delete of an absent key and a
+  new key put and deleted in one batch are not among them. A map no flush
+  made (`Open`, `Empty`) has no record.
 - Bounds the tests hold the code to: one edit reads at most 3·(height+1)
   nodes to flush; a same-length value edit writes exactly height+1; a flush
   that changes nothing writes nothing (a re-chunked node identical to the
@@ -581,7 +590,12 @@ working set  0x05 · working [32] · staged [32] · merging u8 (0 or 1) ·
   `CommitWorkingSet` diffs the head against what is staged, so committing
   someone else's staged change needs the committer's own permission;
   `Commit` diffs all three, the stored working and staged namespaces and
-  the head, against the namespace it commits;
+  the head, against the namespace it commits (each distinct one once:
+  after a clean commit they are one namespace); `CommitNamespace` is
+  `Commit` of a namespace an editor flushed, and against each of the
+  three that the flush edited it asks by the flush's record instead of
+  diffing, the same questions without reading a namespace node (#43,
+  D15);
   `Merge` diffs the working namespace against the result;
   `ResolveConflict` asks for its path. Reads stay per branch: a host holding
   the chunk store can read what it can open, so a per-path read rule belongs

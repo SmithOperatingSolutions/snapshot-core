@@ -5,7 +5,7 @@ every "first failing test" checkbox in both specs. Updated at each milestone
 boundary and whenever a checklist item turns green; the evidence for each item
 is the named test, and the commit that added it carries its red.
 
-**Updated 2026-09-25** (v0.2.0: #22 to #27, a consumer's performance review, model.Accumulator; #40, small objects' write; #41, a size hint) · red-check clean · every checked-in mutant killed ·
+**Updated 2026-09-25** (v0.2.0: #22 to #27, a consumer's performance review, model.Accumulator; #40, small objects' write; #41, a size hint; #42, tiny chunks raw; #43, a commit per object) · red-check clean · every checked-in mutant killed ·
 lint clean · every package at or above its coverage gate
 
 ## Milestones
@@ -357,6 +357,7 @@ Beyond the list: merging what a branch already holds changes nothing (`TestMergi
 | the same audit (#26) | An index object's entry could claim a frame of up to a gibibyte for a chunk of a kibibyte (dedup never tied stored to raw as pack does), and GC repack allocates the claim before reading; a chunk read took whatever the backend sent for its range; a 6-byte conflict record made 10,000 appends (1.8 MB) before its refusal; the cache entry file had no fuzz target | Stored is raw + 28, or less compressed (`TestRegression_SC26_AnEntryWhoseStoredLengthDisagreesWithItsRawIsRefused`); the frame read stops a byte past its range and calls an overrun the backend's error, not corrupt data (`TestRegression_SC26_AChunkReadStopsAtItsRange`, `TestRegression_SC26_AnOverrunningBackendIsNotReportedAsCorruptData`); the conflict decoder stops when its bytes do (`TestRegression_SC26_ATruncatedConflictIsRefusedWithoutFillingItsClaim`); `FuzzDecodeEntry`. And dedup did not lay a pack's frames out as pack's index decoder does: frames could overlap or reach into the pack's index, and an offset could wrap or truncate into place, so a put could deduplicate against a chunk that never reads back; now the frames are walked in offset order against the index offset their entries make (`pack.SealedIndexLen`; `TestRegression_SC26_IndexFramesLieWhereTheirPackHoldsThem`, `TestRegression_SC26_AnEntryCannotWrapIntoPlace`, five `FuzzDecodePlain` seeds). pack's own index decoder had the wrap too, an offset near 2^64 passing `off+stored` and truncating to about 4 GiB, and never checked where its last frame ends; the offset alone is now checked and the walk ends at the index offset (`TestRegression_SC26_APacksFramesEndAtItsIndex`, four `FuzzDecodeIndex` seeds) |
 | listing vcs's maps and their largest values (#27) | Merge wrote whatever conflict a model reported, while the conflict record's decoder refuses more than 10,000 model conflicts at a path, a location over 4,096 bytes or a reason over 1,024: a model over any limit merged cleanly and left a merge state whose conflicts could be neither listed nor resolved | Merge checks every conflict against the decoder's own constants before writing anything: `ErrConflictTooLarge`, the branch unchanged (`TestRegression_SC27_AConflictTooLargeToRecordRefusesTheMerge`). The same listing set each map's value limit: the refs map reads and takes no value over a hash's 32 bytes (`TestTheRefsMapReadsNoValueLongerThanAHash`), and a working set's conflicts map none over the largest record Merge writes, 51,240,144 bytes, derived from the record's layout (`TestAConflictRecordIsReadUpToTheLargestMergeWrites`), each refused unread |
 | the write phase's profile (#40) | A 100-byte object cost about 200 µs of CPU on either backend (5,000 to 6,000 writes a second with commits batched). Of the CPU: 24% zeroing the serial chunker's 512 KiB and 64 KiB buffers, which `stream.Write` built for every stream and the parallel path never used; about as much again spawning, parking and stealing the parallel path's 34 goroutines (on 16 cores) and zeroing its two 64 KiB read blocks for one chunk; 17% the GC marking that garbage (826 KiB allocated an object). Refuted: the stream index and blob framing (a one-chunk stream is its own root, no node), the namespace edit (under 1 µs an object in a batch), the codec's pooled scratch once the churn was gone. What is left, about 7 µs: zstd on the chunk (about 2.4 µs, cache misses in the encoder's 1 MiB match table), the seal (about 1 µs, with a `getrandom` syscall and an AES key schedule per frame inside disknexus's `EncryptWithAAD`) | The serial chunker only on the serial path; a stream whose reader says it holds under 256 KiB (`cdc.Lener`) cut on the caller's goroutine, in buffers its size (D12): 185,000 writes a second in memory, 144,000 on disk (`TestSlowSmallObjectsWriteInMicroseconds`, `TestRegression_SC40_AShortStreamAllocatesWhatItNeeds`). And `repo.Chunks()` had hidden `chunk.Preparer` and `chunk.Flusher`, so a host writing through the repository got the serial path and no flush (`TestAHostWritingThroughTheRepositoryGetsTheParallelPathAndFlush`) |
+| a commit per object's profile (#43) | A host committing once per object paid about 570 µs a commit on `blob/mem` (1,650 to 1,750 a second). Of the CPU: 38% `checkPaths`, three identical namespace diffs after a clean commit for the per-path authorization; 37% the namespace flush, 73% of it `packstore.Put` compressing the new nodes; 10% the publish; reads, each a SHA-256 and a decode, 45% across all of it, the root of every map read again by each operation. What is left, about 420 µs: the flush's zstd in `core/pack` (about two thirds of the host's CPU), a pack writer allocated per commit (27% of 266 KiB a commit), the publish | `Commit` diffs each distinct stored namespace once; a flush records what it changed and `CommitNamespace` asks by it instead of diffing (D13); a map holds its root node: 423 µs a commit, 2,363 a second (`TestCommitAsksForWhatEachStoredNamespaceChanges`, `TestAFlushKnowsWhatItChangedProperty`, `TestCommitNamespaceAsksWhatTheDiffFinds`, `TestCommitNamespaceAsksForEveryChangeTheFlushDidNotSee`, `TestCommitNamespaceReadsNoNamespaceNode`, `TestTheRootIsReadOnceWhenTheMapIsMade`, `TestSlowACommitPerObjectCostsLittle`) |
 | (redcheck on this branch) | Build-tagged tests unjudged; `TestMain` judged; pairs not matched by scope; contract changes invisible; environment-bound callers refused; no `main` in a new clone; a tagged backfill's mutants built without its tag; fuzz targets not counted as tests | Tool fixed each time, with a red test |
 
 ### Batch 2 (done 2026-09-24)
@@ -472,7 +473,6 @@ them, each tracked as an issue:
     zstd and the seal are most of the 7 µs left; one commit per object
     costs about 600 µs in memory, the namespace flush and the commit's
     path checks.
-
 13. ✅ **A size hint for a reader without a length** (#41):
     `stream.WithLen(r, n)` makes a reader that does not say its length a
     `cdc.Lener`, so a short stream from it is cut on the caller's
@@ -490,6 +490,24 @@ them, each tracked as an issue:
     `pack-tiny-chunks-stored-raw`, `pack-raw-cutoff-is-strict`). Batch
     writes 148–184k to 203–233k a second in memory, pack bytes
     unchanged; the seal half of #42 (a cached AEAD) is the owner's call.
+15. ✅ **What a commit per object costs** (#43, D15): about 570 µs on
+    `blob/mem`, now about 420. `Commit` diffs each distinct stored
+    namespace once; a flush records the keys it changed (exactly what a
+    diff finds, `TestAFlushKnowsWhatItChangedProperty`) and
+    `vcs.CommitNamespace` asks the Authorizer by that record where the
+    flush edited the stored namespace, diffing otherwise
+    (`TestCommitNamespaceAsksWhatTheDiffFinds`,
+    `TestCommitNamespaceAsksForEveryChangeTheFlushDidNotSee`,
+    `TestCommitNamespaceReadsNoNamespaceNode`); a map holds its root node
+    (`TestTheRootIsReadOnceWhenTheMapIsMade`).
+    `tools/commitbench -only single`: 1,688 to 2,371 commits a second in
+    memory (593 to 422 µs), 29.9 to 30.4 on disk, where the fsyncs of
+    the publish are 32 of the 33 ms and the host's own work fell from
+    1.34 to 0.95 ms (`TestSlowACommitPerObjectCostsLittle`, a 2 ms
+    guard). Left for the owner: the flush's nodes are compressed in
+    `core/pack` on `packstore.Put` (about two thirds of the host's CPU
+    now) and a pack writer is allocated per commit; both are outside
+    this work's packages.
 
 Open, each as an issue: one extra root read per publish on S3 (#29); one
 pack per publish, and an unmoved root's backend read (#30); how the value
