@@ -269,10 +269,26 @@ func (w *Writer) AddSealed(h hash.Hash, rawLen int, sealed []byte, codec uint8) 
 	if len(w.entries) > 0 && len(w.buf)+len(sealed)+indexBound(len(w.entries)+1)+TrailerSize > w.maxSize {
 		return ErrFull
 	}
+	if need := len(w.buf) + len(sealed); need > cap(w.buf) {
+		w.grow(need)
+	}
 	w.entries[h] = Entry{Hash: h, Offset: uint32(len(w.buf)), StoredLen: uint32(len(sealed)),
 		RawLen: uint32(rawLen), Codec: codec}
 	w.buf = append(w.buf, sealed...)
 	return nil
+}
+
+// grow moves the frames to a buffer of at least need bytes: twice the
+// current one, with room for the index and trailer, up to the pack's size.
+// Doubling copies each byte about once on the way to a full pack, where
+// append's growth past a few hundred KiB copied a large pack four times
+// over.
+func (w *Writer) grow(need int) {
+	size := max(2*cap(w.buf), need+indexBound(len(w.entries)+1)+TrailerSize)
+	size = max(min(size, w.maxSize), need) // a first chunk over the size limit still gets its pack
+	buf := make([]byte, len(w.buf), size)
+	copy(buf, w.buf)
+	w.buf = buf
 }
 
 // Size is the most the pack can take if finished now.
