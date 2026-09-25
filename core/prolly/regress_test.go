@@ -2,6 +2,7 @@ package prolly_test
 
 import (
 	"bytes"
+	"encoding/binary"
 	"errors"
 	"runtime"
 	"testing"
@@ -134,5 +135,27 @@ func TestRegression_SC23_AnEditorTakesNoValueOverItsLimit(t *testing.T) {
 	}
 	if got.Count() != 1 {
 		t.Fatalf("a refused Put was applied: the map holds %d entries, want the 1 taken", got.Count())
+	}
+}
+
+// #24: a node's header claims how many entries follow, and the claim is
+// checked only as they decode. A 64 KiB node claiming 21,845 entries (as
+// many 3-byte leaf entries as fit) whose first entry does not decode must
+// be refused without first allocating room for 21,845 entries.
+func TestRegression_SC24_ANodeIsNotSizedByItsClaimedCount(t *testing.T) {
+	s := newStore()
+	honest := build(t, s, 50, "sc24").Root()
+	const budget = 256 << 10
+	var err error
+	if used := allocated(func() { _, err = prolly.Open(ctx, s, prolly.DefaultConfig(), honest) }); err != nil || used > budget {
+		t.Fatalf("positive control: opening a 50-entry map allocated %d bytes (%v), want it open within %d", used, err, budget)
+	}
+	forged := binary.AppendUvarint([]byte{0x01, 0x00}, 21845)
+	forged = append(forged, bytes.Repeat([]byte{0xFF}, 64<<10)...) // a key length that never ends
+	root, err := s.Put(ctx, forged)
+	must(t, err)
+	used := allocated(func() { _, err = prolly.Open(ctx, s, prolly.DefaultConfig(), root) })
+	if !errors.Is(err, chunk.ErrCorrupt) || used > budget {
+		t.Fatalf("opening a 64 KiB node that claims 21,845 entries and holds none: %v, after allocating %d bytes; want ErrCorrupt within %d", err, used, budget)
 	}
 }
