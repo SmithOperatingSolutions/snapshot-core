@@ -14,6 +14,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math/rand/v2"
 	"sync"
 	"time"
 	"unicode/utf8"
@@ -33,6 +34,13 @@ const (
 	MaxLog        = 10_000
 	MaxMessageLen = 64 << 10
 	maxAttempts   = 1000 // root swaps lost to other writers before giving up
+)
+
+// The backoff between lost root swaps: from backoffBase, doubling, to
+// backoffCap, each pause jittered over its upper half.
+const (
+	backoffBase = 200 * time.Microsecond
+	backoffCap  = 20 * time.Millisecond
 )
 
 // Errors.
@@ -108,6 +116,9 @@ type Repo struct {
 
 	mu         sync.Mutex
 	checkedOut map[string]int
+
+	sleep  func(ctx context.Context, d time.Duration) error // the pause between lost swaps
+	jitter func(n int64) int64                              // uniform over [0, n)
 }
 
 func newRepo(s chunk.Store, o Options) (*Repo, error) {
@@ -117,7 +128,17 @@ func newRepo(s chunk.Store, o Options) (*Repo, error) {
 	if o.Clock == nil {
 		o.Clock = time.Now
 	}
-	return &Repo{s: s, o: o, checkedOut: map[string]int{}}, nil
+	return &Repo{s: s, o: o, checkedOut: map[string]int{}, sleep: sleep, jitter: rand.Int64N}, nil
+}
+
+// backoff is the pause after the attempt'th lost swap in a row (from 0).
+func backoff(attempt int, jitter func(n int64) int64) time.Duration {
+	return 0
+}
+
+// sleep pauses for d, or until ctx is done.
+func sleep(ctx context.Context, d time.Duration) error {
+	return ctx.Err()
 }
 
 func headKey(b string) []byte { return []byte("heads/" + b) }
