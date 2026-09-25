@@ -357,7 +357,7 @@ func (e *env) commitRef(ctx context.Context, branch, path string, root model.Roo
 	if n, err = ed.Flush(ctx); err != nil {
 		return err
 	}
-	_, err = e.v.Commit(ctx, e.me, branch, ws, n.Root(), "put "+path)
+	_, err = e.v.CommitNamespace(ctx, e.me, branch, ws, n, "put "+path)
 	return err
 }
 
