@@ -5039,3 +5039,10 @@ find: return stored >= pack.FrameOverhead && stored < raw+pack.FrameOverhead
 replace: return stored < raw+pack.FrameOverhead
 pkg: ./core/dedup
 run: ^TestRegression_SC26_AnEntryWhoseStoredLengthDisagreesWithItsRawIsRefused$
+
+id: packstore-frame-read-limited
+file: core/chunk/packstore/packstore.go
+find: frame, err := io.ReadAll(io.LimitReader(rc, want+1))
+replace: frame, err := io.ReadAll(rc)
+pkg: ./core/chunk/packstore
+run: ^TestRegression_SC26_AChunkReadStopsAtItsRange$

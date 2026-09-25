@@ -883,10 +883,16 @@ func (s *Store) frame(ctx context.Context, h hash.Hash) (dedup.Location, []byte,
 	if err != nil {
 		return loc, nil, nil, err
 	}
-	frame, err := io.ReadAll(rc)
+	// One byte past the range, not whatever the backend sends: an endpoint
+	// that ignores Range would stream the whole pack (#26).
+	want := int64(loc.Entry.StoredLen)
+	frame, err := io.ReadAll(io.LimitReader(rc, want+1))
 	_ = rc.Close()
 	if err != nil {
 		return loc, nil, nil, err
+	}
+	if int64(len(frame)) > want {
+		return loc, nil, nil, fmt.Errorf("packstore: reading %s: the backend sent more than the %d bytes asked for", loc.Pack.Name, want)
 	}
 	return loc, frame, keys, nil
 }
