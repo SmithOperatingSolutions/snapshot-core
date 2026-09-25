@@ -334,6 +334,8 @@ func (k *killable) OpenJournal(ctx context.Context) (blob.Journal, error) {
 	return deadJournal{j, k}, nil
 }
 
+func (k *killable) JournalByDefault() bool { return false }
+
 func (k *killable) HoldJournal(ctx context.Context) (int64, func(), error) {
 	if k.dead.Load() {
 		return 0, nil, errDead
@@ -378,6 +380,8 @@ func (d deadJournal) Close() error {
 func (c *clocked) OpenJournal(ctx context.Context) (blob.Journal, error) {
 	return c.BlobStore.(blob.Journaler).OpenJournal(ctx)
 }
+
+func (c *clocked) JournalByDefault() bool { return false }
 
 func (c *clocked) HoldJournal(ctx context.Context) (int64, func(), error) {
 	return c.BlobStore.(blob.Journaler).HoldJournal(ctx)

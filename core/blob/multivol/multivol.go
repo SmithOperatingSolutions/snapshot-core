@@ -562,3 +562,6 @@ func (s *Store) HoldJournal(ctx context.Context) (int64, func(), error) {
 	}
 	return p.HoldJournal(ctx)
 }
+
+// JournalByDefault implements blob.Journaler: on, as on its volumes.
+func (s *Store) JournalByDefault() bool { return true }

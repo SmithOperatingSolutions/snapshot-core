@@ -30,6 +30,9 @@ type Journaler interface {
 	// Any number may hold it at once. It is ErrJournalBusy while the
 	// journal is open.
 	HoldJournal(ctx context.Context) (size int64, release func(), err error)
+	// JournalByDefault says whether a chunk store commits into the journal
+	// unless told otherwise: true on disk, where it saves fsyncs.
+	JournalByDefault() bool
 }
 
 // Journal is an open journal. Its methods may be called from one goroutine
@@ -74,6 +77,8 @@ type noDeleteJournaler struct {
 func (n noDeleteJournaler) OpenJournal(ctx context.Context) (Journal, error) {
 	return n.j.OpenJournal(ctx)
 }
+
+func (n noDeleteJournaler) JournalByDefault() bool { return n.j.JournalByDefault() }
 
 func (n noDeleteJournaler) HoldJournal(ctx context.Context) (int64, func(), error) {
 	return n.j.HoldJournal(ctx)

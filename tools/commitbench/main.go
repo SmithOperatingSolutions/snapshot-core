@@ -411,6 +411,11 @@ func (t *timedBlobs) OpenJournal(ctx context.Context) (blob.Journal, error) {
 	return timedJournal{j, t}, nil
 }
 
+func (t *timedBlobs) JournalByDefault() bool {
+	js, ok := t.BlobStore.(blob.Journaler)
+	return ok && js.JournalByDefault()
+}
+
 func (t *timedBlobs) HoldJournal(ctx context.Context) (int64, func(), error) {
 	js, ok := t.BlobStore.(blob.Journaler)
 	if !ok {

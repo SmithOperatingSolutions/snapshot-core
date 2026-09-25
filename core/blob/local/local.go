@@ -648,3 +648,6 @@ func (j *journal) Close() error {
 	j.closed = true
 	return j.f.Close()
 }
+
+// JournalByDefault implements blob.Journaler: on, one fsync a commit (#34).
+func (s *Store) JournalByDefault() bool { return true }

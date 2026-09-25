@@ -241,3 +241,7 @@ func (j *journal) Close() error {
 	}
 	return nil
 }
+
+// JournalByDefault implements blob.Journaler: off in memory, where a
+// commit is CPU and the journal measured worse with many writers (#34).
+func (s *Store) JournalByDefault() bool { return false }

@@ -5927,3 +5927,31 @@ find: t := time.NewTimer(s.o.JournalInterval)
 replace: t := time.NewTimer(10 * s.o.JournalInterval)
 pkg: ./core/chunk/packstore
 run: ^TestAnotherProcessSeesACommitWithinTheInterval$
+
+id: packstore-journal-default-follows-the-backend
+file: core/chunk/packstore/journal.go
+find: if s.o.Journal == JournalDefault && js.JournalByDefault() {
+replace: if s.o.Journal == JournalDefault && js.JournalByDefault() && false {
+pkg: ./core/repo
+run: ^TestTheJournalIsOnByDefaultOnDisk$
+
+id: local-journal-on-by-default
+file: core/blob/local/local.go
+find: func (s *Store) JournalByDefault() bool { return true }
+replace: func (s *Store) JournalByDefault() bool { return false }
+pkg: ./core/repo
+run: ^TestTheJournalIsOnByDefaultOnDisk$
+
+id: mem-journal-off-by-default
+file: core/blob/mem/mem.go
+find: func (s *Store) JournalByDefault() bool { return false }
+replace: func (s *Store) JournalByDefault() bool { return true }
+pkg: ./core/repo
+run: ^TestTheJournalIsOnByDefaultOnDisk$
+
+id: packstore-journal-default-busy-reads-published
+file: core/chunk/packstore/journal.go
+find: \t\t\ts.o.Journal = JournalOff\n\t\t\treturn nil
+replace: \t\t\treturn err
+pkg: ./core/chunk/packstore
+run: ^TestContractOverEveryBackend$
