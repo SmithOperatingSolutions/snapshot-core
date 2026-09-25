@@ -30,6 +30,15 @@ const MaxKeySize = 4 << 10
 // maxInlineLimit keeps a leaf of one inline value and one key inside a chunk.
 const maxInlineLimit = 512 << 10
 
+// DefaultMaxValue is the longest value a map whose Config names no limit
+// takes or reads.
+const DefaultMaxValue = 0
+
+func (c Config) maxValue() int { return c.MaxValue }
+
+// ErrValueTooLarge is returned for a value over the map's MaxValue.
+var ErrValueTooLarge = errors.New("prolly: value over the map's limit")
+
 // ErrKeyTooLarge is returned for a key over MaxKeySize; the edit is not applied.
 var ErrKeyTooLarge = errors.New("prolly: key over 4 KiB")
 
@@ -38,6 +47,7 @@ type Config struct {
 	Nodes       boundary.Geometry // how nodes are split
 	InlineLimit int               // longer values are stored as streams
 	Stream      stream.Config     // how those streams are written
+	MaxValue    int
 }
 
 // DefaultConfig is the default repo geometry: 512 B / 4 KiB / 16 KiB nodes,

@@ -22,3 +22,15 @@ func FuzzDecodeNode(f *testing.F) {
 		}
 	})
 }
+
+// #23: a Config that names no limit (every one written before MaxValue
+// existed) reads and takes values up to DefaultMaxValue, 64 MiB, not
+// without limit; one that names a limit gets it.
+func TestRegression_SC23_NoLimitNamedIsTheDefault(t *testing.T) {
+	if got := (Config{}).maxValue(); got != DefaultMaxValue || DefaultMaxValue != 64<<20 {
+		t.Fatalf("a map configured with no value limit holds values of up to %d bytes (DefaultMaxValue %d), want 64 MiB", got, DefaultMaxValue)
+	}
+	if got := (Config{MaxValue: 55}).maxValue(); got != 55 {
+		t.Fatalf("a map configured to hold values of up to 55 bytes holds %d", got)
+	}
+}
