@@ -1337,15 +1337,15 @@ run: ^TestWriterEmitsTheDocumentedIndexFormat$|^TestAOnePieceStreamIsItsOwnRoot$
 
 id: stream-node-sum-checked
 file: core/stream/stream.go
-find: if sum != want {\n\t\t\treturn nil, 0, corrupt(
-replace: if sum != want && false {\n\t\t\treturn nil, 0, corrupt(
+find: if sum != want {\n\t\treturn held{}, corrupt(
+replace: if sum != want && false {\n\t\treturn held{}, corrupt(
 pkg: ./core/stream
 run: ^TestForgeriesThatWouldReadCleanly$
 
 id: stream-level-matches-depth
 file: core/stream/stream.go
-find: if level != depth {\n\t\t\treturn nil, 0, corrupt(
-replace: if level != depth && false {\n\t\t\treturn nil, 0, corrupt(
+find: if level != depth {\n\t\treturn held{}, corrupt(
+replace: if level != depth && false {\n\t\treturn held{}, corrupt(
 pkg: ./core/stream
 run: ^TestForgeriesThatWouldReadCleanly$
 
@@ -1570,8 +1570,15 @@ run: ^TestStoreErrorsSurfaceAtEveryPoint$
 
 id: stream-read-error-surfaces
 file: core/stream/stream.go
-find: b, err := r.rd.Get(r.ctx, h)\n\t\tif err != nil {
-replace: b, err := r.rd.Get(r.ctx, h)\n\t\tif err != nil && false {
+find: b, err := r.rd.Get(r.ctx, h)\n\tif err != nil {\n\t\treturn held{}, err
+replace: b, err := r.rd.Get(r.ctx, h)\n\tif err != nil && false {\n\t\treturn held{}, err
+pkg: ./core/prolly
+run: ^TestStoreErrorsSurfaceAtEveryPoint$
+
+id: stream-data-read-error-surfaces
+file: core/stream/stream.go
+find: b, err := r.rd.Get(r.ctx, h)\n\t\t\tif err != nil {
+replace: b, err := r.rd.Get(r.ctx, h)\n\t\t\tif err != nil && false {
 pkg: ./core/prolly
 run: ^TestStoreErrorsSurfaceAtEveryPoint$
 
