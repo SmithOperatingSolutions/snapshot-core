@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"runtime"
 	"sync/atomic"
 	"testing"
@@ -124,4 +125,49 @@ func TestRegression_SC23_ASequentialReadReadsEachNodeOncePerPlace(t *testing.T) 
 		t.Fatalf("reading a 2,048-byte stream stored in %d bytes read %d bytes from the store; "+
 			"each node once per place it stands is %d, want at most twice that", len(topNode)+len(innerNode)+1, read, once)
 	}
+}
+
+// #40: a 100-byte object cost about 200 µs of CPU to write, most of it
+// zeroing buffers sized for the geometry, not the stream (a 512 KiB chunk
+// buffer and 64 KiB read buffers, twice over), and starting the parallel
+// path's goroutines and read blocks for a stream of one chunk. A stream
+// that says how long it is and is short allocates about what it holds;
+// a thousand of them, written on four workers into a store that prepares
+// chunks, allocate under 8 KiB apiece, and store what the serial path
+// stores.
+func TestRegression_SC40_AShortStreamAllocatesWhatItNeeds(t *testing.T) {
+	const objects, size, budget = 1000, 100, 8 << 10
+	cfg := stream.DefaultConfig()
+	bodies := make([][]byte, objects)
+	serial := make([]stream.Ref, objects)
+	ref := newStore()
+	cfg.Workers = 1
+	for i := range bodies {
+		bodies[i] = random(fmt.Sprintf("sc40/%d", i), size)
+		serial[i] = write(t, ref, bodies[i], cfg)
+	}
+	s := &preparing{counting: newStore()}
+	cfg.Workers = 4 // the parallel path, whatever this machine's cores
+	refs := make([]stream.Ref, objects)
+	var err error
+	used := allocated(func() {
+		for i, b := range bodies {
+			if refs[i], err = stream.Write(ctx, s, bytes.NewReader(b), cfg); err != nil {
+				return
+			}
+		}
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i, r := range refs {
+		got, err := stream.ReadAll(ctx, s, r, size)
+		if r != serial[i] || err != nil || !bytes.Equal(got, bodies[i]) {
+			t.Fatalf("object %d: stored as %+v (the serial path: %+v), reads back %d bytes, %v", i, r, serial[i], len(got), err)
+		}
+	}
+	if per := used / objects; per > budget {
+		t.Fatalf("writing %d %d-byte objects allocated %d bytes apiece, want under %d: a small object pays for buffers sized to the geometry, or for the parallel path", objects, size, per, budget)
+	}
+	t.Logf("%d bytes allocated per %d-byte object", used/objects, size)
 }

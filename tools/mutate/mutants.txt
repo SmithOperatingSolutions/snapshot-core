@@ -117,6 +117,27 @@ replace: rd := readSize
 pkg: ./core/cdc
 run: ^TestValidateRefusesUnusableGeometry$
 
+id: cdc-read-buffer-sized-to-the-stream
+file: core/cdc/cdc.go
+find: rd = min(rd, max(l.Len(), 1))
+replace: rd = max(rd, l.Len())
+pkg: ./core/stream
+run: ^TestRegression_SC40_AShortStreamAllocatesWhatItNeeds$
+
+id: cdc-chunk-buffer-grows-toward-max
+file: core/cdc/cdc.go
+find: \t\trd: make([]byte, rd)}, nil
+replace: \t\tbuf: make([]byte, 0, g.Max), rd: make([]byte, rd)}, nil
+pkg: ./core/stream
+run: ^TestRegression_SC40_AShortStreamAllocatesWhatItNeeds$
+
+id: stream-short-streams-cut-serially
+file: core/stream/stream.go
+find: return ok && l.Len() < shortStream
+replace: return ok && l.Len() < 0
+pkg: ./core/stream
+run: ^TestRegression_SC40_AShortStreamAllocatesWhatItNeeds$
+
 id: wire-varint-minimal
 file: core/wire/wire.go
 find: case n > 1 && r.b[r.off+n-1] == 0:
