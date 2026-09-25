@@ -5095,3 +5095,38 @@ find: if r.Err() != nil || string(magic) != entryMagic || blob.ValidName(string(
 replace: if r.Err() != nil || (string(magic) != entryMagic && false) || blob.ValidName(string(name)) != nil {
 pkg: ./core/blob/cache
 run: ^FuzzDecodeEntry$
+
+id: dedup-frames-do-not-overlap
+file: core/dedup/dedup.go
+find: if uint64(e.Offset) < end {\n\t\t\treturn false
+replace: if false {\n\t\t\treturn false
+pkg: ./core/dedup
+run: ^TestRegression_SC26_IndexFramesLieWhereTheirPackHoldsThem$
+
+id: dedup-frames-end-before-the-index
+file: core/dedup/dedup.go
+find: return end <= indexOffset
+replace: return end <= indexOffset+index
+pkg: ./core/dedup
+run: ^TestRegression_SC26_IndexFramesLieWhereTheirPackHoldsThem$
+
+id: pack-sealed-index-len-counts-the-seal
+file: core/pack/pack.go
+find: n := uint64(len(indexMagic)+2+uvarintLen(uint64(len(entries)))) + sealOverhead
+replace: n := uint64(len(indexMagic)+2+uvarintLen(uint64(len(entries))))
+pkg: ./core/dedup
+run: ^TestRegression_SC26_IndexFramesLieWhereTheirPackHoldsThem$
+
+id: pack-sealed-index-len-counts-entries
+file: core/pack/pack.go
+find: n += uint64(hash.Size + uvarintLen(
+replace: n += 0 * uint64(hash.Size + uvarintLen(
+pkg: ./core/dedup
+run: ^TestRegression_SC26_IndexFramesLieWhereTheirPackHoldsThem$
+
+id: pack-uvarint-len-counts-bytes
+file: core/pack/pack.go
+find: for ; v >= 0x80; v >>= 7 {
+replace: for ; v >= 0x80 && false; v >>= 7 {
+pkg: ./core/dedup
+run: ^TestRegression_SC26_IndexFramesLieWhereTheirPackHoldsThem$

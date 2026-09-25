@@ -195,6 +195,25 @@ func NewWriterSized(kr *seal.Keyring, repo seal.RepoID, codec *Codec, maxSize, e
 }
 
 // indexBound is the most the sealed index for n entries can take.
+// SealedIndexLen is the length of the sealed index a pack of these entries
+// carries, exactly as the writer encodes it: a record listing a pack's
+// entries places the index, and so where its frames must end.
+func SealedIndexLen(entries []Entry) uint64 {
+	n := uint64(len(indexMagic)+2+uvarintLen(uint64(len(entries)))) + sealOverhead
+	for _, e := range entries {
+		n += uint64(hash.Size + uvarintLen(uint64(e.Offset)) + uvarintLen(uint64(e.StoredLen)) + uvarintLen(uint64(e.RawLen)) + 1)
+	}
+	return n
+}
+
+func uvarintLen(v uint64) int {
+	n := 1
+	for ; v >= 0x80; v >>= 7 {
+		n++
+	}
+	return n
+}
+
 func indexBound(n int) int { return len(indexMagic) + 2 + 5 + n*maxEntryLen + sealOverhead }
 
 // Add appends a chunk whose identity the caller has computed. It refuses a
