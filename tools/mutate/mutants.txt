@@ -5915,3 +5915,17 @@ find: os.O_RDONLY|os.O_CREATE, filePerm)\n\tif err != nil {\n\t\treturn 0, nil, 
 replace: os.O_RDONLY|os.O_CREATE, filePerm)\n\tif err != nil {\n\t\treturn 0, nil, blob.ErrJournalBusy
 pkg: ./core/blob/local
 run: ^TestAJournalThatWillNotOpenIsItsError$
+
+id: packstore-journal-publishes-after-the-interval
+file: core/chunk/packstore/journal.go
+find: t := time.NewTimer(s.o.JournalInterval)
+replace: t := time.NewTimer(0)
+pkg: ./core/chunk/packstore
+run: ^TestAnotherProcessSeesACommitWithinTheInterval$
+
+id: packstore-journal-publishes-within-the-interval
+file: core/chunk/packstore/journal.go
+find: t := time.NewTimer(s.o.JournalInterval)
+replace: t := time.NewTimer(10 * s.o.JournalInterval)
+pkg: ./core/chunk/packstore
+run: ^TestAnotherProcessSeesACommitWithinTheInterval$

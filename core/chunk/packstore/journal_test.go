@@ -739,3 +739,45 @@ func TestAPublishOverAMovedRootIsRefused(t *testing.T) {
 		t.Fatalf("the backend's root is %s, want the intruder's left alone", got.Short())
 	}
 }
+
+// The visibility bound (#34, the owner's): another process, a fresh open
+// of the same backend, sees the last published state, never a journaled
+// commit before the publish lands, and sees a journaled commit within
+// JournalInterval of the first commit the journal took, plus the
+// publish's own time (here, in memory, well under a second of slack).
+func TestAnotherProcessSeesACommitWithinTheInterval(t *testing.T) {
+	const interval = 300 * time.Millisecond
+	bs, kr := mem.New(), keyring(t)
+	s := openJournaled(t, bs, kr, interval)
+	first := commit(t, s, hash.Hash{}, payload("first", 100))
+	t0 := time.Now()
+	h := commit(t, s, first, payload("second", 100))
+	fresh := func() hash.Hash {
+		f, err := packstore.Open(ctx, packstore.Options{Blobs: bs, Keys: kr, Repo: repo})
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer f.Close()
+		r, err := f.Root(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return r
+	}
+	if got := fresh(); got != first && time.Since(t0) < interval {
+		t.Fatalf("a fresh open %v after a journaled commit sees %s, want the published %s until the interval (%v) has passed", time.Since(t0), got.Short(), first.Short(), interval)
+	}
+	bound := interval + time.Second
+	for {
+		if got := fresh(); got == h {
+			break
+		}
+		if time.Since(t0) > bound {
+			t.Fatalf("a fresh open %v after a journaled commit still does not see it: the bound is the interval (%v) plus one publish", time.Since(t0), interval)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if d := time.Since(t0); d < interval {
+		t.Fatalf("a fresh open saw the journaled commit %v after it, before the interval (%v): it published at once", d, interval)
+	}
+}
