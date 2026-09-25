@@ -16,7 +16,7 @@ import (
 )
 
 // realS3 returns a client for the S3-compatible server named by the
-// environment (MinIO in CI; `mise run minio` starts one locally). Without one
+// environment (SeaweedFS in CI; `mise run s3` starts one locally). Without one
 // the test skips, unless SNAPSHOT_S3_REQUIRED=1 says the tier must run: then
 // a missing endpoint is a failure, never a silent skip (docs/TESTING.md §7).
 func realS3(t *testing.T) (*awss3.Client, string) {

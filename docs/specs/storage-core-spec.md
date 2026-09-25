@@ -183,9 +183,9 @@ type MergeResult struct {
 | Blob (opaque file) | 1 | `model/blob` | whole object; byte ranges via CDC chunks | conflict if both sides changed | v1 |
 | Directory tree | 2 | `model/tree` | path entries plus file mode and mtime | per entry; delete-vs-edit conflicts | v1 |
 | Table | 3 | `model/table` (Engine Spec L4) | row, then cell | per cell; schema first | v1 |
-| JSON document | 4 | `model/json` (built as `model/document` in snapshot-engine) | JSON path | per field; array edits conflict unless keyed | v1.1 |
+| JSON document | 4 | `model/json` (built outside the core as `model/document`) | JSON path | per field; array edits conflict unless keyed | v1.1 |
 | Time series | 5 | `model/series` | time range | append-only union; overlapping edits conflict | later |
-| Key-value | 6 | `model/kv` (snapshot-engine) | key | per key, by the value's kind: bytes conflict, counters add, sets union, hashes per field, sorted sets per member, sequences by position | v1.1 |
+| Key-value | 6 | `model/kv` (outside the core) | key | per key, by the value's kind: bytes conflict, counters add, sets union, hashes per field, sorted sets per member, sequences by position | v1.1 |
 
 **Rules**
 

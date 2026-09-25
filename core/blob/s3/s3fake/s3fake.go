@@ -4,7 +4,7 @@
 // backend's contract suite runs on every `go test` with no Docker. It also
 // injects the faults the spec's tests need: an endpoint that ignores
 // conditional headers, a response lost after the write landed, and a request
-// counter. The same suite runs against real MinIO in the CI tier, which keeps
+// counter. The same suite runs against a real S3 server (SeaweedFS) in CI, which keeps
 // this fake honest.
 package s3fake
 

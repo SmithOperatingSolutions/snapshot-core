@@ -4,17 +4,19 @@ The storage core of the Versioned DB: it versions any kind of data. It stores
 content-addressed, encrypted chunks on pluggable backends (local disk, several
 mount points, S3), records commits, branches and tags, and diffs and merges by
 delegating meaning to data-model plugins. It knows nothing about tables, SQL
-or protocols; the table model lives in a consuming repository as a plugin.
+or protocols; tables, key-value maps and documents are plugins that
+consumers build on its frozen data-model port.
 
 **Status:** the milestones of the [Storage Core Spec](docs/specs/storage-core-spec.md),
 C0 to C4, are done: backends and encrypted packs, content-defined chunking and
 prolly trees, commits and merges over typed objects, and garbage collection.
 Every checklist item and the test that proves it: [`docs/PROGRESS.md`](docs/PROGRESS.md).
+The current release is `v0.2.0` ([Versioning and stability](#versioning-and-stability)).
 Remaining work is tracked in the [issues](https://github.com/SmithOperatingSolutions/snapshot-core/issues).
 
 ## Using it
 
-A host (an application, or the consuming repository's engine) opens a
+A host (an application, or a module built on the core) opens a
 repository with four things: a backend, a master key, the data models its
 objects use, and an authorizer. Everything below is taken from
 [`e2e/example_test.go`](e2e/example_test.go), which runs with the tests.
@@ -101,7 +103,7 @@ default), so run it on a schedule.
 | Layer | Packages |
 | --- | --- |
 | Backends | `core/blob` (the port) · `core/blob/mem`, `core/blob/local`, `core/blob/multivol`, `core/blob/s3`, `core/blob/cache` · `core/blob/split` (objects on one store, the root on another) |
-| Primitives | `core/hash` · `core/wire` (bounded reader and writer for every record) · `core/auth` |
+| Primitives | `core/hash` · `core/wire` (bounded reader and writer for every record) |
 | Crypto, chunking | `core/seal` (keys, key files, KMS wrapping) · `core/cdc` · `core/boundary` |
 | Chunk layer | `core/pack`, `core/dedup` · `core/chunk` (the port) · `core/chunk/packstore`, `core/chunk/memstore` |
 | Keyed data | `core/stream` (byte streams) · `core/prolly` (the ordered map) |
@@ -130,7 +132,7 @@ What is promised from `v0.1.0` on:
   gets a new version, and the reader for the old one stays.
 - **The data-model port is frozen.** A model written against `core/model`
   and passing `model/contract` keeps working across minor versions; anything
-  added beside it (like `model.Walker`) is optional.
+  added beside it (like `model.Walker` and `model.Accumulator`) is optional.
 - **Encryption is not optional** and never was: there is no plaintext mode
   to remove.
 

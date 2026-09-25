@@ -493,7 +493,7 @@ func (c checker) checkTestCommit(commit string, mutants []string) ([]Violation, 
 			r := results.tests[n]
 			if callers[dir+"\x00"+n] && r.action == "skip" && !r.panicked {
 				// Only a caller of a changed contract, and it needs an
-				// environment this check lacks (the MinIO tier): not judged.
+				// environment this check lacks (the S3 tier): not judged.
 				fmt.Fprintf(c.o.Log, "redcheck: %.9s %s calls the changed contract but skipped: not judged\n", commit, n)
 				skipped++
 				continue

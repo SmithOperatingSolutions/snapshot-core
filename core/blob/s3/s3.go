@@ -51,14 +51,14 @@ var (
 type Options struct {
 	// Client is built by the host, with credentials from the instance or
 	// workload role (never a config file). NewClient builds one for tests
-	// and MinIO.
+	// and local S3 servers.
 	Client *awss3.Client
 	Bucket string
 	// Prefix scopes the store within the bucket: "" or a valid object name
 	// followed by "/". The IAM policy should be scoped to it.
 	Prefix string
 	// AllowHTTP permits a plain-HTTP endpoint (the in-process test server,
-	// MinIO in CI). Production endpoints are HTTPS.
+	// the S3 tier in CI). Production endpoints are HTTPS.
 	AllowHTTP bool
 	// SSEKMSKeyID, when set, asks S3 to encrypt every object at rest with
 	// that KMS key as well (defense in depth; the data is already sealed).
@@ -69,7 +69,7 @@ type Options struct {
 }
 
 // NewClient builds a path-style client for an endpoint with static
-// credentials, for tests and MinIO. Checksums are computed only when S3
+// credentials, for tests and local S3 servers. Checksums are computed only when S3
 // requires them: SigV4's signed payload hash already protects every PUT.
 func NewClient(endpoint, region, accessKey, secretKey string) *awss3.Client {
 	return awss3.New(awss3.Options{
