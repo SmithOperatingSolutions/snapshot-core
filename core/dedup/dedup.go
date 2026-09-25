@@ -157,7 +157,6 @@ func decodePlain(b []byte) ([]pack.Info, error) {
 func framesFit(entries []pack.Entry, size uint64) bool {
 	index := pack.SealedIndexLen(entries)
 	if index > size-pack.TrailerSize { // the index offset would wrap
-
 		return false
 	}
 	indexOffset := size - pack.TrailerSize - index
