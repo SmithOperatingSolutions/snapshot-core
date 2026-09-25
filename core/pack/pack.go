@@ -162,6 +162,7 @@ type Writer struct {
 	maxSize  int
 	buf      []byte
 	entries  map[hash.Hash]Entry
+	order    []hash.Hash // the entries in the order they were added
 	finished bool
 }
 
@@ -302,6 +303,7 @@ func (w *Writer) AddSealed(h hash.Hash, rawLen int, sealed []byte, codec uint8) 
 	}
 	w.entries[h] = Entry{Hash: h, Offset: uint32(len(w.buf)), StoredLen: uint32(len(sealed)),
 		RawLen: uint32(rawLen), Codec: codec}
+	w.order = append(w.order, h)
 	w.buf = append(w.buf, sealed...)
 	return nil
 }
@@ -349,7 +351,17 @@ type Frame struct {
 
 // FramesSince lists the frames added after the first n, in the order they
 // were added.
-func (w *Writer) FramesSince(n int) []Frame { return nil }
+func (w *Writer) FramesSince(n int) []Frame {
+	if n >= len(w.order) {
+		return nil
+	}
+	out := make([]Frame, 0, len(w.order)-n)
+	for _, h := range w.order[n:] {
+		e := w.entries[h]
+		out = append(out, Frame{Entry: e, Sealed: w.buf[e.Offset : e.Offset+e.StoredLen : e.Offset+e.StoredLen]})
+	}
+	return out
+}
 
 // Finish seals the index and returns the pack.
 func (w *Writer) Finish() (Built, error) {
