@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sync"
 	"testing"
 	"time"
 
@@ -781,3 +782,219 @@ func TestAnotherProcessSeesACommitWithinTheInterval(t *testing.T) {
 		t.Fatalf("a fresh open saw the journaled commit %v after it, before the interval (%v): it published at once", d, interval)
 	}
 }
+
+// syncCounting is a store whose journal counts its syncs and remembers how
+// much of it they made durable, and can hold the first sync until a
+// number of writes have landed; crash leaves only what was synced.
+type syncCounting struct {
+	*mem.Store
+	mu       sync.Mutex
+	syncs    int
+	writes   int
+	written  int // bytes written
+	durable  int // bytes the last sync covered
+	holdFor  int // the first sync waits until this many writes have landed
+	held     bool
+	failSync error
+}
+
+func (c *syncCounting) OpenJournal(ctx context.Context) (blob.Journal, error) {
+	j, err := c.Store.OpenJournal(ctx)
+	if err != nil {
+		return nil, err
+	}
+	b, err := j.Read(ctx, 1<<30)
+	if err != nil {
+		return nil, err
+	}
+	c.mu.Lock()
+	c.written, c.durable = len(b), len(b)
+	c.mu.Unlock()
+	return &countingJournal{Journal: j, c: c}, nil
+}
+
+type countingJournal struct {
+	blob.Journal
+	c *syncCounting
+}
+
+func (j *countingJournal) Write(ctx context.Context, b []byte) error {
+	if err := j.Journal.Write(ctx, b); err != nil {
+		return err
+	}
+	j.c.mu.Lock()
+	j.c.writes++
+	j.c.written += len(b)
+	j.c.mu.Unlock()
+	return nil
+}
+
+func (j *countingJournal) Sync(ctx context.Context) error {
+	j.c.mu.Lock()
+	hold := j.c.holdFor > 0 && !j.c.held
+	j.c.held = true
+	j.c.mu.Unlock()
+	if hold {
+		deadline := time.Now().Add(5 * time.Second)
+		for {
+			j.c.mu.Lock()
+			n := j.c.writes
+			j.c.mu.Unlock()
+			if n >= j.c.holdFor || time.Now().After(deadline) {
+				break
+			}
+			time.Sleep(time.Millisecond)
+		}
+	}
+	j.c.mu.Lock()
+	defer j.c.mu.Unlock()
+	if j.c.failSync != nil {
+		return j.c.failSync
+	}
+	j.c.syncs++
+	j.c.durable = j.c.written
+	return j.Journal.Sync(ctx)
+}
+
+func (j *countingJournal) Append(ctx context.Context, b []byte) error {
+	if err := j.Write(ctx, b); err != nil {
+		return err
+	}
+	return j.Sync(ctx)
+}
+
+func (j *countingJournal) Reset(ctx context.Context) error {
+	if err := j.Journal.Reset(ctx); err != nil {
+		return err
+	}
+	j.c.mu.Lock()
+	j.c.written, j.c.durable = 0, 0
+	j.c.mu.Unlock()
+	return nil
+}
+
+// crash leaves the journal as a power cut would: only what a sync covered.
+func (c *syncCounting) crash(t *testing.T) {
+	t.Helper()
+	j, err := c.Store.OpenJournal(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer j.Close()
+	b, err := j.Read(ctx, 1<<30)
+	if err != nil {
+		t.Fatal(err)
+	}
+	c.mu.Lock()
+	keep := b[:c.durable]
+	c.mu.Unlock()
+	if err := j.Reset(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if err := j.Append(ctx, keep); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// Grouped fsync (#34, the owner's item 3): commits that queue while a sync
+// is in flight share the next one. Sixteen writers each commit once, the
+// first sync held until all sixteen records are written: two syncs cover
+// them all (the held one, and one for the fifteen that queued behind it).
+// Every commit returned only once a sync covered its record: a crash that
+// keeps only what was synced reopens at the last commit, and the records
+// replay in order.
+func TestCommitsThatQueueShareAnFsync(t *testing.T) {
+	const writers = 16
+	c := &syncCounting{Store: mem.New()}
+	kr := keyring(t)
+	s, err := packstore.Open(ctx, journalOptions(c, kr, time.Hour))
+	if err != nil {
+		t.Fatal(err)
+	}
+	commit(t, s, hash.Hash{}, payload("first", 100)) // published
+	c.mu.Lock()
+	c.holdFor, c.writes = writers, 0
+	c.mu.Unlock()
+	var wg sync.WaitGroup
+	errs := make(chan error, writers)
+	for w := range writers {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			h, err := s.Put(ctx, payload(fmt.Sprintf("writer %d", w), 200))
+			if err != nil {
+				errs <- err
+				return
+			}
+			for {
+				root, err := s.Root(ctx)
+				if err != nil {
+					errs <- err
+					return
+				}
+				err = s.CompareAndSetRoot(ctx, root, h)
+				if errors.Is(err, chunk.ErrRootConflict) {
+					continue
+				}
+				if err != nil {
+					errs <- err
+				}
+				return
+			}
+		}()
+	}
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		t.Fatalf("a writer's commit: %v", err)
+	}
+	c.mu.Lock()
+	syncs, writes := c.syncs, c.writes
+	c.mu.Unlock()
+	if writes != writers {
+		t.Fatalf("fixture: %d records written for %d commits", writes, writers)
+	}
+	if syncs > 2 {
+		t.Fatalf("%d commits that queued behind one held sync took %d syncs, want at most 2: commits do not share an fsync", writers, syncs)
+	}
+	last, err := s.Root(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	packstore.Abandon(s)
+	c.crash(t)
+	re, err := packstore.Open(ctx, journalOptions(c, kr, time.Hour))
+	if err != nil {
+		t.Fatalf("reopening after a crash that kept only what was synced: %v", err)
+	}
+	defer re.Close()
+	if got, _ := re.Root(ctx); got != last {
+		t.Fatalf("after a crash that kept only what was synced the root is %s, want the last commit %s: a commit returned before a sync covered it", got.Short(), last.Short())
+	}
+}
+
+// A commit whose context is cancelled before it starts writes nothing.
+func TestACancelledCommitLeavesNothing(t *testing.T) {
+	bs, kr := mem.New(), keyring(t)
+	s := openJournaled(t, bs, kr, time.Hour)
+	first := commit(t, s, hash.Hash{}, payload("first", 100))
+	h, err := s.Put(ctx, payload("cancelled", 100))
+	if err != nil {
+		t.Fatal(err)
+	}
+	cctx, cancel := context.WithCancel(ctx)
+	cancel()
+	if err := s.CompareAndSetRoot(cctx, first, h); !errors.Is(err, context.Canceled) {
+		t.Fatalf("a commit with a cancelled context = %v, want context.Canceled", err)
+	}
+	if n := packstore.JournalRecords(s); n != 0 {
+		t.Fatalf("a cancelled commit left %d records in the journal", n)
+	}
+	if got, _ := s.Root(ctx); got != first {
+		t.Fatalf("a cancelled commit moved the root to %s", got.Short())
+	}
+	if err := s.CompareAndSetRoot(ctx, first, h); err != nil {
+		t.Fatalf("positive control: the same commit uncancelled: %v", err)
+	}
+}
+
