@@ -4983,3 +4983,10 @@ find: return n.ends[i] > pos })
 replace: return n.ends[i] > pos+1 })
 pkg: ./core/stream
 run: ^TestEveryByteReadAloneIsTheSourcesByte$
+
+id: seal-keyfile-fuzzer-keeps-its-kdf-budget
+file: core/seal/seal_test.go
+find: if !withinFuzzBudget(p) {\n\t\t\treturn errOverFuzzBudget
+replace: if false {\n\t\t\treturn errOverFuzzBudget
+pkg: ./core/seal
+run: ^TestRegression_SC25_TheKeyFileFuzzerNeverDerivesAboveItsBudget$

@@ -552,12 +552,21 @@ func withinFuzzBudget(p seal.Argon2Params) bool {
 // panics and never yields a key unless the bytes are a real key file for
 // this passphrase. deriving is told the costs of each Argon2 derivation the
 // body lets run, before it runs; an error from it stops that derivation.
+// A file over the budget is decoded and validated in full, and stops at
+// the derivation.
 func fuzzOpenKeyFile(t *testing.T, b []byte, deriving func(seal.Argon2Params) error) {
-	kr, err := seal.OpenKeyFileObserved(b, []byte("pw"), deriving)
+	kr, err := seal.OpenKeyFileObserved(b, []byte("pw"), func(p seal.Argon2Params) error {
+		if !withinFuzzBudget(p) {
+			return errOverFuzzBudget
+		}
+		return deriving(p)
+	})
 	if err == nil && kr == nil {
 		t.Fatal("nil keyring with nil error")
 	}
 }
+
+var errOverFuzzBudget = errors.New("test: derivation over the fuzz budget")
 
 func FuzzUnwrapKeyring(f *testing.F) {
 	f.Add([]byte("SCKW\x01\x00"))
