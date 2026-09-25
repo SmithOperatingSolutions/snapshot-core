@@ -111,14 +111,14 @@ func conflicts(n int, location, reason string) []model.Conflict {
 	return cs
 }
 
-// #26: a conflict record holds at most 10,000 model conflicts, each with a
+// #27: a conflict record holds at most 10,000 model conflicts, each with a
 // location of at most 4,096 bytes and a reason of at most 1,024, and its
 // decoder refuses anything larger; but Merge wrote whatever a model
 // reported. A model over any limit merged cleanly, and the branch's merge
 // state then did not read: its conflicts could be neither listed nor
 // resolved, and nothing but abandoning the merge moved the branch on. Such
 // a merge must be refused before it writes anything.
-func TestRegression_SC26_AConflictTooLargeToRecordRefusesTheMerge(t *testing.T) {
+func TestRegression_SC27_AConflictTooLargeToRecordRefusesTheMerge(t *testing.T) {
 	// Positive controls, at exactly each limit: the merge records the
 	// conflict and it reads back as the model reported it.
 	for label, cs := range map[string][]model.Conflict{

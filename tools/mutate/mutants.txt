@@ -5150,46 +5150,46 @@ file: core/vcs/encode.go
 find: if len(c.Model) > maxModelConflicts {
 replace: if len(c.Model) > maxModelConflicts+1 {
 pkg: ./core/vcs
-run: ^TestRegression_SC26_AConflictTooLargeToRecordRefusesTheMerge$
+run: ^TestRegression_SC27_AConflictTooLargeToRecordRefusesTheMerge$
 
 id: vcs-merge-records-the-most-model-conflicts
 file: core/vcs/encode.go
 find: if len(c.Model) > maxModelConflicts {
 replace: if len(c.Model) >= maxModelConflicts {
 pkg: ./core/vcs
-run: ^TestRegression_SC26_AConflictTooLargeToRecordRefusesTheMerge$
+run: ^TestRegression_SC27_AConflictTooLargeToRecordRefusesTheMerge$
 
 id: vcs-merge-refuses-a-long-location
 file: core/vcs/encode.go
 find: if len(mc.Location) > maxLocationLen {
 replace: if len(mc.Location) > maxLocationLen+1 {
 pkg: ./core/vcs
-run: ^TestRegression_SC26_AConflictTooLargeToRecordRefusesTheMerge$
+run: ^TestRegression_SC27_AConflictTooLargeToRecordRefusesTheMerge$
 
 id: vcs-merge-records-the-longest-location
 file: core/vcs/encode.go
 find: if len(mc.Location) > maxLocationLen {
 replace: if len(mc.Location) >= maxLocationLen {
 pkg: ./core/vcs
-run: ^TestRegression_SC26_AConflictTooLargeToRecordRefusesTheMerge$
+run: ^TestRegression_SC27_AConflictTooLargeToRecordRefusesTheMerge$
 
 id: vcs-merge-refuses-a-long-reason
 file: core/vcs/encode.go
 find: if len(mc.Reason) > maxReasonLen {
 replace: if len(mc.Reason) > maxReasonLen+1 {
 pkg: ./core/vcs
-run: ^TestRegression_SC26_AConflictTooLargeToRecordRefusesTheMerge$
+run: ^TestRegression_SC27_AConflictTooLargeToRecordRefusesTheMerge$
 
 id: vcs-merge-records-the-longest-reason
 file: core/vcs/encode.go
 find: if len(mc.Reason) > maxReasonLen {
 replace: if len(mc.Reason) >= maxReasonLen {
 pkg: ./core/vcs
-run: ^TestRegression_SC26_AConflictTooLargeToRecordRefusesTheMerge$
+run: ^TestRegression_SC27_AConflictTooLargeToRecordRefusesTheMerge$
 
 id: vcs-merge-checks-before-writing
 file: core/vcs/vcs.go
 find: if err := recordable(c); err != nil {
 replace: if err := recordable(c); err != nil && false {
 pkg: ./core/vcs
-run: ^TestRegression_SC26_AConflictTooLargeToRecordRefusesTheMerge$
+run: ^TestRegression_SC27_AConflictTooLargeToRecordRefusesTheMerge$
