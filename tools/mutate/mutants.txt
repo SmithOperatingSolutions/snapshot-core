@@ -5885,3 +5885,17 @@ find: \t\tpo.Journal = false\n
 replace: 
 pkg: ./core/repo
 run: ^TestARepositoryOpenedWithTheJournalCommitsThroughIt$
+
+id: packstore-journal-gc-open-replays
+file: core/chunk/packstore/journal.go
+find: \t\tif size == 0 {\n\t\t\treturn nil\n\t\t}
+replace: \t\tif size >= 0 {\n\t\t\treturn nil\n\t\t}
+pkg: ./core/gc
+run: ^TestGCSafetyPropertyWithTheJournal$
+
+id: packstore-carries-forward-from-a-repacked-pack
+file: core/chunk/packstore/packstore.go
+find: if ok && s.condemned[loc.Pack.Name] {\n\t\t\tcarry = append(carry, h)
+replace: if ok && s.condemned[loc.Pack.Name] && false {\n\t\t\tcarry = append(carry, h)
+pkg: ./core/chunk/packstore
+run: ^TestRegression_SC34_ACountedChunkOnlyARepackedPackHoldsSurvivesItsExpiry$

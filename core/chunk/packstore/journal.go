@@ -388,6 +388,9 @@ func (s *Store) journalCommit(ctx context.Context, expected, next hash.Hash) err
 	if first {
 		return s.publishJournal(ctx, next) // a repository's first root is published
 	}
+	if err := s.carryForward(ctx); err != nil {
+		return err
+	}
 	if err := s.survived(m); err != nil {
 		return err
 	}

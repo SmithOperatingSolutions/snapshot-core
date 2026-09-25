@@ -1085,6 +1085,19 @@ func (s *Store) CompareAndSetRoot(ctx context.Context, expected, next hash.Hash)
 // objects that list it, and swaps the manifest to name next, if the root
 // is still expected. Callers hold commitMu.
 func (s *Store) publish(ctx context.Context, expected, next hash.Hash) error {
+	for attempt := 0; ; attempt++ {
+		if err := s.carryForward(ctx); err != nil {
+			return err
+		}
+		err := s.publishOnce(ctx, expected, next)
+		if !errors.Is(err, errCarry) || attempt == MaxSwapAttempts-1 {
+			return err
+		}
+	}
+}
+
+// publishOnce is publish, once the counted chunks are carried forward.
+func (s *Store) publishOnce(ctx context.Context, expected, next hash.Hash) error {
 	// Every finisher has landed its pack or left it to retry here, and a
 	// put that filled the pending pack after the wait (another goroutine's)
 	// is waited for too: that pack may hold chunks next reaches.
@@ -1416,12 +1429,62 @@ func (s *Store) survived(m manifest) error {
 		if (s.pending != nil && s.pending.Has(h)) || s.finishingHasLocked(h) {
 			continue
 		}
-		ok, err := s.hasLocked(h)
+		loc, ok, err := s.lookupLocked(h)
 		if err != nil {
 			return err
 		}
 		if !ok {
 			return s.lostLocked("counted on " + h.Short() + ", which expired")
+		}
+		if s.condemned[loc.Pack.Name] {
+			return errCarry // GC moved since carryForward looked
+		}
+	}
+	return nil
+}
+
+// errCarry: a chunk a put counted on is held only by a pack on its way out
+// (condemned or repacked); the publish carries it forward and starts again.
+var errCarry = errors.New("packstore: a counted chunk is held only by a pack on its way out")
+
+// carryForward stores again, in the pending pack, every chunk a put
+// counted on that only a condemned or repacked pack holds now. A repacked
+// pack is never reprieved by the chunks it still holds, and GC copied
+// only the chunks live when it repacked: a chunk that became reachable
+// after (by this store's publish) would expire with the pack. Nothing
+// happens while GC has not moved since the puts (the gcGen they began
+// under).
+func (s *Store) carryForward(ctx context.Context) error {
+	s.mu.Lock()
+	if s.man.gcGen == s.sessGen {
+		s.mu.Unlock()
+		return nil
+	}
+	var carry []hash.Hash
+	for h := range s.deduped {
+		if (s.pending != nil && s.pending.Has(h)) || s.finishingHasLocked(h) {
+			continue
+		}
+		loc, ok, err := s.lookupLocked(h)
+		if err != nil {
+			s.mu.Unlock()
+			return err
+		}
+		if ok && s.condemned[loc.Pack.Name] {
+			carry = append(carry, h)
+		}
+	}
+	s.mu.Unlock()
+	for _, h := range carry {
+		data, err := s.Get(ctx, h)
+		if err != nil {
+			return err
+		}
+		s.mu.Lock()
+		delete(s.deduped, h)
+		s.mu.Unlock()
+		if _, err := s.Put(ctx, data); err != nil { // stored anew: Put never counts on a pack on its way out
+			return err
 		}
 	}
 	return nil
