@@ -218,3 +218,44 @@ func (b *onIndexPut) Put(ctx context.Context, name string, r io.Reader, size int
 	}
 	return err
 }
+
+// Found by TestGCSafetyPropertyWithTheJournal (#34), and not the journal's
+// alone: a put counted on a chunk in a pack; a GC round then repacked that
+// pack without it (nothing published reached it yet); the publish found it
+// still stored (the repacked pack stays listed for a grace window) and
+// named it; a grace window on, the repacked pack expired, as a repacked
+// pack is never reprieved by the chunks it still holds, and the chunk the
+// published root reaches was deleted.
+func TestRegression_SC34_ACountedChunkOnlyARepackedPackHoldsSurvivesItsExpiry(t *testing.T) {
+	bs, kr := mem.New(), keyring(t)
+	s0 := open(t, bs, kr)
+	y, x := []byte("y, live"), payload("x, dead when the round runs", 6000)
+	hy, err := s0.Put(ctx, y)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s0.Put(ctx, x); err != nil {
+		t.Fatal(err)
+	}
+	if err := s0.CompareAndSetRoot(ctx, hash.Hash{}, hy); err != nil {
+		t.Fatal(err)
+	}
+	s := open(t, bs, kr)
+	hx, err := s.Put(ctx, x) // counted on: the pack holding y and x
+	if err != nil {
+		t.Fatal(err)
+	}
+	out := repackRound(t, bs, kr, liveSet(hy), t0, packstore.Repack{})
+	if out.Repacked != 1 {
+		t.Fatalf("fixture: the round repacked %v, want the pack holding x", out.Repacked)
+	}
+	if err := s.CompareAndSetRoot(ctx, hy, hx); err != nil {
+		t.Fatalf("publishing a root that reaches x: %v", err)
+	}
+	out = repackRound(t, bs, kr, liveSet(hx), t0.Add(2*time.Hour), packstore.Repack{Off: true})
+	remove(t, bs, out.Expired)
+	fresh := open(t, bs, kr)
+	if got, err := fresh.Get(ctx, hx); err != nil || !bytes.Equal(got, x) {
+		t.Fatalf("after the repacked pack expired, the chunk the published root names does not read (%v): GC deleted a reachable chunk", err)
+	}
+}
