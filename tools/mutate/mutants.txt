@@ -4850,3 +4850,10 @@ find: s.o.PackSize, max(s.lastPack, minPending))
 replace: s.o.PackSize, s.o.PackSize)
 pkg: ./core/chunk/packstore
 run: ^TestSmallCommitsAllocateForSmallPacks$
+
+id: prolly-value-limit-not-negative
+file: core/prolly/prolly.go
+find: if c.MaxValue < 0 {
+replace: if c.MaxValue < 0 && false {
+pkg: ./core/prolly
+run: ^TestConfigIsValidated$
