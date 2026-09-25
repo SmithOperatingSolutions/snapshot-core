@@ -361,3 +361,27 @@ func TestForgeriesThatWouldReadCleanly(t *testing.T) {
 		}
 	}
 }
+
+// Every byte read on its own, in an order that jumps between chunks and
+// index nodes, is the source's byte: the last byte of a chunk, the first
+// of the next, and every edge of an index node's span descend to the
+// entry that holds them.
+func TestEveryByteReadAloneIsTheSourcesByte(t *testing.T) {
+	s := newStore()
+	data := random("every byte", 256<<10)
+	ref := write(t, s, data, small())
+	if ref.Depth < 2 {
+		t.Fatalf("fixture: depth %d, want at least 2", ref.Depth)
+	}
+	r, err := stream.Open(ctx, s, ref)
+	if err != nil {
+		t.Fatal(err)
+	}
+	p := make([]byte, 1)
+	for i := range len(data) {
+		off := (i * 7919) % len(data) // 7919 is prime and does not divide 256 Ki: every offset once
+		if n, err := r.ReadAt(p, int64(off)); n != 1 || err != nil || p[0] != data[off] {
+			t.Fatalf("ReadAt(%d, 1) = %d bytes %#x, %v; the source's byte is %#x", off, n, p[0], err, data[off])
+		}
+	}
+}

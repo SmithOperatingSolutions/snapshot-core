@@ -4976,3 +4976,10 @@ find: c.MaxValue = RefSize
 replace: c.MaxValue = 0
 pkg: ./core/object
 run: ^TestRegression_SC23_ANamespaceReadsNoValueLongerThanARef$
+
+id: stream-child-search-boundary
+file: core/stream/stream.go
+find: return n.ends[i] > pos })
+replace: return n.ends[i] > pos+1 })
+pkg: ./core/stream
+run: ^TestEveryByteReadAloneIsTheSourcesByte$
