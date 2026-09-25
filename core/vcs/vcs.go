@@ -15,6 +15,7 @@ import (
 	"errors"
 	"fmt"
 	"math/rand/v2"
+	"slices"
 	"sync"
 	"time"
 	"unicode/utf8"
@@ -618,8 +619,15 @@ func (r *Repo) Commit(ctx context.Context, p auth.Principal, branch string, prev
 		if err != nil {
 			return err
 		}
-		// The paths the working set changes, and the paths the commit changes.
-		for _, from := range []hash.Hash{stored.Working, stored.Staged, head.Namespace} {
+		// The paths the working set changes, and the paths the commit
+		// changes. The three are often one namespace (a clean working set
+		// at the head), and a diff against it asks the same questions
+		// again: each is diffed once.
+		froms := []hash.Hash{stored.Working, stored.Staged, head.Namespace}
+		for i, from := range froms {
+			if slices.Contains(froms[:i], from) {
+				continue
+			}
 			if err := r.checkPaths(ctx, p, branch, from, namespace); err != nil {
 				return err
 			}

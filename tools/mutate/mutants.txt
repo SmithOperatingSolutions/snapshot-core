@@ -5351,21 +5351,28 @@ run: ^TestAConflictRecordIsReadUpToTheLargestMergeWrites$
 
 id: vcs-commit-checks-stored-working
 file: core/vcs/vcs.go
-find: for _, from := range []hash.Hash{stored.Working, stored.Staged, head.Namespace} {
-replace: for _, from := range []hash.Hash{stored.Staged, head.Namespace} {
+find: froms := []hash.Hash{stored.Working, stored.Staged, head.Namespace}
+replace: froms := []hash.Hash{stored.Staged, head.Namespace}
 pkg: ./core/vcs
 run: ^TestCommitAsksForWhatEachStoredNamespaceChanges$
 
 id: vcs-commit-checks-stored-staged
 file: core/vcs/vcs.go
-find: for _, from := range []hash.Hash{stored.Working, stored.Staged, head.Namespace} {
-replace: for _, from := range []hash.Hash{stored.Working, head.Namespace} {
+find: froms := []hash.Hash{stored.Working, stored.Staged, head.Namespace}
+replace: froms := []hash.Hash{stored.Working, head.Namespace}
 pkg: ./core/vcs
 run: ^TestCommitAsksForWhatEachStoredNamespaceChanges$
 
 id: vcs-commit-checks-head
 file: core/vcs/vcs.go
-find: for _, from := range []hash.Hash{stored.Working, stored.Staged, head.Namespace} {
-replace: for _, from := range []hash.Hash{stored.Working, stored.Staged} {
+find: froms := []hash.Hash{stored.Working, stored.Staged, head.Namespace}
+replace: froms := []hash.Hash{stored.Working, stored.Staged}
+pkg: ./core/vcs
+run: ^TestCommitAsksForWhatEachStoredNamespaceChanges$
+
+id: vcs-commit-dedupes-only-equal-namespaces
+file: core/vcs/vcs.go
+find: if slices.Contains(froms[:i], from) {
+replace: if slices.Contains(froms[:i], from) || i > 0 {
 pkg: ./core/vcs
 run: ^TestCommitAsksForWhatEachStoredNamespaceChanges$
