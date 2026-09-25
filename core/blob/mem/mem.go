@@ -5,6 +5,7 @@ package mem
 import (
 	"bytes"
 	"context"
+	"errors"
 	"io"
 	"sort"
 	"strings"
@@ -157,3 +158,17 @@ func (s *Store) ReadMirror(ctx context.Context) ([]byte, error) {
 	defer s.mu.Unlock()
 	return bytes.Clone(s.mirror), nil
 }
+
+var _ blob.Journaler = (*Store)(nil)
+
+// OpenJournal implements blob.Journaler.
+func (s *Store) OpenJournal(ctx context.Context) (blob.Journal, error) {
+	return nil, errJournalNotYet
+}
+
+// HoldJournal implements blob.Journaler.
+func (s *Store) HoldJournal(ctx context.Context) (int64, func(), error) {
+	return 0, nil, errJournalNotYet
+}
+
+var errJournalNotYet = errors.New("mem: no journal yet")

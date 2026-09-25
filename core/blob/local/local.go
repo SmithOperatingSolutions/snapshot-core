@@ -542,3 +542,17 @@ func fsName(magic int64) string {
 		return fmt.Sprintf("unknown(%#x)", magic)
 	}
 }
+
+var _ blob.Journaler = (*Store)(nil)
+
+// OpenJournal implements blob.Journaler.
+func (s *Store) OpenJournal(ctx context.Context) (blob.Journal, error) {
+	return nil, errJournalNotYet
+}
+
+// HoldJournal implements blob.Journaler.
+func (s *Store) HoldJournal(ctx context.Context) (int64, func(), error) {
+	return 0, nil, errJournalNotYet
+}
+
+var errJournalNotYet = errors.New("local: no journal yet")

@@ -143,11 +143,3 @@ func ValidPrefix(prefix string) error {
 	}
 	return ValidName(strings.TrimSuffix(prefix, "/"))
 }
-
-// NoDelete wraps a store so Delete fails with ErrDeleteForbidden. The
-// repository runs on a NoDelete store; only core/gc holds the raw one.
-func NoDelete(s BlobStore) BlobStore { return noDelete{s} }
-
-type noDelete struct{ BlobStore }
-
-func (noDelete) Delete(context.Context, string) error { return ErrDeleteForbidden }

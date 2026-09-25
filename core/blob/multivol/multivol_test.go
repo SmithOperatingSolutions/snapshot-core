@@ -19,6 +19,7 @@ import (
 	"github.com/SmithOperatingSolutions/snapshot-core/core/blob"
 	"github.com/SmithOperatingSolutions/snapshot-core/core/blob/contract"
 	"github.com/SmithOperatingSolutions/snapshot-core/core/blob/internal/crashtest"
+	jcontract "github.com/SmithOperatingSolutions/snapshot-core/core/blob/journal/contract"
 	"github.com/SmithOperatingSolutions/snapshot-core/core/blob/multivol"
 )
 
@@ -428,4 +429,24 @@ func TestVolumeSwappedWhileOpenGoesReadOnly(t *testing.T) {
 	if err := s.Put(ctx, packName(800000), strings.NewReader("x"), 1); !errors.Is(err, multivol.ErrVolumeMissing) {
 		t.Fatalf("Put after a swap = %v, want ErrVolumeMissing", err)
 	}
+}
+
+// The journal's contract (#34): it lives on the primary volume, beside the
+// root.
+func TestJournalContract(t *testing.T) {
+	jcontract.Run(t, func(t *testing.T) (blob.Journaler, func(*testing.T) blob.Journaler) {
+		s, f := newFixture(t, 3)
+		return s, func(t *testing.T) blob.Journaler {
+			re, err := multivol.Open(f.primary, multivol.Options{})
+			if err != nil {
+				t.Fatalf("Open: %v", err)
+			}
+			return re
+		}
+	})
+}
+
+func TestCrashDuringJournalAppendKeepsWhatReturned(t *testing.T) {
+	_, f := newFixture(t, 3)
+	crashtest.Append(t, f.primary, openStore)
 }

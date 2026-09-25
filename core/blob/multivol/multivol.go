@@ -540,3 +540,17 @@ func (s *Store) SwapRoot(ctx context.Context, expected blob.Version, next []byte
 	}
 	return vols[0].st.SwapRoot(ctx, expected, next)
 }
+
+var _ blob.Journaler = (*Store)(nil)
+
+// OpenJournal implements blob.Journaler.
+func (s *Store) OpenJournal(ctx context.Context) (blob.Journal, error) {
+	return nil, errJournalNotYet
+}
+
+// HoldJournal implements blob.Journaler.
+func (s *Store) HoldJournal(ctx context.Context) (int64, func(), error) {
+	return 0, nil, errJournalNotYet
+}
+
+var errJournalNotYet = errors.New("multivol: no journal yet")
