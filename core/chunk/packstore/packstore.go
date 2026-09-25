@@ -107,6 +107,7 @@ type Store struct {
 	uploaded    map[string]time.Time  // this store's unpublished packs and index objects, dated by o.Clock
 	lost        error                 // chunk.ErrSessionLost once GC deleted unpublished work: writes refuse
 	opens       int                   // manifests refresh has opened (tests count them)
+	objEst      map[[32]byte]int      // index objects loaded or written here, by estimated size (compaction)
 }
 
 // maxInFlight bounds the packs finishing or uploading at once (#10): a
@@ -155,7 +156,7 @@ func Open(ctx context.Context, o Options) (*Store, error) {
 		return nil, err
 	}
 	s := &Store{o: o, codec: codec, mem: dedup.New(), inflight: map[string][]byte{}, slots: make(chan struct{}, maxInFlight),
-		loaded: map[[32]byte]bool{}, keys: map[seal.Salt]*pack.Keys{}, condemned: map[string]bool{},
+		loaded: map[[32]byte]bool{}, objEst: map[[32]byte]int{}, keys: map[seal.Salt]*pack.Keys{}, condemned: map[string]bool{},
 		unpublished: map[string]pack.Info{}, inIndex: map[[32]byte][]string{}, deduped: map[hash.Hash]bool{},
 		uploaded: map[string]time.Time{}}
 	switch {
@@ -380,8 +381,16 @@ func (s *Store) hasLocked(h hash.Hash) (bool, error) {
 	return false, nil
 }
 
+// loadIndex loads an index object and notes its size for compaction.
 func (s *Store) loadIndex(ctx context.Context, sum [32]byte) ([]pack.Info, error) {
-	return loadIndex(ctx, s.o, sum)
+	infos, err := loadIndex(ctx, s.o, sum)
+	if err != nil {
+		return nil, err
+	}
+	s.mu.Lock()
+	s.objEst[sum] = objectSize(infos)
+	s.mu.Unlock()
+	return infos, nil
 }
 
 // loadIndex reads and opens one index object the manifest lists.
@@ -1000,7 +1009,11 @@ func (s *Store) CompareAndSetRoot(ctx context.Context, expected, next hash.Hash)
 		upd := m
 		upd.seq = m.seq + 1
 		upd.root = next
-		upd.indexes = mergeIndexes(m.indexes, pending)
+		indexes, merged, err := s.compact(ctx, mergeIndexes(m.indexes, pending))
+		if err != nil {
+			return err
+		}
+		upd.indexes = indexes
 		if len(upd.indexes) > maxIndexes {
 			return fmt.Errorf("packstore: the manifest lists %d index objects, over %d: run GC to compact", len(upd.indexes), maxIndexes)
 		}
@@ -1012,6 +1025,7 @@ func (s *Store) CompareAndSetRoot(ctx context.Context, expected, next hash.Hash)
 		if err == nil {
 			s.mu.Lock()
 			s.man, s.ver = upd, nv
+			merged.landed(s)
 			for _, sum := range pending {
 				for _, name := range s.inIndex[sum] {
 					delete(s.unpublished, name)
@@ -1135,6 +1149,7 @@ func (s *Store) recordSessionIndex(w *indexWriter) {
 	for _, obj := range w.written {
 		s.sessionIdx = append(s.sessionIdx, obj.sum)
 		s.loaded[obj.sum] = true
+		s.objEst[obj.sum] = obj.est
 		s.inIndex[obj.sum] = obj.packs
 		s.uploaded[indexName(obj.sum)] = s.o.Clock()
 	}
