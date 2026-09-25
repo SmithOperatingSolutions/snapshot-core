@@ -2461,8 +2461,8 @@ run: ^TestStoreErrorsSurfaceAtEveryPoint$
 
 id: object-open-surfaces-errors
 file: core/object/object.go
-find: m, err := prolly.Open(ctx, s, c, root)\n\tif err != nil {
-replace: m, err := prolly.Open(ctx, s, c, root)\n\tif err != nil && false {
+find: m, err := prolly.Open(ctx, s, namespace(c), root)\n\tif err != nil {
+replace: m, err := prolly.Open(ctx, s, namespace(c), root)\n\tif err != nil && false {
 pkg: ./core/object
 run: ^TestStoreErrorsSurfaceAtEveryPoint$
 
@@ -2489,15 +2489,15 @@ run: ^TestStoreErrorsSurfaceAtEveryPoint$
 
 id: object-new-needs-a-registry
 file: core/object/object.go
-find: if reg == nil {\n\t\treturn nil, errors.New("object: a namespace needs a model registry")\n\t}\n\tm, err := prolly.Empty(ctx, s, c)
-replace: if reg == nil && false {\n\t\treturn nil, errors.New("object: a namespace needs a model registry")\n\t}\n\tm, err := prolly.Empty(ctx, s, c)
+find: if reg == nil {\n\t\treturn nil, errors.New("object: a namespace needs a model registry")\n\t}\n\tm, err := prolly.Empty(ctx, s, namespace(c))
+replace: if reg == nil && false {\n\t\treturn nil, errors.New("object: a namespace needs a model registry")\n\t}\n\tm, err := prolly.Empty(ctx, s, namespace(c))
 pkg: ./core/object
 run: ^TestANamespaceNeedsARegistryAndAUsableGeometry$
 
 id: object-open-needs-a-registry
 file: core/object/object.go
-find: if reg == nil {\n\t\treturn nil, errors.New("object: a namespace needs a model registry")\n\t}\n\tm, err := prolly.Open(ctx, s, c, root)
-replace: if reg == nil && false {\n\t\treturn nil, errors.New("object: a namespace needs a model registry")\n\t}\n\tm, err := prolly.Open(ctx, s, c, root)
+find: if reg == nil {\n\t\treturn nil, errors.New("object: a namespace needs a model registry")\n\t}\n\tm, err := prolly.Open(ctx, s, namespace(c), root)
+replace: if reg == nil && false {\n\t\treturn nil, errors.New("object: a namespace needs a model registry")\n\t}\n\tm, err := prolly.Open(ctx, s, namespace(c), root)
 pkg: ./core/object
 run: ^TestANamespaceNeedsARegistryAndAUsableGeometry$
 
@@ -4857,3 +4857,122 @@ find: if c.MaxValue < 0 {
 replace: if c.MaxValue < 0 && false {
 pkg: ./core/prolly
 run: ^TestConfigIsValidated$
+
+id: stream-readall-refuses-over-limit
+file: core/stream/stream.go
+find: if ref.Size > limit {
+replace: if ref.Size > limit && false {
+pkg: ./core/stream
+run: ^TestRegression_SC23_ReadAllRefusesAStreamOverItsLimit$
+
+id: stream-readall-limit-inclusive
+file: core/stream/stream.go
+find: if ref.Size > limit {
+replace: if ref.Size >= limit {
+pkg: ./core/stream
+run: ^TestRegression_SC23_ReadAllRefusesAStreamOverItsLimit$
+
+id: stream-readall-not-grown-by-claim
+file: core/stream/stream.go
+find: var buf bytes.Buffer // not grown by ref.Size: that is a claim until the bytes are read
+replace: var buf bytes.Buffer\n\tbuf.Grow(int(min(ref.Size, 64<<20)))
+pkg: ./core/stream
+run: ^TestRegression_SC23_ReadAllGrowsWithWhatItReads$
+
+id: stream-read-starts-from-the-held-path
+file: core/stream/stream.go
+find: for len(r.path) > 0 && !r.path[len(r.path)-1].holds(pos) {
+replace: for len(r.path) > 0 {
+pkg: ./core/stream
+run: ^TestRegression_SC23_ASequentialReadReadsEachNodeOncePerPlace$
+
+id: stream-held-node-holds-from-its-start
+file: core/stream/stream.go
+find: return pos >= n.start && pos < n.ends[len(n.ends)-1]
+replace: return pos < n.ends[len(n.ends)-1]
+pkg: ./core/stream
+run: ^TestRandomAccessMatchesTheSource$
+
+id: stream-held-node-holds-to-its-end
+file: core/stream/stream.go
+find: return pos >= n.start && pos < n.ends[len(n.ends)-1]
+replace: return pos >= n.start
+pkg: ./core/stream
+run: ^TestRandomAccessMatchesTheSource$
+
+id: prolly-reads-hold-to-the-limit
+file: core/prolly/prolly.go
+find: return readValue(ctx, m.s, *v.ref, m.cfg.maxValue())
+replace: return readValue(ctx, m.s, *v.ref, 1<<62)
+pkg: ./core/prolly
+run: ^TestRegression_SC23_AMapReadsNoValueOverItsLimit$
+
+id: prolly-walk-holds-to-the-limit
+file: core/prolly/walk.go
+find: readValue(w.ctx, w.rd, *e.val.ref, w.maxValue)
+replace: readValue(w.ctx, w.rd, *e.val.ref, 1<<62)
+pkg: ./core/prolly
+run: ^TestRegression_SC23_AMapReadsNoValueOverItsLimit$
+
+id: prolly-value-refusal-named
+file: core/prolly/prolly.go
+find: if errors.Is(err, stream.ErrTooLarge) {
+replace: if errors.Is(err, stream.ErrTooLarge) && false {
+pkg: ./core/prolly
+run: ^TestRegression_SC23_AMapReadsNoValueOverItsLimit$
+
+id: prolly-editor-value-limit
+file: core/prolly/prolly.go
+find: if limit := e.m.cfg.maxValue(); len(val) > limit {
+replace: if limit := e.m.cfg.maxValue(); len(val) > limit && false {
+pkg: ./core/prolly
+run: ^TestRegression_SC23_AnEditorTakesNoValueOverItsLimit$
+
+id: prolly-editor-value-limit-inclusive
+file: core/prolly/prolly.go
+find: if limit := e.m.cfg.maxValue(); len(val) > limit {
+replace: if limit := e.m.cfg.maxValue(); len(val) >= limit {
+pkg: ./core/prolly
+run: ^TestRegression_SC23_AnEditorTakesNoValueOverItsLimit$
+
+id: prolly-default-value-limit
+file: core/prolly/prolly.go
+find: if c.MaxValue == 0 {
+replace: if c.MaxValue == 0 && false {
+pkg: ./core/prolly
+run: ^TestRegression_SC23_NoLimitNamedIsTheDefault$
+
+id: prolly-node-presize-bounded
+file: core/prolly/node.go
+find: make([]entry, 0, min(count, maxPresized))
+replace: make([]entry, 0, count)
+pkg: ./core/prolly
+run: ^TestRegression_SC24_ANodeIsNotSizedByItsClaimedCount$
+
+id: pack-index-presize-bounded
+file: core/pack/pack.go
+find: make([]Entry, 0, min(n, uint64(len(b))/minIndexEntry))
+replace: make([]Entry, 0, n)
+pkg: ./core/pack
+run: ^TestRegression_SC24_AnIndexIsNotSizedByItsClaimedCount$
+
+id: tree-records-no-longer-than-an-entry
+file: model/tree/tree.go
+find: c.MaxValue = EntrySize
+replace: c.MaxValue = 0
+pkg: ./model/tree
+run: ^TestRegression_SC23_ATreeReadsNoRecordLongerThanAnEntry$
+
+id: tree-read-not-sized-by-claim
+file: model/tree/tree.go
+find: out := map[string]Entry{} // not sized by m.Count()
+replace: out := make(map[string]Entry, m.Count()) //
+pkg: ./model/tree
+run: ^TestRegression_SC24_ReadingATreeDoesNotSizeByItsClaimedCount$
+
+id: object-namespace-values-are-refs
+file: core/object/object.go
+find: c.MaxValue = RefSize
+replace: c.MaxValue = 0
+pkg: ./core/object
+run: ^TestRegression_SC23_ANamespaceReadsNoValueLongerThanARef$
