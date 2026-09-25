@@ -342,7 +342,7 @@ pkg: ./core/blob
 run: ^TestValidName$
 
 id: blob-nodelete-forbids
-file: core/blob/port.go
+file: core/blob/journal.go
 find: func (noDelete) Delete(context.Context, string) error { return ErrDeleteForbidden }
 replace: func (noDelete) unused() {}
 pkg: ./core/blob
@@ -1029,8 +1029,8 @@ run: ^TestPublishedChunksAreDurableBeforeTheRoot$
 
 id: packstore-root-must-be-stored
 file: core/chunk/packstore/packstore.go
-find: if !stored {\n\t\ts.mu.Unlock()\n\t\treturn fmt.Errorf("%w: %s", chunk.ErrRootMissing, next.Short())
-replace: if next.IsZero() {\n\t\ts.mu.Unlock()\n\t\treturn fmt.Errorf("%w: %s", chunk.ErrRootMissing, next.Short())
+find: if !stored {\n\t\ts.mu.Unlock()\n\t\treturn nil, fmt.Errorf("%w: %s", chunk.ErrRootMissing, next.Short())
+replace: if next.IsZero() {\n\t\ts.mu.Unlock()\n\t\treturn nil, fmt.Errorf("%w: %s", chunk.ErrRootMissing, next.Short())
 pkg: ./core/chunk/packstore
 run: ^TestContractOverEveryBackend$/^mem$/^RootMustBeStored$
 
@@ -3418,8 +3418,8 @@ run: ^TestAPublishFailsOnAPackRecordedAsADeletedOrphan$
 
 id: packstore-a-lost-session-refuses-publishes
 file: core/chunk/packstore/packstore.go
-find: if s.lost != nil {\n\t\ts.mu.Unlock()\n\t\treturn s.lost
-replace: if s.lost != nil && false {\n\t\ts.mu.Unlock()\n\t\treturn s.lost
+find: if s.lost != nil {\n\t\ts.mu.Unlock()\n\t\treturn nil, s.lost
+replace: if s.lost != nil && false {\n\t\ts.mu.Unlock()\n\t\treturn nil, s.lost
 pkg: ./core/chunk/packstore
 run: ^TestAPublishFailsOnAPackRecordedAsADeletedOrphan$
 
@@ -4293,8 +4293,8 @@ run: ^TestAChunkPreparedByAnotherStoreIsRefused$
 
 id: finisher-publish-waits-for-the-finishers
 file: core/chunk/packstore/packstore.go
-find: // Every finisher has landed its pack or left it to retry here.\n\ts.finishers.Wait()
-replace: // Every finisher has landed its pack or left it to retry here.\n\t_ = s.finishers
+find: \t\ts.finishers.Wait()\n\t\tif s.afterWait != nil {\n\t\t\ts.afterWait()\n\t\t}\n\t\ts.mu.Lock()\n\t\tif s.running == 0 {
+replace: \t\tif s.afterWait != nil {\n\t\t\ts.afterWait()\n\t\t}\n\t\ts.mu.Lock()\n\t\tif true {
 pkg: ./core/chunk/packstore
 run: ^TestAPublishWaitsForItsUploads$
 
@@ -4314,8 +4314,8 @@ run: ^TestAChunkOfAPackBeingFinishedReads$
 
 id: finisher-finishes-beside-the-writer
 file: core/chunk/packstore/packstore.go
-find: go func() {\n\t\tdefer s.finishers.Done()\n\t\tdefer func() { <-s.slots }()\n\t\ts.finish(context.WithoutCancel(ctx), w)\n\t}()
-replace: func() {\n\t\tdefer s.finishers.Done()\n\t\tdefer func() { <-s.slots }()\n\t\ts.finish(context.WithoutCancel(ctx), w)\n\t}()
+find: go func() {\n\t\tdefer s.finishers.Done()
+replace: func() {\n\t\tdefer s.finishers.Done()
 pkg: ./core/chunk/packstore
 run: ^TestAnUploadDoesNotHoldUpTheWriter$
 
@@ -4786,8 +4786,8 @@ run: ^TestAResolverIsAskedAboutTheSameValueOnBothSides$
 # commit contention
 id: packstore-a-loser-learns-before-it-writes
 file: core/chunk/packstore/packstore.go
-find: } else if !ok {\n\t\treturn chunk.ErrRootConflict
-replace: } else if !ok && false {\n\t\treturn chunk.ErrRootConflict
+find: } else if !ok {\n\t\treturn nil, chunk.ErrRootConflict
+replace: } else if !ok && false {\n\t\treturn nil, chunk.ErrRootConflict
 pkg: ./core/chunk/packstore
 run: ^TestALoserLearnsBeforeItWrites$
 
@@ -5594,8 +5594,8 @@ run: ^TestCrashDuringJournaledCommitLeavesOldOrNew$
 
 id: packstore-journal-first-root-published
 file: core/chunk/packstore/journal.go
-find: if first {\n\t\treturn s.publishJournal(ctx, next) // a repository's first root is published
-replace: if first && false {\n\t\treturn s.publishJournal(ctx, next) // a repository's first root is published
+find: if first {\n\t\treturn nil, s.publishJournal(ctx, next) // a repository's first root is published
+replace: if first && false {\n\t\treturn nil, s.publishJournal(ctx, next) // a repository's first root is published
 pkg: ./core/chunk/packstore
 run: ^TestTheFirstRootIsPublished$
 
@@ -5622,8 +5622,8 @@ run: ^TestARootMovedUnderAJournalIsRefused$
 
 id: packstore-journal-commit-checks-expected
 file: core/chunk/packstore/journal.go
-find: if cur != expected {\n\t\treturn chunk.ErrRootConflict
-replace: if cur != expected && false {\n\t\treturn chunk.ErrRootConflict
+find: if cur != expected {\n\t\treturn nil, chunk.ErrRootConflict
+replace: if cur != expected && false {\n\t\treturn nil, chunk.ErrRootConflict
 pkg: ./core/chunk/packstore
 run: ^TestARootMovedUnderAJournalIsRefused$
 
@@ -5671,8 +5671,8 @@ run: ^TestAJournalChecksTheChunksItCountedOn$
 
 id: packstore-journal-commit-checks-survived
 file: core/chunk/packstore/journal.go
-find: if err := s.survived(m); err != nil {\n\t\treturn err\n\t}\n\ts.finishers.Wait()
-replace: if err := error(nil); err != nil {\n\t\treturn err\n\t}\n\ts.finishers.Wait()
+find: if err := s.survived(m); err != nil {\n\t\treturn nil, err\n\t}\n\ts.finishers.Wait()
+replace: if err := error(nil); err != nil {\n\t\treturn nil, err\n\t}\n\ts.finishers.Wait()
 pkg: ./core/chunk/packstore
 run: ^TestAJournalChecksTheChunksItCountedOn$
 
