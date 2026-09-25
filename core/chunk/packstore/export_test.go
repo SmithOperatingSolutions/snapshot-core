@@ -169,3 +169,10 @@ func WaitUploads(s *Store) { s.finishers.Wait() }
 // HoldFinish makes every finisher call f before it names and builds its
 // pack, so a test can hold a pack at that point.
 func HoldFinish(s *Store, f func()) { s.holdFinish = f }
+
+// ManifestOpens is how many manifests the store's refreshes have opened.
+func ManifestOpens(s *Store) int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.opens
+}

@@ -106,6 +106,7 @@ type Store struct {
 	sessGen     uint64                // the gcGen those puts began under
 	uploaded    map[string]time.Time  // this store's unpublished packs and index objects, dated by o.Clock
 	lost        error                 // chunk.ErrSessionLost once GC deleted unpublished work: writes refuse
+	opens       int                   // manifests refresh has opened (tests count them)
 }
 
 // maxInFlight bounds the packs finishing or uploading at once (#10): a
@@ -190,6 +191,9 @@ func (s *Store) refresh(ctx context.Context) error {
 		}
 	}
 	s.mu.Lock()
+	if r.Version != blob.NoVersion {
+		s.opens++
+	}
 	rebuild := s.ver != blob.NoVersion && m.seq > s.man.seq && m.gcGen != s.man.gcGen
 	var toLoad [][32]byte
 	for _, sum := range m.indexes {
