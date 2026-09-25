@@ -1,8 +1,12 @@
 package packstore_test
 
 import (
+	"context"
+	"errors"
 	"testing"
+	"time"
 
+	"github.com/SmithOperatingSolutions/snapshot-core/core/blob"
 	"github.com/SmithOperatingSolutions/snapshot-core/core/blob/mem"
 	"github.com/SmithOperatingSolutions/snapshot-core/core/chunk/packstore"
 	"github.com/SmithOperatingSolutions/snapshot-core/core/hash"
@@ -58,5 +62,65 @@ func TestARefreshOfAnUnmovedRootOpensNoManifest(t *testing.T) {
 	}
 	if got, err := reader.Get(ctx, h2); err != nil || string(got) != "second" {
 		t.Fatalf("the reader cannot read the chunk the moved root names: %q, %v", got, err)
+	}
+}
+
+// staleRoot answers its first root reads with an older root, as a reader
+// does that read the root and then loaded its index objects only after
+// newer manifests had replaced them and the replaced ones were deleted.
+type staleRoot struct {
+	blob.BlobStore
+	stale blob.Root
+	left  int
+}
+
+func (s *staleRoot) Root(ctx context.Context) (blob.Root, error) {
+	if s.left > 0 {
+		s.left--
+		return s.stale, nil
+	}
+	return s.BlobStore.Root(ctx)
+}
+
+// A manifest names index objects that a newer one may replace, and the
+// replaced ones are deleted once no manifest names them: by GC a grace
+// window after it rewrote them, and at any time once they are orphans. A
+// refresh that read the older manifest and then finds one of its index
+// objects gone reads the root again and, finding it moved, loads the
+// newer manifest instead of failing. A listed object gone from a root that
+// has not moved is still an error.
+func TestARefreshThatLosesAnIndexObjectToANewerManifestReadsIt(t *testing.T) {
+	bs, kr := mem.New(), keyring(t)
+	hs := published(t, open(t, bs, kr), "a, the root", "b, garbage", "c, live")
+	old, err := bs.Root(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	replaced := objects(t, bs, "index/")
+	live := liveSet(hs[0], hs[2])
+	round(t, bs, kr, live, t0)
+	round(t, bs, kr, live, t0.Add(time.Hour)) // b's pack expires: the index objects are rewritten
+	out := round(t, bs, kr, live, t0.Add(2*time.Hour))
+	if len(out.Expired) != len(replaced) {
+		t.Fatalf("fixture: the round expired %v, want the %d replaced index objects", out.Expired, len(replaced))
+	}
+	remove(t, bs, out.Expired)
+
+	s, err := packstore.Open(ctx, packstore.WithBackoff(packstore.Options{Blobs: &staleRoot{BlobStore: bs, stale: old, left: 1}, Keys: kr, Repo: repo}, time.Millisecond))
+	if err != nil {
+		t.Fatalf("opening a store whose first root read names index objects since replaced and deleted: %v; it must read the newer manifest", err)
+	}
+	t.Cleanup(func() { _ = s.Close() })
+	for _, h := range []hash.Hash{hs[0], hs[2]} {
+		if _, err := s.Get(ctx, h); err != nil {
+			t.Fatalf("that store cannot read the live chunk %s: %v", h.Short(), err)
+		}
+	}
+
+	// Positive control: an object the current manifest lists, gone, is an
+	// error, whatever the retries.
+	remove(t, bs, objects(t, bs, "index/"))
+	if _, err := packstore.Open(ctx, packstore.Options{Blobs: bs, Keys: kr, Repo: repo}); !errors.Is(err, blob.ErrNotFound) {
+		t.Fatalf("opening a store whose manifest lists an index object that is gone = %v, want ErrNotFound", err)
 	}
 }
