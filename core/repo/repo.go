@@ -267,7 +267,8 @@ func Init(ctx context.Context, p auth.Principal, o Options) (*Repo, error) {
 func configName(id seal.RepoID) string { return configPrefix + hex.EncodeToString(id[:]) }
 
 func packOptions(o Options, c Config) packstore.Options {
-	return packstore.Options{Blobs: blob.NoDelete(o.Blobs), Keys: o.Keys, Repo: c.RepoID, PackSize: c.Geometry.PackSize}
+	return packstore.Options{Blobs: blob.NoDelete(o.Blobs), Keys: o.Keys, Repo: c.RepoID, PackSize: c.Geometry.PackSize,
+		Journal: o.Journal, JournalInterval: o.JournalInterval}
 }
 
 // configs reads the store's configs in name order: those that open under
@@ -314,7 +315,11 @@ func current(ctx context.Context, o Options) (Config, error) {
 		return Config{}, ErrNoRepo
 	}
 	for _, c := range ours {
-		chunks, err := packstore.Open(ctx, packOptions(o, c))
+		// A probe: it needs the manifest to authenticate, not the journal
+		// (a writer beside it may hold that, GC's probe included).
+		po := packOptions(o, c)
+		po.Journal = false
+		chunks, err := packstore.Open(ctx, po)
 		if errors.Is(err, packstore.ErrManifest) {
 			continue // the root is not this config's: another Init's, or a race it lost
 		}

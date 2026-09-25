@@ -5871,3 +5871,17 @@ find: string(magic) != journalPlainMagic || v != journalV1 ||
 replace: string(magic) == "" || v != journalV1 ||
 pkg: ./core/chunk/packstore
 run: ^TestForgedJournalRecordsAreRefused$
+
+id: repo-journal-option-reaches-the-chunk-layer
+file: core/repo/repo.go
+find: \t\tJournal: o.Journal, JournalInterval: o.JournalInterval}
+replace: \t\tJournalInterval: o.JournalInterval}
+pkg: ./core/repo
+run: ^TestARepositoryOpenedWithTheJournalCommitsThroughIt$
+
+id: repo-probe-opens-without-the-journal
+file: core/repo/repo.go
+find: \t\tpo.Journal = false\n
+replace: 
+pkg: ./core/repo
+run: ^TestARepositoryOpenedWithTheJournalCommitsThroughIt$

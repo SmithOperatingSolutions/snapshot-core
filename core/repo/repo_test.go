@@ -1144,7 +1144,7 @@ func TestARepositoryOpenedWithTheJournalCommitsThroughIt(t *testing.T) {
 			head.Hash.Short(), err, before.Hash.Short())
 	}
 	_ = other.Close()
-	if _, err := repo.GC(ctx, alice, o, time.Hour); err != nil {
+	if _, err := repo.GC(ctx, alice, oj, time.Hour); err != nil { // the host's own options, journal and all
 		t.Fatalf("GC beside a repository holding the journal: %v", err)
 	}
 	if err := rj.Close(); err != nil {
