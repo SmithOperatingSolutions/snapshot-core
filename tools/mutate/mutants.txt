@@ -5060,3 +5060,38 @@ find: if r.Err() != nil {\n\t\t\tbreak // refused below
 replace: if false {\n\t\t\tbreak // refused below
 pkg: ./core/vcs
 run: ^TestRegression_SC26_ATruncatedConflictIsRefusedWithoutFillingItsClaim$
+
+id: cache-entry-serves-only-its-name
+file: core/blob/cache/cache.go
+find: if r.Err() != nil || string(magic) != entryMagic || string(n) != name {
+replace: if r.Err() != nil || string(magic) != entryMagic || (string(n) != name && false) {
+pkg: ./core/blob/cache
+run: ^FuzzDecodeEntry$
+
+id: cache-entry-magic-checked
+file: core/blob/cache/cache.go
+find: if r.Err() != nil || string(magic) != entryMagic || string(n) != name {
+replace: if r.Err() != nil || (string(magic) != entryMagic && false) || string(n) != name {
+pkg: ./core/blob/cache
+run: ^FuzzDecodeEntry$
+
+id: cache-entry-sum-checked-fuzzed
+file: core/blob/cache/cache.go
+find: if got := sha256.Sum256(content); !bytes.Equal(got[:], sum) {
+replace: if got := sha256.Sum256(content); !bytes.Equal(got[:], sum) && false {
+pkg: ./core/blob/cache
+run: ^FuzzDecodeEntry$
+
+id: cache-header-name-valid
+file: core/blob/cache/cache.go
+find: if r.Err() != nil || string(magic) != entryMagic || blob.ValidName(string(name)) != nil {
+replace: if r.Err() != nil || string(magic) != entryMagic {
+pkg: ./core/blob/cache
+run: ^FuzzDecodeEntry$
+
+id: cache-header-magic-checked
+file: core/blob/cache/cache.go
+find: if r.Err() != nil || string(magic) != entryMagic || blob.ValidName(string(name)) != nil {
+replace: if r.Err() != nil || (string(magic) != entryMagic && false) || blob.ValidName(string(name)) != nil {
+pkg: ./core/blob/cache
+run: ^FuzzDecodeEntry$
