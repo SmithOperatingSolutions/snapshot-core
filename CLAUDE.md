@@ -24,7 +24,12 @@ wins where they disagree.
 - A measurement is never a red: a performance change lands as `refactor:`
   with before/after figures in the body; its timing test is a regression
   guard with headroom, committed as `chore:`.
+- A resource bug (memory, time, a loop) is proven by a red that fails a
+  small budget (an allocation delta, a work counter, growth between two
+  sizes), never by reproducing the blow-up.
 - `mise run redcheck` must pass for the branch before calling work done.
+- Open work, questions and decisions to revisit are GitHub issues, not notes
+  in a document. Push, open a PR, merge or tag only when asked.
 - Keep `docs/PROGRESS.md` current: update it at every milestone boundary and
   whenever a spec checklist item turns green (name the test that proves it).
 
@@ -37,6 +42,12 @@ mise run ci:quick     # fmt, vet, lint, race
 mise run mutate       # every checked-in mutant must be killed
 go test ./core/dnx/compat -update   # regenerate CDC goldens (only if disknexus and the reference agree)
 ```
+
+Heavy runs (race, fuzz, mutate, slow, crash) go under a memory cap of their
+own on a shared machine, so a runaway kills only itself:
+`systemd-run --user --scope -q -p MemoryMax=6G -p MemorySwapMax=0 <cmd>`.
+The race suite needs `GOFLAGS=-p=1` under 6 GiB (#33). Never run `mise run ci`
+on a shared machine without `-only`.
 
 ## Rules the build enforces (do not work around them)
 
