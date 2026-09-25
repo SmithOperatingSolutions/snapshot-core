@@ -25,6 +25,10 @@ type shape struct {
 	limit   uint64
 }
 
+// reads is what a reader must read: chunks, once per place each stands,
+// and their bytes.
+type reads struct{ places, bytes uint64 }
+
 type snode struct {
 	level int
 	es    []ientry
@@ -112,18 +116,18 @@ func buildShape(t *testing.T, in []byte) shape {
 }
 
 // expand is the stream's bytes by the documented rules alone (DESIGN §7),
-// or false where a reader must refuse it. It adds to *cost the bytes of
-// every chunk it looks at, once for each place the chunk stands, up to the
-// first it refuses: what a reader that reads each node once per place, and
-// in order, must read.
-func (sh shape) expand(h hash.Hash, depth int, want uint64, top bool, cost *uint64) ([]byte, bool) {
+// or false where a reader must refuse it. It adds to r the chunks it looks
+// at, once for each place each stands, up to the first it refuses: what a
+// reader that reads each node once per place, and in order, must read.
+func (sh shape) expand(h hash.Hash, depth int, want uint64, top bool, r *reads) ([]byte, bool) {
 	d, isData := sh.data[h]
 	n, isNode := sh.nodes[h]
+	r.places++
 	switch {
 	case isData:
-		*cost += uint64(len(d))
+		r.bytes += uint64(len(d))
 	case isNode:
-		*cost += uint64(len(n.enc))
+		r.bytes += uint64(len(n.enc))
 		d = n.enc // read as data, a node is its bytes
 	}
 	if depth == 0 {
@@ -144,7 +148,7 @@ func (sh shape) expand(h hash.Hash, depth int, want uint64, top bool, cost *uint
 	}
 	var out []byte
 	for _, e := range n.es {
-		b, ok := sh.expand(e.child, depth-1, e.size, false, cost)
+		b, ok := sh.expand(e.child, depth-1, e.size, false, r)
 		if !ok {
 			return nil, false
 		}
@@ -174,13 +178,14 @@ func FuzzStreamStructure(f *testing.F) {
 		var got []byte
 		var err error
 		used := allocated(func() { got, err = stream.ReadAll(ctx, sh.s, sh.ref, sh.limit) })
-		want, valid, cost := []byte(nil), false, uint64(0)
+		var r reads
+		want, valid := []byte(nil), false
 		if sh.ref.Size <= sh.limit {
 			if sh.ref.Size == 0 {
 				d, ok := sh.data[sh.ref.Root]
 				valid = ok && len(d) == 0 && sh.ref.Depth == 0
 			} else {
-				want, valid = sh.expand(sh.ref.Root, int(sh.ref.Depth), sh.ref.Size, true, &cost)
+				want, valid = sh.expand(sh.ref.Root, int(sh.ref.Depth), sh.ref.Size, true, &r)
 			}
 		}
 		switch {
@@ -199,12 +204,14 @@ func FuzzStreamStructure(f *testing.F) {
 			}
 		}
 		// A read allocates what it reads, each chunk once per place it
-		// stands (the store's copy, a node's decoded entries), and a buffer
-		// growing to what it hands back (under four times that, summed over
-		// its doublings), whatever the tree repeats.
-		if bound := 4*uint64(len(got)) + 3*cost + 256<<10; used > bound {
+		// stands (the store's copy, a node's decoded entries, a little for
+		// each read: more under the race detector), and a buffer growing to
+		// what it hands back (under four times that, summed over its
+		// doublings), whatever the tree repeats.
+		if bound := 4*uint64(len(got)) + 3*r.bytes + 2<<10*r.places + 256<<10; used > bound {
 			t.Fatalf("reading a %d-byte stream (Ref %+v, stored in %d chunks) allocated %d bytes; "+
-				"its chunks, once per place they stand, are %d bytes; want at most %d", len(got), sh.ref, len(sh.data)+len(sh.nodes), used, cost, bound)
+				"its chunks, once per place they stand, are %d bytes in %d places; want at most %d",
+				len(got), sh.ref, len(sh.data)+len(sh.nodes), used, r.bytes, r.places, bound)
 		}
 		seen := map[hash.Hash]bool{}
 		calls := 0
