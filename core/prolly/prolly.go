@@ -84,6 +84,10 @@ type Map struct {
 	root   hash.Hash
 	count  uint64
 	height int
+	// top is the root node, decoded and checked when the map was made:
+	// the map is immutable, so every operation starts from it rather than
+	// reading the root again.
+	top *node
 	// flushed is set on a map a flush made: the root it edited and the
 	// keys it changed, in key order.
 	flushed bool
@@ -101,7 +105,7 @@ func Empty(ctx context.Context, s chunk.ReadWriter, c Config) (*Map, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &Map{s: s, cfg: c, rule: rule, root: h}, nil
+	return &Map{s: s, cfg: c, rule: rule, root: h, top: &node{}}, nil
 }
 
 // Open returns the map whose root node is root.
@@ -118,7 +122,7 @@ func Open(ctx context.Context, s chunk.ReadWriter, c Config, root hash.Hash) (*M
 	if n.level > 0 && len(n.entries) < 2 {
 		return nil, corrupt("the root has one child")
 	}
-	m.count, m.height = n.total(), n.level
+	m.count, m.height, m.top = n.total(), n.level, n
 	return m, nil
 }
 
@@ -132,6 +136,9 @@ func (m *Map) Count() uint64 { return m.count }
 func (m *Map) Height() int { return m.height }
 
 func (m *Map) read(ctx context.Context, h hash.Hash) (*node, error) {
+	if h == m.root && m.top != nil {
+		return m.top, nil
+	}
 	b, err := m.s.Get(ctx, h)
 	if err != nil {
 		return nil, err

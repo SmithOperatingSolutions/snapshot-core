@@ -281,5 +281,5 @@ func (m *Map) applyRoot(ctx context.Context, root *node, edits []edit, changed *
 }
 
 func (m *Map) with(root hash.Hash, n *node) *Map {
-	return &Map{s: m.s, cfg: m.cfg, rule: m.rule, root: root, count: n.total(), height: n.level}
+	return &Map{s: m.s, cfg: m.cfg, rule: m.rule, root: root, count: n.total(), height: n.level, top: n}
 }

@@ -5439,3 +5439,17 @@ find: return r.commit(ctx, p, branch, prev, n.Root(), n, message)
 replace: return r.commit(ctx, p, branch, prev, n.Root(), nil, message)
 pkg: ./core/vcs
 run: ^TestCommitNamespaceReadsNoNamespaceNode$
+
+id: prolly-map-holds-its-root
+file: core/prolly/prolly.go
+find: if h == m.root && m.top != nil {
+replace: if false && h == m.root && m.top != nil {
+pkg: ./core/prolly
+run: ^TestTheRootIsReadOnceWhenTheMapIsMade$
+
+id: prolly-flushed-map-holds-its-root
+file: core/prolly/flush.go
+find: height: n.level, top: n}
+replace: height: n.level}
+pkg: ./core/prolly
+run: ^TestTheRootIsReadOnceWhenTheMapIsMade$
