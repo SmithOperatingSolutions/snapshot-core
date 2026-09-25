@@ -4778,3 +4778,68 @@ find: \tcase <-ctx.Done():\n\tcase <-t.C:
 replace: \tcase <-t.C:
 pkg: ./core/vcs
 run: ^TestAPauseEndsWithItsContext$
+
+# aging: a refresh of an unmoved root, index compaction, pending pack sizing
+
+id: aging-an-unmoved-root-is-not-reopened
+file: core/chunk/packstore/packstore.go
+find: unmoved := r.Version != blob.NoVersion && r.Version == s.ver
+replace: unmoved := false
+pkg: ./core/chunk/packstore
+run: ^TestARefreshOfAnUnmovedRootOpensNoManifest$
+
+id: aging-a-lost-index-object-rereads-the-root
+file: core/chunk/packstore/packstore.go
+find: if rerr != nil || again.Version == r.Version {
+replace: if rerr != nil || again.Version == again.Version {
+pkg: ./core/chunk/packstore
+run: ^TestARefreshThatLosesAnIndexObjectToANewerManifestReadsIt$
+
+id: aging-a-full-tier-is-merged
+file: core/chunk/packstore/compact.go
+find: if len(tiers[k]) < compactFanIn {
+replace: if true {
+pkg: ./core/chunk/packstore
+run: ^TestPublishesCompactSmallIndexObjects$
+
+id: aging-merged-objects-leave-the-list
+file: core/chunk/packstore/compact.go
+find: for _, sum := range list {\n\t\tif !gone[sum] {
+replace: for _, sum := range list {\n\t\tif true {
+pkg: ./core/chunk/packstore
+run: ^TestPublishesCompactSmallIndexObjects$
+
+id: aging-merged-objects-join-the-list
+file: core/chunk/packstore/compact.go
+find: for _, obj := range c.written {\n\t\tif !gone[obj.sum] {
+replace: for _, obj := range c.written {\n\t\tif false {
+pkg: ./core/chunk/packstore
+run: ^TestPublishesCompactSmallIndexObjects$
+
+id: aging-large-objects-are-not-merged
+file: core/chunk/packstore/compact.go
+find: if est, ok := sizes[sum]; ok && est < smallIndexObject {
+replace: if est, ok := sizes[sum]; ok {
+pkg: ./core/chunk/packstore
+run: ^TestLargeIndexObjectsAreNotMerged$
+
+id: aging-a-reader-skips-packs-it-holds-in-memory
+file: core/chunk/packstore/packstore.go
+find: if s.mem.HasPack(info.Name) {
+replace: if false && s.mem.HasPack(info.Name) {
+pkg: ./core/chunk/packstore
+run: ^TestAReaderOfCompactedIndexObjectsIndexesEachPackOnce$
+
+id: aging-a-reader-skips-packs-in-its-table
+file: core/chunk/packstore/packstore.go
+find: err == nil && s.disk.listed[sum] {
+replace: err == nil && s.disk.listed[sum] && false {
+pkg: ./core/chunk/packstore
+run: ^TestAReaderOfCompactedIndexObjectsIndexesEachPackOnce$
+
+id: aging-a-pending-pack-starts-small
+file: core/chunk/packstore/packstore.go
+find: s.o.PackSize, max(s.lastPack, minPending))
+replace: s.o.PackSize, s.o.PackSize)
+pkg: ./core/chunk/packstore
+run: ^TestSmallCommitsAllocateForSmallPacks$

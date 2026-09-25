@@ -273,3 +273,41 @@ func TestSmallCommitsAllocateForSmallPacks(t *testing.T) {
 		t.Fatalf("a one-chunk commit allocates %d KiB, want under 2 MiB: its pending pack is sized at the pack (%d MiB), not at what it holds", per>>10, packstore.DefaultPackSize>>20)
 	}
 }
+
+// An index object of 512 KiB or more (estimated) is large: merging it
+// again would rewrite most of a repository's index for a few new entries,
+// so no publish does. Nine publishes of 8,300 chunks each write nine large
+// objects, and the manifest keeps listing all nine, every chunk reading.
+func TestLargeIndexObjectsAreNotMerged(t *testing.T) {
+	const publishes, perPublish = 9, 8300 // one more than a tier merges at
+	bs, kr := mem.New(), keyring(t)
+	s := open(t, bs, kr)
+	root := hash.Hash{}
+	var hs []hash.Hash
+	for p := range publishes {
+		for i := range perPublish {
+			h, err := s.Put(ctx, []byte(fmt.Sprintf("publish %d chunk %d", p, i)))
+			if err != nil {
+				t.Fatal(err)
+			}
+			hs = append(hs, h)
+		}
+		if err := s.CompareAndSetRoot(ctx, root, hs[len(hs)-1]); err != nil {
+			t.Fatalf("publish %d: %v", p, err)
+		}
+		root = hs[len(hs)-1]
+	}
+	n, err := packstore.IndexObjects(ctx, packstore.Options{Blobs: bs, Keys: kr, Repo: repo})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n != publishes {
+		t.Fatalf("%d publishes of %d chunks each leave %d index objects, want %d: large objects must not be merged", publishes, perPublish, n, publishes)
+	}
+	fresh := open(t, bs, kr)
+	for _, h := range hs {
+		if _, err := fresh.Get(ctx, h); err != nil {
+			t.Fatalf("chunk %s does not read: %v", h.Short(), err)
+		}
+	}
+}
