@@ -115,6 +115,10 @@ func Write(ctx context.Context, w chunk.Writer, r io.Reader, c Config) (Ref, err
 	}
 }
 
+// WithLen returns r with a size hint: n, the length its caller expects the
+// stream to have (#41).
+func WithLen(r io.Reader, n int) io.Reader { return r }
+
 // shortStream is the length under which a stream that says how long it is
 // (cdc.Lener) is cut and stored on the caller's goroutine (#40). Starting
 // the pipeline's goroutines and read blocks cost more than such a stream's

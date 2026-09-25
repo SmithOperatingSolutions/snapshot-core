@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"runtime"
 	"sync/atomic"
 	"testing"
@@ -170,4 +171,51 @@ func TestRegression_SC40_AShortStreamAllocatesWhatItNeeds(t *testing.T) {
 		t.Fatalf("writing %d %d-byte objects allocated %d bytes apiece, want under %d: a small object pays for buffers sized to the geometry, or for the parallel path", objects, size, per, budget)
 	}
 	t.Logf("%d bytes allocated per %d-byte object", used/objects, size)
+}
+
+// #41: a reader that does not say its length (a network stream, a pipe,
+// io.MultiReader) still started the parallel path for a single chunk,
+// about 80 µs per small object where a bytes.Reader took 7. A host that
+// knows the length hints it, and the stream is written as a bytes.Reader
+// one is: on the caller's goroutine, no chunk through a worker, allocating
+// under the same 8 KiB apiece, and stored as the serial path stores it.
+func TestRegression_SC41_AHintedShortStreamWritesLikeABytesReader(t *testing.T) {
+	const objects, size, budget = 1000, 100, 8 << 10
+	cfg := stream.DefaultConfig()
+	bodies := make([][]byte, objects)
+	serial := make([]stream.Ref, objects)
+	ref := newStore()
+	cfg.Workers = 1
+	for i := range bodies {
+		bodies[i] = random(fmt.Sprintf("sc41/%d", i), size)
+		serial[i] = write(t, ref, bodies[i], cfg)
+	}
+	s := &preparing{counting: newStore()}
+	cfg.Workers = 4 // the parallel path, whatever this machine's cores
+	refs := make([]stream.Ref, objects)
+	var err error
+	used := allocated(func() {
+		for i, b := range bodies {
+			r := struct{ io.Reader }{bytes.NewReader(b)} // says nothing of its length
+			if refs[i], err = stream.Write(ctx, s, stream.WithLen(r, size), cfg); err != nil {
+				return
+			}
+		}
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i, r := range refs {
+		got, err := stream.ReadAll(ctx, s, r, size)
+		if r != serial[i] || err != nil || !bytes.Equal(got, bodies[i]) {
+			t.Fatalf("object %d: stored as %+v (the serial path: %+v), reads back %d bytes, %v", i, r, serial[i], len(got), err)
+		}
+	}
+	if n := s.viaWorkers.Load(); n != 0 {
+		t.Fatalf("%d of %d hinted 100-byte objects' chunks went through the parallel path's workers, want none: a host that hints a small object's length still pays for the pipeline", n, objects)
+	}
+	if per := used / objects; per > budget {
+		t.Fatalf("writing %d hinted %d-byte objects allocated %d bytes apiece, want under %d as from a bytes.Reader: the hint did not size the write", objects, size, per, budget)
+	}
+	t.Logf("%d bytes allocated per hinted %d-byte object", used/objects, size)
 }
