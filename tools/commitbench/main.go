@@ -110,7 +110,7 @@ func run() int {
 	flag.DurationVar(&c.duration, "duration", 20*time.Second, "length of each single-writer and concurrent run (the owner's bound: a run takes under a minute)")
 	flag.IntVar(&c.bulkMiB, "bulk", 256, "MiB written before the bulk run's commit")
 	flag.StringVar(&c.cpuprofile, "cpuprofile", "", "write a CPU profile of the single-writer run on the first backend here (without -only single: of the first batch run's write phase)")
-	flag.StringVar(&c.memprofile, "memprofile", "", "write an allocation profile of the first batch run's write phase on the first backend here (with -only batch)")
+	flag.StringVar(&c.memprofile, "memprofile", "", "write an allocation profile on the first backend here: of the first batch run's write phase with -only batch, else of the single-writer run with -cpuprofile")
 	flag.IntVar(&c.objectSize, "object", 100, "bytes in each small object")
 	flag.StringVar(&c.reader, "reader", "lener", "how the batch run hands each object to the write: lener (a strings.Reader), plain (a reader without a length), hinted (plain, with stream.WithLen)")
 	flag.Parse()
@@ -479,6 +479,8 @@ func single(c config, backend, profile string) (row, string, error) {
 		defer pprof.StopCPUProfile()
 	}
 	var lat []time.Duration
+	var m0, m1 runtime.MemStats
+	runtime.ReadMemStats(&m0)
 	t0 := time.Now()
 	deadline := t0.Add(c.duration)
 	for i := 0; time.Now().Before(deadline); i++ {
@@ -489,12 +491,33 @@ func single(c config, backend, profile string) (row, string, error) {
 		lat = append(lat, time.Since(s))
 	}
 	el := time.Since(t0)
+	runtime.ReadMemStats(&m1)
 	if profile != "" {
 		pprof.StopCPUProfile()
+		if c.memprofile != "" && !c.only["batch"] {
+			if err := writeAllocs(c.memprofile); err != nil {
+				return row{}, "", err
+			}
+		}
 	}
 	r := row{backend: backend, run: "one writer", writers: 1, count: len(lat), rate: float64(len(lat)) / el.Seconds(),
 		p50: percentile(lat, .5), p99: percentile(lat, .99), lost: e.counted.lost.Load()}
-	return r, breakdown(e, len(lat), el), nil
+	n := uint64(len(lat))
+	bd := breakdown(e, len(lat), el) + fmt.Sprintf("| allocated, per commit | %d KiB | %d objects |\n", (m1.TotalAlloc-m0.TotalAlloc)/n>>10, (m1.Mallocs-m0.Mallocs)/n)
+	return r, bd, nil
+}
+
+// writeAllocs writes the allocation profile to path.
+func writeAllocs(path string) error {
+	f, err := os.Create(path)
+	if err != nil {
+		return err
+	}
+	if err := pprof.Lookup("allocs").WriteTo(f, 0); err != nil {
+		_ = f.Close()
+		return err
+	}
+	return f.Close()
 }
 
 // breakdown is where a commit's time went, per commit.
@@ -634,15 +657,7 @@ func (p profiles) start() (func() error, error) {
 		if p.mem == "" {
 			return nil
 		}
-		f, err := os.Create(p.mem)
-		if err != nil {
-			return err
-		}
-		if err := pprof.Lookup("allocs").WriteTo(f, 0); err != nil {
-			_ = f.Close()
-			return err
-		}
-		return f.Close()
+		return writeAllocs(p.mem)
 	}, nil
 }
 
