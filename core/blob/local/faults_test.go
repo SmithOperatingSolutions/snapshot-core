@@ -395,3 +395,25 @@ func TestOpenReportsUnreadableMarkersAndDetectorFailures(t *testing.T) {
 		t.Fatalf("Open failed because the temp sweep could not read tmp/: %v", err)
 	}
 }
+
+// A journal the filesystem will not open (here a directory where the file
+// belongs) is that error, never ErrJournalBusy: a writer would wait for a
+// holder that does not exist, and a publish would refuse for one (#34).
+func TestAJournalThatWillNotOpenIsItsError(t *testing.T) {
+	s, _ := newStore(t)
+	if j, err := s.OpenJournal(ctx); err != nil {
+		t.Fatalf("positive control: OpenJournal: %v", err)
+	} else {
+		_ = j.Close()
+	}
+	s2, dir2 := newStore(t)
+	if err := os.Mkdir(filepath.Join(dir2, "journal"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s2.OpenJournal(ctx); err == nil || errors.Is(err, blob.ErrJournalBusy) {
+		t.Fatalf("OpenJournal where the journal is a directory = %v, want the filesystem's error", err)
+	}
+	if _, _, err := s2.HoldJournal(ctx); err == nil || errors.Is(err, blob.ErrJournalBusy) {
+		t.Fatalf("HoldJournal where the journal is a directory = %v, want the filesystem's error", err)
+	}
+}
