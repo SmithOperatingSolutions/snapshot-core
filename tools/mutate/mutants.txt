@@ -159,6 +159,20 @@ replace: if c.full >= 1 { // it yields more than it said it held (#41)
 pkg: ./core/stream
 run: ^TestRegression_SC41_AHintedShortStreamWritesLikeABytesReader$
 
+id: stream-hint-never-stops-a-read
+file: core/stream/stream.go
+find: n, err := h.r.Read(p)
+replace: n, err := h.r.Read(p[:min(len(p), h.left)])
+pkg: ./core/stream
+run: ^TestRegression_SC41_AWrongHintStoresTheSameStream$
+
+id: stream-hint-reports-what-is-left
+file: core/stream/stream.go
+find: func (h *hinted) Len() int { return max(h.left, 0) }
+replace: func (h *hinted) Len() int { return 0 }
+pkg: ./core/stream
+run: ^TestRegression_SC41_AWrongHintStoresTheSameStream$
+
 id: wire-varint-minimal
 file: core/wire/wire.go
 find: case n > 1 && r.b[r.off+n-1] == 0:

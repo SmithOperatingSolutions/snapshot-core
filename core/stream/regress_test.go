@@ -219,3 +219,39 @@ func TestRegression_SC41_AHintedShortStreamWritesLikeABytesReader(t *testing.T) 
 	}
 	t.Logf("%d bytes allocated per hinted %d-byte object", used/objects, size)
 }
+
+// #41: a wrong size hint chooses a path, never a cut. A 1 MiB stream
+// hinted at 1 byte takes the serial path and a 100-byte one hinted at
+// 1 GiB the parallel path; each is stored exactly as a bytes.Reader of the
+// same bytes is, and reads back whole.
+func TestRegression_SC41_AWrongHintStoresTheSameStream(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		size, hint int
+		viaWorkers bool
+	}{
+		{"hint smaller than the stream", 1 << 20, 1, false},
+		{"hint larger than the stream", 100, 1 << 30, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			body := random("sc41-wrong/"+tc.name, tc.size)
+			cfg := stream.DefaultConfig()
+			cfg.Workers = 1
+			want := write(t, newStore(), body, cfg)
+			s := &preparing{counting: newStore()}
+			cfg.Workers = 4
+			r := struct{ io.Reader }{bytes.NewReader(body)}
+			got, err := stream.Write(ctx, s, stream.WithLen(r, tc.hint), cfg)
+			if err != nil {
+				t.Fatalf("a %d-byte stream hinted at %d bytes: %v", tc.size, tc.hint, err)
+			}
+			back, err := stream.ReadAll(ctx, s, got, uint64(tc.size))
+			if got != want || err != nil || !bytes.Equal(back, body) {
+				t.Fatalf("a %d-byte stream hinted at %d bytes is stored as %+v, a bytes.Reader of it as %+v; reads back %d bytes, %v: a wrong hint changed what is stored", tc.size, tc.hint, got, want, len(back), err)
+			}
+			if w := s.viaWorkers.Load() > 0; w != tc.viaWorkers {
+				t.Fatalf("a %d-byte stream hinted at %d bytes: chunks through the workers %v, want %v: the hint did not choose the path", tc.size, tc.hint, w, tc.viaWorkers)
+			}
+		})
+	}
+}
