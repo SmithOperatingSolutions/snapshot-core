@@ -60,6 +60,9 @@ const (
 	indexMagic   = "SCPI"
 	version      = 1
 	sealOverhead = 28 // nonce + tag
+	// minIndexEntry is the shortest encoded index entry: hash, three
+	// one-byte uvarints and the codec.
+	minIndexEntry = hash.Size + 4
 	// maxEntryLen bounds one encoded index entry: hash, three uvarints of at
 	// most 5 bytes each (values < 2^32), the codec byte.
 	maxEntryLen = hash.Size + 3*5 + 1
@@ -369,7 +372,9 @@ func decodeIndex(b []byte, indexOffset uint64) ([]Entry, error) {
 	if r.Err() != nil || string(magic) != indexMagic || v != version || n > MaxChunksPerPack {
 		return nil, fmt.Errorf("%w: index header", ErrCorrupt)
 	}
-	entries := make([]Entry, 0, n)
+	// n is a claim until the entries decode: room for no more than the
+	// bytes left could hold (#24).
+	entries := make([]Entry, 0, min(n, uint64(len(b))/minIndexEntry))
 	for i := uint64(0); i < n; i++ {
 		var e Entry
 		copy(e.Hash[:], r.Fixed(hash.Size))
