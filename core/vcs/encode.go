@@ -205,6 +205,9 @@ func decodeConflict(path string, b []byte) (merge.Conflict, error) {
 	}
 	for i := uint64(0); i < n; i++ {
 		loc, reason := r.LenBytes(maxLocationLen), r.LenBytes(maxReasonLen)
+		if r.Err() != nil {
+			break // refused below for what the bytes hold, not for the claim
+		}
 		c.Model = append(c.Model, model.Conflict{Location: append([]byte(nil), loc...), Reason: string(reason)})
 	}
 	if err := r.Done(); err != nil {

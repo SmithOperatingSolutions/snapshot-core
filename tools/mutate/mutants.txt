@@ -5053,3 +5053,10 @@ find: if int64(len(frame)) > want {
 replace: if false {
 pkg: ./core/chunk/packstore
 run: ^TestRegression_SC26_AnOverrunningBackendIsNotReportedAsCorruptData$
+
+id: vcs-conflict-stops-when-its-bytes-do
+file: core/vcs/encode.go
+find: if r.Err() != nil {\n\t\t\tbreak // refused below
+replace: if false {\n\t\t\tbreak // refused below
+pkg: ./core/vcs
+run: ^TestRegression_SC26_ATruncatedConflictIsRefusedWithoutFillingItsClaim$
