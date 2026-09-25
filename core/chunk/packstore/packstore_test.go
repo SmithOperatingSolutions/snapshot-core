@@ -563,3 +563,9 @@ func crashCommits(t *testing.T, journal bool) {
 		t.Fatal("no commit completed; the harness exercised nothing")
 	}
 }
+
+// kill -9 mid-append and mid-publish (#34): a child committing through the
+// journal, publishing every 3ms, is killed over and over; the reopened
+// store, replaying the journal, is at the last commit that returned or the
+// one in flight, never torn, with its chunk.
+func TestCrashDuringJournaledCommitLeavesOldOrNew(t *testing.T) { crashCommits(t, true) }

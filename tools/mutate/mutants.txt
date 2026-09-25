@@ -5584,3 +5584,24 @@ find: \tJournal:   "vdb/journal/v1",\n
 replace: 
 pkg: ./core/seal
 run: ^TestDomainTagsAreTheDocumentedOnes$
+
+id: packstore-journal-replayed-on-open
+file: core/chunk/packstore/journal.go
+find: if err := s.replay(ctx, j); err != nil {
+replace: if err := error(nil); err != nil {
+pkg: ./core/chunk/packstore
+run: ^TestCrashDuringJournaledCommitLeavesOldOrNew$
+
+id: packstore-journal-first-root-published
+file: core/chunk/packstore/journal.go
+find: if first {\n\t\treturn s.publishJournal(ctx, next) // a repository's first root is published
+replace: if first && false {\n\t\treturn s.publishJournal(ctx, next) // a repository's first root is published
+pkg: ./core/chunk/packstore
+run: ^TestTheFirstRootIsPublished$
+
+id: packstore-journaled-reports-the-journal
+file: core/chunk/packstore/packstore.go
+find: return s.journal != nil\n}
+replace: return true\n}
+pkg: ./core/chunk/packstore
+run: ^TestTheJournalOptionOnABackendWithoutOne$

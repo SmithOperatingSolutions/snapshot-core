@@ -558,3 +558,33 @@ func TestAReplayedJournalEqualsThePublishedState(t *testing.T) {
 		readAll("another process after Close", fresh)
 	})
 }
+
+// A repository's first root is published, never journaled: a journal is
+// only ever replayed over a manifest that authenticated under its key.
+func TestTheFirstRootIsPublished(t *testing.T) {
+	bs, kr := mem.New(), keyring(t)
+	s := openJournaled(t, bs, kr, time.Hour)
+	h := commit(t, s, hash.Hash{}, payload("first", 100))
+	if got := publishedRoot(t, bs, kr); got != h {
+		t.Fatalf("the first root was journaled (the backend's root is %s, want %s)", got.Short(), h.Short())
+	}
+	if n := packstore.JournalRecords(s); n != 0 {
+		t.Fatalf("the first commit left %d records in the journal", n)
+	}
+}
+
+// On a backend without a journal the option changes nothing.
+func TestTheJournalOptionOnABackendWithoutOne(t *testing.T) {
+	bs, kr := noJournal{mem.New()}, keyring(t)
+	s := openJournaled(t, bs, kr, time.Hour)
+	if s.Journaled() {
+		t.Fatal("a store on a backend without a journal says it journals")
+	}
+	first := commit(t, s, hash.Hash{}, payload("first", 100))
+	h := commit(t, s, first, payload("second", 100))
+	if got := publishedRoot(t, bs, kr); got != h {
+		t.Fatalf("on a backend without a journal a commit left the root at %s, want it published at %s", got.Short(), h.Short())
+	}
+}
+
+type noJournal struct{ blob.BlobStore }
