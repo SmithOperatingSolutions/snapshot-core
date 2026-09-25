@@ -95,6 +95,13 @@ func ValidPath(p string) error {
 	return nil
 }
 
+// namespace is c for a namespace's map, whose values are object references:
+// no longer value is read (#23).
+func namespace(c prolly.Config) prolly.Config {
+	c.MaxValue = RefSize
+	return c
+}
+
 // Namespace is an immutable map from path to object.
 type Namespace struct {
 	s   chunk.ReadWriter
@@ -107,7 +114,7 @@ func New(ctx context.Context, s chunk.ReadWriter, c prolly.Config, reg *model.Re
 	if reg == nil {
 		return nil, errors.New("object: a namespace needs a model registry")
 	}
-	m, err := prolly.Empty(ctx, s, c)
+	m, err := prolly.Empty(ctx, s, namespace(c))
 	if err != nil {
 		return nil, err
 	}
@@ -119,7 +126,7 @@ func Open(ctx context.Context, s chunk.ReadWriter, c prolly.Config, reg *model.R
 	if reg == nil {
 		return nil, errors.New("object: a namespace needs a model registry")
 	}
-	m, err := prolly.Open(ctx, s, c, root)
+	m, err := prolly.Open(ctx, s, namespace(c), root)
 	if err != nil {
 		return nil, err
 	}
@@ -267,7 +274,7 @@ func Walk(ctx context.Context, rd chunk.Reader, c prolly.Config, reg *model.Regi
 	if reg == nil {
 		return errors.New("object: a namespace needs a model registry")
 	}
-	return prolly.Walk(ctx, rd, c, root, visit, func(key, val []byte) error {
+	return prolly.Walk(ctx, rd, namespace(c), root, visit, func(key, val []byte) error {
 		path := string(key)
 		if err := ValidPath(path); err != nil {
 			return fmt.Errorf("%w: a stored path: %w", chunk.ErrCorrupt, err)

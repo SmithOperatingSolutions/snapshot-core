@@ -1,6 +1,7 @@
 package vcs
 
 import (
+	"encoding/binary"
 	"fmt"
 	"time"
 	"unicode/utf8"
@@ -11,6 +12,7 @@ import (
 	"github.com/SmithOperatingSolutions/snapshot-core/core/merge"
 	"github.com/SmithOperatingSolutions/snapshot-core/core/model"
 	"github.com/SmithOperatingSolutions/snapshot-core/core/object"
+	"github.com/SmithOperatingSolutions/snapshot-core/core/prolly"
 	"github.com/SmithOperatingSolutions/snapshot-core/core/wire"
 )
 
@@ -27,6 +29,30 @@ const (
 	maxLocationLen    = 4096
 	maxReasonLen      = 1024
 )
+
+// maxConflictRecord is the longest conflict record the limits allow, and so
+// the longest Merge writes (recordable): kind · three sides present ·
+// maxModelConflicts · that many of the longest location and reason.
+// 51,240,144 bytes.
+func maxConflictRecord() int {
+	uv := func(v uint64) int { return len(binary.AppendUvarint(nil, v)) }
+	return 1 + 3*(1+object.RefSize) + uv(maxModelConflicts) +
+		maxModelConflicts*(uv(maxLocationLen)+maxLocationLen+uv(maxReasonLen)+maxReasonLen)
+}
+
+// refsMap is c for a refs map, whose every value is a hash: no longer
+// value is read or taken.
+func refsMap(c prolly.Config) prolly.Config {
+	c.MaxValue = hash.Size
+	return c
+}
+
+// conflictsMap is c for a working set's conflicts map, whose values are
+// conflict records: none longer than Merge writes is read or taken.
+func conflictsMap(c prolly.Config) prolly.Config {
+	c.MaxValue = maxConflictRecord()
+	return c
+}
 
 func corrupt(format string, args ...any) error {
 	return fmt.Errorf("%w: vcs: %s", chunk.ErrCorrupt, fmt.Sprintf(format, args...))
@@ -181,6 +207,25 @@ func encodeConflict(c merge.Conflict) []byte {
 	return w.Bytes()
 }
 
+// recordable refuses a conflict larger than its record holds, under the
+// limits decodeConflict reads it back with: written, it would leave a merge
+// state whose conflicts do not read. The message names neither the path
+// nor the model's text.
+func recordable(c merge.Conflict) error {
+	if len(c.Model) > maxModelConflicts {
+		return fmt.Errorf("%w: %d model conflicts at one path, limit %d", ErrConflictTooLarge, len(c.Model), maxModelConflicts)
+	}
+	for i, mc := range c.Model {
+		if len(mc.Location) > maxLocationLen {
+			return fmt.Errorf("%w: model conflict %d locates itself in %d bytes, limit %d", ErrConflictTooLarge, i, len(mc.Location), maxLocationLen)
+		}
+		if len(mc.Reason) > maxReasonLen {
+			return fmt.Errorf("%w: model conflict %d gives a %d-byte reason, limit %d", ErrConflictTooLarge, i, len(mc.Reason), maxReasonLen)
+		}
+	}
+	return nil
+}
+
 func decodeConflict(path string, b []byte) (merge.Conflict, error) {
 	r := wire.NewReader(b)
 	c := merge.Conflict{Path: path, Kind: merge.Kind(r.U8())}
@@ -205,6 +250,9 @@ func decodeConflict(path string, b []byte) (merge.Conflict, error) {
 	}
 	for i := uint64(0); i < n; i++ {
 		loc, reason := r.LenBytes(maxLocationLen), r.LenBytes(maxReasonLen)
+		if r.Err() != nil {
+			break // refused below for what the bytes hold, not for the claim
+		}
 		c.Model = append(c.Model, model.Conflict{Location: append([]byte(nil), loc...), Reason: string(reason)})
 	}
 	if err := r.Done(); err != nil {

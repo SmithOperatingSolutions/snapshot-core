@@ -88,6 +88,25 @@ type Walker interface {
 	Walk(ctx context.Context, root Root, r chunk.Reader, visit func(h hash.Hash, leaf bool) (bool, error)) error
 }
 
+// Accumulator is a model for which the same change made on both sides of a
+// merge is two changes, not one: a counter each side added one to is two
+// more, not one. It is beside the frozen Model interface, as Walker is. The
+// namespace merge takes the same change on both sides once without asking
+// the model, unless the object's model implements Accumulator and says it
+// accumulates; then the model merges it like any change both sides made.
+// A model's answer must not change while a registry holds it. Its merge of
+// base, ours and ours need not be ours, and model/contract allows that.
+type Accumulator interface {
+	Accumulates() bool
+}
+
+// Accumulates says whether m implements Accumulator and says it
+// accumulates.
+func Accumulates(m Model) bool {
+	a, ok := m.(Accumulator)
+	return ok && a.Accumulates()
+}
+
 // ErrUnknownModel is returned for an object whose model the registry lacks,
 // or whose format is newer than its model knows. Nothing is decoded.
 var ErrUnknownModel = errors.New("model: unknown model or format")
@@ -135,3 +154,13 @@ func (r *Registry) Resolve(id ID, format uint16) (Model, error) {
 
 // IDs lists the registered ids in order.
 func (r *Registry) IDs() []ID { return append([]ID(nil), r.ids...) }
+
+// Accumulates says whether a registered model accumulates (Accumulator).
+func (r *Registry) Accumulates() bool {
+	for _, m := range r.models {
+		if Accumulates(m) {
+			return true
+		}
+	}
+	return false
+}

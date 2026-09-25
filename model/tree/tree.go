@@ -84,8 +84,10 @@ func (Model) ID() model.ID { return ID }
 func (Model) FormatVersion() uint16 { return Format }
 
 // spec is the tree as a map-shaped model: a map from path to entry under a
-// configuration, its records checked as entries under valid paths.
+// configuration, its records checked as entries under valid paths. No
+// record is longer than an entry, so no longer value is read (#23).
 func spec(c prolly.Config) mapobject.Spec {
+	c.MaxValue = EntrySize
 	return mapobject.Spec{Name: "tree", Format: Format, Config: c, Check: func(key, rec []byte) error {
 		_, err := checked(key, rec)
 		return err
@@ -131,7 +133,7 @@ func Read(ctx context.Context, r chunk.Reader, c prolly.Config, root model.Root)
 	if err != nil {
 		return nil, err
 	}
-	out := make(map[string]Entry, m.Count())
+	out := map[string]Entry{} // not sized by m.Count(): the root's claim, checked only as iteration reaches each child (#24)
 	for {
 		k, v, ok, err := it.Next()
 		if err != nil {

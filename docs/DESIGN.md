@@ -192,8 +192,11 @@ can refuse them) and a fuzz target.
   `cdc.Parallel` reads and marks the stream on its own goroutines and the
   caller's places the cuts and stores in stream order, so the stream is
   the same at any worker count; at most about 2×Workers chunks and a few
-  blocks are in flight. The pending pack's buffer is allocated at the
-  pack's size once. Measured on an i7-1360P (`TestSlowThroughputOnLocalDisk`,
+  blocks are in flight. A pending pack's buffer starts at about what the
+  last pending pack held (at least 64 KiB) and doubles as it fills, up to the
+  pack's size: the packs a large write cuts full start the next at the pack's
+  size, so each frame is copied once, and a small publish allocates for a
+  small pack. Measured on an i7-1360P (`TestSlowThroughputOnLocalDisk`,
   the weekly run): a gibibyte of random data writes to `blob/local` at 262
   MB/s where it wrote at 114, compressible text at 485 where it wrote at
   188, a one-byte re-snapshot deduplicates at 322; in memory on sixteen
@@ -207,13 +210,20 @@ can refuse them) and a fuzz target.
   write, which more packs in flight do not raise (measured the same at two,
   four and eight).
 - **CompareAndSetRoot(expected, next)** refuses a `next` that is not a stored
-  chunk, uploads every pending pack, writes one index object for the session's
-  packs, then swaps the manifest (root := next, index list += the session's
-  objects, seq + 1). Every chunk a published root reaches is therefore durable
-  before the manifest names it. If the root moved, `ErrRootConflict` returns at
-  once (the caller re-reads and re-applies); if only the manifest changed
-  (another writer's index objects, GC), it refreshes and retries with jittered
-  backoff, at most 10 attempts (Engine Spec).
+  chunk, then reads the backend's root. A store whose view is at the root's
+  version answers from its cached manifest, and one whose view is behind
+  refreshes. A root that already moved returns `ErrRootConflict` before
+  anything is finished, uploaded or fsynced, and the pending chunks stay for
+  the retry. Otherwise it uploads every pending pack, writes one index object
+  for the session's packs, then swaps the manifest (root := next, index list
+  += the session's objects, seq + 1). Every chunk a published root reaches is
+  therefore durable before the manifest names it. A root that moves after the
+  check still loses at the swap, after the upload: its pack and index object
+  are named by no manifest, and GC collects them as orphans. If only the
+  manifest changed (another writer's index objects, GC), it refreshes and
+  retries with jittered backoff, at most 10 attempts (Engine Spec). The check
+  costs one root read per publish: nothing in memory, a small file read on
+  disk, one GET on S3.
 - **Get** serves from the pending pack, then a byte-bounded LRU, then the
   backend by one range read (the index object carries each pack's salt, so no
   header fetch). A hash the index does not know triggers one manifest refresh.
@@ -242,7 +252,28 @@ can refuse them) and a fuzz target.
   sized to what is left to copy, not to a pack (#14: at the pack's size,
   as the store's pending pack is since #10, it was 32 MiB whatever the
   repack copied).
-- The manifest lists every index object until GC compacts them (§9).
+- **Publishes compact small index objects.** An index object's tier is its
+  estimated size's power of eight over 1 KiB; one of 512 KiB or more is large
+  and never merged again. When a publish finds eight objects in a tier (its
+  own pending ones included), it reads them, writes their packs, as listed,
+  into one object, and swaps in a manifest naming that object in their place,
+  lowest tier first; at most 64 merge in one publish, read sixteen at a time.
+  The manifest lists at most 28 small objects plus the large ones, and a
+  pack's entry is rewritten at most four times. GC rewrites index objects only
+  when a pack expires or is repacked, so without this a repository with no
+  garbage listed one per publish until the manifest refused at 100,000. The
+  new list locates exactly the packs the old one did, each once; a swap that
+  loses leaves the merged objects orphans, GC's swap from a replaced version
+  loses and starts over, and the replaced objects are orphans GC deletes. A
+  refresh that finds a listed object gone reads the root again and, if it
+  moved, refreshes from the newer manifest (at most three in one refresh). A
+  reader loading a merged object skips the packs its index holds already, so
+  nothing counts twice against `IndexInMemory`.
+- **A refresh whose root has not moved opens nothing.** Versions never
+  repeat, so a root whose version the store last took (by its own refresh or
+  publish) is the manifest it holds. What the root read itself costs is the
+  backend's: memory clones the root value, `blob/local` reads the root file,
+  S3 is one GET, `multivol` reads its primary's, `split` its root store's.
 
 *(The prolly tree, the version graph and merge are §7–8; GC is §9.)*
 
@@ -335,6 +366,16 @@ stream ref  root [32] · size · depth
   an index node of level = depth, with more than one child.
 - Reads verify every chunk by SHA-256 (the chunk store) and every size
   against the bytes actually found (`ErrCorrupt`).
+- An index node may name one chunk many times: a run of identical content
+  cuts into identical chunks, so repetition is valid, and a Ref's size can
+  be many times what its chunks store (#23). The format needs no change for
+  it: every entry carries the bytes under it and every read checks the sum,
+  so a read never yields more than the Ref's size. What bounds a reader is
+  its own limit: `ReadAll` takes one and refuses a longer stream with
+  `ErrTooLarge` before reading any of it. A read keeps the checked nodes
+  above the chunk it read last and descends from the deepest that holds the
+  next position, so reading in order reads each index node once per place
+  it stands, not once per chunk beneath it.
 
 ### Editing and diff
 
@@ -360,7 +401,15 @@ stream ref  root [32] · size · depth
   of an iteration or "no difference", and a flush that failed leaves the
   editor's edits in place to retry.
 - Values over the inline limit are written as streams when the editor
-  flushes; `Get`, iteration and `Diff` read them back whole. The map and its
+  flushes; `Get`, iteration, `Diff` and `Walk`'s values read them back
+  whole, up to the map's `MaxValue` (default 64 MiB, a reader's policy and
+  not repo geometry): a longer stream is `ErrValueTooLarge`, refused
+  unread, and the editor refuses a longer value (#23). A model whose
+  records have a known length sets it: the tree to `EntrySize`, a
+  namespace to `RefSize`, the version graph its refs map to a hash's 32
+  bytes and a working set's conflicts map to the longest conflict record
+  Merge writes (§8). No decoder sizes an allocation from a count it
+  has not yet decoded (#24). The map and its
   editor are concrete types, not a port: there is one implementation, and
   the chunk store beneath it is the swappable part.
 
@@ -481,10 +530,16 @@ working set  0x05 · working [32] · staged [32] · merging u8 (0 or 1) ·
   branch with no merge in progress is `ErrNoMerge`. (The two roots joined
   the working set's merge layout before any release; no repository held
   the shorter one.)
-- A writer that loses the root swap re-reads and re-applies, up to 1,000
-  times in a row, then gives up with an error; nothing it did reaches the
-  root. A store error anywhere is the call's error, and leaves the refs as
-  they were.
+- A writer that loses the root swap pauses, then re-reads and re-applies.
+  The pause starts at 200µs and doubles to a 20ms cap, drawn over the upper
+  half of its span, so writers that lost together retry apart;
+  ResolveConflict pauses the same way when the working set changed under it.
+  The bound is 1,000 attempts, not a time: it is deterministic, needs no
+  clock, and gives a slow backend as many tries as a fast one. The capped
+  pause keeps the worst case near 15s, and a caller's context ends it at the
+  next pause. A writer that gives up gets an error of its own, and nothing it
+  did reaches the root. A store error anywhere is the call's error and leaves
+  the refs as they were.
 - Every call takes a `Principal` and asks the `Authorizer` about exactly
   what it does, in six actions: `Read` (refs, commits, objects), `Write` (a
   branch's working set; asked per path too), `Commit` (record what is
@@ -515,9 +570,19 @@ working set  0x05 · working [32] · staged [32] · merging u8 (0 or 1) ·
 - Both diffs (base → ours, base → theirs) stream in path order and are
   zipped; memory stays bounded whatever the size of the namespaces.
 - Per path, the Engine Spec's table: one side changed, take it; both made
-  the same change, take it; both changed the same object under one model,
-  ask that model; an add against a different add, a delete against an edit,
-  or two models for one path, a conflict.
+  the same change, take it, unless the object's model accumulates
+  (`model.Accumulator`, beside the frozen port as Walker is), when that
+  model merges it as two changes (a counter each side added one to is two
+  more); both changed the same object under one model, ask that model; an
+  add against a different add, a delete against an edit, or two models for
+  one path, a conflict. An identical add or change of model is taken once
+  whatever the model.
+- Deviation from the Storage Core Spec ("the driver handles … both sides
+  identical"; the contract's "merge(b, o, o) == o"): the spec's own registry
+  row says kv counters add, which taking an identical increment once
+  contradicts. Identical namespaces are still ours without a read unless the
+  registry holds a model that accumulates; `model/contract` requires such a
+  model's merge(b, o, o) to be clean and valid, not o.
 - Conflicts go into the working set (`conflicts`, a prolly map from path to
   record) so a session can resolve them later; a commit is refused while any
   remain. More than 100,000 is `ErrTooManyConflicts`, and a model's error
@@ -532,6 +597,14 @@ conflict   kind u8 (1 both changed · 2 delete against edit · 3 add against add
            (present u8 · object reference [46]) × 3 (base, ours, theirs) ·
            model conflicts uvarint (≤ 10,000) · (location (≤ 4 KiB) · reason (≤ 1 KiB)) × that many
 ```
+
+Merge refuses a conflict over any of these limits before it writes
+anything (`ErrConflictTooLarge`, #27), so the longest record it writes is
+51,240,144 bytes: every side present, 10,000 model conflicts, each with the
+longest location and reason. The conflicts map reads and takes no longer
+value (`maxConflictRecord`, derived from the layout and the limits), and
+the refs map none longer than a hash, each refused unread as
+`prolly.ErrValueTooLarge`.
 
 ## 9. Garbage collection (C4, `core/gc`)
 

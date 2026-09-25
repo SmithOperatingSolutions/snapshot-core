@@ -812,10 +812,10 @@ run: ^TestForgedIndexesAreRefused$
 
 id: pack-index-frames-in-region
 file: core/pack/pack.go
-find: case stored < sealOverhead || off+stored > indexOffset:
+find: case stored < sealOverhead || off > indexOffset:
 replace: case stored < sealOverhead:
 pkg: ./core/pack
-run: ^TestForgedIndexesAreRefused$
+run: ^TestRegression_SC26_APacksFramesEndAtItsIndex$
 
 id: pack-index-frames-clear-the-header
 file: core/pack/pack.go
@@ -903,15 +903,15 @@ run: ^TestForgedObjectsAreRefused$
 
 id: dedup-frames-inside-the-pack
 file: core/dedup/dedup.go
-find: off < pack.HeaderSize || off+stored > framesEnd ||
-replace: off < pack.HeaderSize || off+stored > framesEnd+1<<40 ||
+find: r.Err() != nil || off > framesEnd || stored > framesEnd-off ||
+replace: r.Err() != nil || off > framesEnd+1<<40 || stored > framesEnd+1<<40-off ||
 pkg: ./core/dedup
-run: ^TestForgedObjectsAreRefused$
+run: ^TestRegression_SC26_AnEntryCannotWrapIntoPlace$
 
 id: dedup-frames-clear-the-header
 file: core/dedup/dedup.go
-find: r.Err() != nil || off < pack.HeaderSize ||
-replace: r.Err() != nil ||
+find: end := uint64(pack.HeaderSize)
+replace: end := uint64(0)
 pkg: ./core/dedup
 run: ^TestForgedObjectsAreRefused$
 
@@ -990,7 +990,7 @@ file: core/chunk/packstore/packstore.go
 find: if m.root != expected && attempt == 0 {
 replace: if false && m.root != expected && attempt == 0 {
 pkg: ./core/chunk/packstore
-run: ^TestStaleViewIsRefreshedBeforeAConflict$
+run: ^TestARootThatMovesAndReturnsDuringTheUploadStillPublishes$
 
 id: packstore-verifies-cache-hits
 file: core/chunk/packstore/packstore.go
@@ -1337,15 +1337,15 @@ run: ^TestWriterEmitsTheDocumentedIndexFormat$|^TestAOnePieceStreamIsItsOwnRoot$
 
 id: stream-node-sum-checked
 file: core/stream/stream.go
-find: if sum != want {\n\t\t\treturn nil, 0, corrupt(
-replace: if sum != want && false {\n\t\t\treturn nil, 0, corrupt(
+find: if sum != want {\n\t\treturn held{}, corrupt(
+replace: if sum != want && false {\n\t\treturn held{}, corrupt(
 pkg: ./core/stream
 run: ^TestForgeriesThatWouldReadCleanly$
 
 id: stream-level-matches-depth
 file: core/stream/stream.go
-find: if level != depth {\n\t\t\treturn nil, 0, corrupt(
-replace: if level != depth && false {\n\t\t\treturn nil, 0, corrupt(
+find: if level != depth {\n\t\treturn held{}, corrupt(
+replace: if level != depth && false {\n\t\treturn held{}, corrupt(
 pkg: ./core/stream
 run: ^TestForgeriesThatWouldReadCleanly$
 
@@ -1570,8 +1570,15 @@ run: ^TestStoreErrorsSurfaceAtEveryPoint$
 
 id: stream-read-error-surfaces
 file: core/stream/stream.go
-find: b, err := r.rd.Get(r.ctx, h)\n\t\tif err != nil {
-replace: b, err := r.rd.Get(r.ctx, h)\n\t\tif err != nil && false {
+find: b, err := r.rd.Get(r.ctx, h)\n\tif err != nil {\n\t\treturn held{}, err
+replace: b, err := r.rd.Get(r.ctx, h)\n\tif err != nil && false {\n\t\treturn held{}, err
+pkg: ./core/prolly
+run: ^TestStoreErrorsSurfaceAtEveryPoint$
+
+id: stream-data-read-error-surfaces
+file: core/stream/stream.go
+find: b, err := r.rd.Get(r.ctx, h)\n\t\t\tif err != nil {
+replace: b, err := r.rd.Get(r.ctx, h)\n\t\t\tif err != nil && false {
 pkg: ./core/prolly
 run: ^TestStoreErrorsSurfaceAtEveryPoint$
 
@@ -2230,8 +2237,8 @@ run: ^TestAnInitThatLosesTheRaceIsErrExists$
 
 id: vcs-update-retries
 file: core/vcs/vcs.go
-find: for attempt := 0; attempt < maxAttempts; attempt++ {\n\t\tm, err := r.refs(ctx)
-replace: for attempt := 0; attempt < 1; attempt++ {\n\t\tm, err := r.refs(ctx)
+find: for attempt := 0; attempt < maxAttempts; attempt++ {\n\t\tif attempt > 0 {\n\t\t\tif err := r.pause(ctx, attempt-1); err != nil {\n\t\t\t\treturn err\n\t\t\t}\n\t\t}\n\t\tm, err := r.refs(ctx)
+replace: for attempt := 0; attempt < 1; attempt++ {\n\t\tif attempt > 0 {\n\t\t\tif err := r.pause(ctx, attempt-1); err != nil {\n\t\t\t\treturn err\n\t\t\t}\n\t\t}\n\t\tm, err := r.refs(ctx)
 pkg: ./core/vcs
 run: ^TestAWriterThatKeepsLosingGivesUp$
 
@@ -2454,8 +2461,8 @@ run: ^TestStoreErrorsSurfaceAtEveryPoint$
 
 id: object-open-surfaces-errors
 file: core/object/object.go
-find: m, err := prolly.Open(ctx, s, c, root)\n\tif err != nil {
-replace: m, err := prolly.Open(ctx, s, c, root)\n\tif err != nil && false {
+find: m, err := prolly.Open(ctx, s, namespace(c), root)\n\tif err != nil {
+replace: m, err := prolly.Open(ctx, s, namespace(c), root)\n\tif err != nil && false {
 pkg: ./core/object
 run: ^TestStoreErrorsSurfaceAtEveryPoint$
 
@@ -2482,15 +2489,15 @@ run: ^TestStoreErrorsSurfaceAtEveryPoint$
 
 id: object-new-needs-a-registry
 file: core/object/object.go
-find: if reg == nil {\n\t\treturn nil, errors.New("object: a namespace needs a model registry")\n\t}\n\tm, err := prolly.Empty(ctx, s, c)
-replace: if reg == nil && false {\n\t\treturn nil, errors.New("object: a namespace needs a model registry")\n\t}\n\tm, err := prolly.Empty(ctx, s, c)
+find: if reg == nil {\n\t\treturn nil, errors.New("object: a namespace needs a model registry")\n\t}\n\tm, err := prolly.Empty(ctx, s, namespace(c))
+replace: if reg == nil && false {\n\t\treturn nil, errors.New("object: a namespace needs a model registry")\n\t}\n\tm, err := prolly.Empty(ctx, s, namespace(c))
 pkg: ./core/object
 run: ^TestANamespaceNeedsARegistryAndAUsableGeometry$
 
 id: object-open-needs-a-registry
 file: core/object/object.go
-find: if reg == nil {\n\t\treturn nil, errors.New("object: a namespace needs a model registry")\n\t}\n\tm, err := prolly.Open(ctx, s, c, root)
-replace: if reg == nil && false {\n\t\treturn nil, errors.New("object: a namespace needs a model registry")\n\t}\n\tm, err := prolly.Open(ctx, s, c, root)
+find: if reg == nil {\n\t\treturn nil, errors.New("object: a namespace needs a model registry")\n\t}\n\tm, err := prolly.Open(ctx, s, namespace(c), root)
+replace: if reg == nil && false {\n\t\treturn nil, errors.New("object: a namespace needs a model registry")\n\t}\n\tm, err := prolly.Open(ctx, s, namespace(c), root)
 pkg: ./core/object
 run: ^TestANamespaceNeedsARegistryAndAUsableGeometry$
 
@@ -4594,3 +4601,666 @@ find: func (r *Repo) ResolveConflict(ctx context.Context, p auth.Principal, bran
 replace: func (r *Repo) ResolveConflict(ctx context.Context, p auth.Principal, branch, path string, to *object.Ref) error {\n\tif err := r.branchCheck(ctx, p, auth.Write, branch); err != nil {
 pkg: ./core/vcs
 run: ^TestMergingIsItsOwnAction$
+
+# identical changes
+id: merge-identical-sides-ask-an-accumulating-model
+file: core/merge/merge.go
+find: case ours.Root() == theirs.Root() && !reg.Accumulates():
+replace: case ours.Root() == theirs.Root():
+pkg: ./core/merge
+run: ^TestAnAccumulatingModelIsAskedAboutTheSameChangeOnBothSides$
+
+id: merge-the-same-change-asks-an-accumulating-model
+file: core/merge/merge.go
+find: ours.To == theirs.To && !z.accumulates(ours):
+replace: ours.To == theirs.To:
+pkg: ./core/merge
+run: ^TestAnAccumulatingModelIsAskedAboutTheSameChangeOnBothSides$
+
+id: merge-the-same-add-is-taken-once
+file: core/merge/merge.go
+find: if c.From.Model != c.To.Model {\n\t\treturn false\n\t}
+replace: if false {\n\t\treturn false\n\t}
+pkg: ./core/merge
+run: ^TestAnAccumulatingModelIsAskedAboutTheSameChangeOnBothSides$
+
+id: model-accumulates-asks-the-model
+file: core/model/port.go
+find: return ok && a.Accumulates()
+replace: return ok && (a.Accumulates() || true)
+pkg: ./core/model
+run: ^TestAModelAccumulatesWhenItSaysSo$
+
+id: model-a-registry-accumulates-with-one-model
+file: core/model/port.go
+find: if Accumulates(m) {\n\t\t\treturn true
+replace: if false && Accumulates(m) {\n\t\t\treturn true
+pkg: ./core/model
+run: ^TestAModelAccumulatesWhenItSaysSo$
+
+id: merge-the-same-change-is-taken-once-otherwise
+file: core/merge/merge.go
+find: ours.To == theirs.To && !z.accumulates(ours):
+replace: ours.To == theirs.To && false:
+pkg: ./core/merge
+run: ^TestAModelThatDoesNotAccumulateIsNotAskedAboutTheSameChange$
+
+id: merge-identical-sides-read-nothing
+file: core/merge/merge.go
+find: case ours.Root() == theirs.Root() && !reg.Accumulates():
+replace: case ours.Root() == theirs.Root() && !reg.Accumulates() && false:
+pkg: ./core/merge
+run: ^TestTheSameChangesOnBothSidesDoNoWork$
+
+id: contract-an-accumulating-model-may-add-the-same-change
+file: model/contract/contract.go
+find: case model.Accumulates(m) && o == th && o != b:
+replace: case false && model.Accumulates(m) && o == th && o != b:
+pkg: ./model/contract
+run: ^TestIdentityVerdict$
+
+id: contract-only-the-same-change-is-accumulated
+file: model/contract/contract.go
+find: case model.Accumulates(m) && o == th && o != b:
+replace: case model.Accumulates(m) && o != b:
+pkg: ./model/contract
+run: ^TestIdentityVerdict$
+
+id: contract-no-change-is-not-accumulated
+file: model/contract/contract.go
+find: case model.Accumulates(m) && o == th && o != b:
+replace: case model.Accumulates(m) && o == th:
+pkg: ./model/contract
+run: ^TestIdentityVerdict$
+
+id: contract-an-accumulated-merge-validates
+file: model/contract/contract.go
+find: if err := valid(r.Root); err != nil {
+replace: if err := valid(r.Root); err != nil && false {
+pkg: ./model/contract
+run: ^TestIdentityVerdict$
+
+id: contract-an-identity-is-clean
+file: model/contract/contract.go
+find: case len(r.Conflicts) != 0:\n\t\treturn fmt.Errorf("root %+v with %d conflicts, want none", r.Root, len(r.Conflicts))
+replace: case len(r.Conflicts) < 0:\n\t\treturn fmt.Errorf("root %+v with %d conflicts, want none", r.Root, len(r.Conflicts))
+pkg: ./model/contract
+run: ^TestIdentityVerdict$
+
+id: contract-an-identity-is-exact
+file: model/contract/contract.go
+find: case r.Root != want:\n\t\treturn fmt.Errorf("root %+v, want %+v", r.Root, want)
+replace: case r.Root != want && false:\n\t\treturn fmt.Errorf("root %+v, want %+v", r.Root, want)
+pkg: ./model/contract
+run: ^TestIdentityVerdict$
+
+id: mapobject-the-same-value-goes-to-the-resolver
+file: model/mapobject/mapobject.go
+find: if d, err = decide(co.Key, co, ct); err != nil {
+replace: if d, err = decide(co.Key, co, ct); bytes.Equal(co.To, ct.To) {\n\t\t\t\td, err = Decision{}, nil\n\t\t\t} else if err != nil {
+pkg: ./model/mapobject
+run: ^TestAResolverIsAskedAboutTheSameValueOnBothSides$
+
+# commit contention
+id: packstore-a-loser-learns-before-it-writes
+file: core/chunk/packstore/packstore.go
+find: } else if !ok {\n\t\treturn chunk.ErrRootConflict
+replace: } else if !ok && false {\n\t\treturn chunk.ErrRootConflict
+pkg: ./core/chunk/packstore
+run: ^TestALoserLearnsBeforeItWrites$
+
+id: packstore-the-check-reads-a-root-that-moved
+file: core/chunk/packstore/packstore.go
+find: \tif same {\n\t\treturn root == expected, nil
+replace: \tif same || true {\n\t\treturn root == expected, nil
+pkg: ./core/chunk/packstore
+run: ^(TestALoserLearnsBeforeItWrites|TestStaleViewIsRefreshedBeforeAConflict)$
+
+id: packstore-a-swap-after-the-upload-still-loses
+file: core/chunk/packstore/packstore.go
+find: \t\tif m.root != expected {\n\t\t\treturn chunk.ErrRootConflict // the root moved
+replace: \t\tif false {\n\t\t\treturn chunk.ErrRootConflict // the root moved
+pkg: ./core/chunk/packstore
+run: ^TestARootThatMovesDuringTheUploadStillLosesTheSwap$
+
+id: vcs-lost-swaps-back-off
+file: core/vcs/vcs.go
+find: \t\tif attempt > 0 {\n\t\t\tif err := r.pause(ctx, attempt-1); err != nil {\n\t\t\t\treturn err\n\t\t\t}\n\t\t}\n\t\tm, err := r.refs(ctx)
+replace: \t\tif attempt > 0 && false {\n\t\t\tif err := r.pause(ctx, attempt-1); err != nil {\n\t\t\t\treturn err\n\t\t\t}\n\t\t}\n\t\tm, err := r.refs(ctx)
+pkg: ./core/vcs
+run: ^TestLostSwapsBackOffBetweenAttempts$
+
+id: vcs-a-resolve-backs-off
+file: core/vcs/vcs.go
+find: \t\tif attempt > 0 {\n\t\t\tif err := r.pause(ctx, attempt-1); err != nil {\n\t\t\t\treturn err\n\t\t\t}\n\t\t}\n\t\tws, err := r.WorkingSet(ctx, p, branch)
+replace: \t\tif attempt > 0 && false {\n\t\t\tif err := r.pause(ctx, attempt-1); err != nil {\n\t\t\t\treturn err\n\t\t\t}\n\t\t}\n\t\tws, err := r.WorkingSet(ctx, p, branch)
+pkg: ./core/vcs
+run: ^TestAResolveThatLostItsWorkingSetBacksOff$
+
+id: vcs-a-pause-error-ends-the-writer
+file: core/vcs/vcs.go
+find: \t\t\tif err := r.pause(ctx, attempt-1); err != nil {\n\t\t\t\treturn err\n\t\t\t}\n\t\t}\n\t\tm, err := r.refs(ctx)
+replace: \t\t\tif err := r.pause(ctx, attempt-1); err != nil && false {\n\t\t\t\treturn err\n\t\t\t}\n\t\t}\n\t\tm, err := r.refs(ctx)
+pkg: ./core/vcs
+run: ^TestAWriterThatKeepsLosingStopsWithItsContext$
+
+id: vcs-backoff-doubles
+file: core/vcs/vcs.go
+find: d = min(backoffBase<<attempt, backoffCap)
+replace: d = min(backoffBase<<(attempt/2), backoffCap)
+pkg: ./core/vcs
+run: ^TestTheBackoffDoublesFromUnderAMillisecondToItsCap$
+
+id: vcs-backoff-is-capped
+file: core/vcs/vcs.go
+find: d = min(backoffBase<<attempt, backoffCap)
+replace: d = backoffBase << attempt
+pkg: ./core/vcs
+run: ^TestTheBackoffDoublesFromUnderAMillisecondToItsCap$
+
+id: vcs-backoff-shift-is-bounded
+file: core/vcs/vcs.go
+find: \tif attempt < 16 {\n\t\td = min(
+replace: \tif attempt < 1<<31 {\n\t\td = min(
+pkg: ./core/vcs
+run: ^TestTheBackoffDoublesFromUnderAMillisecondToItsCap$
+
+id: vcs-backoff-jitters-the-upper-half
+file: core/vcs/vcs.go
+find: return d/2 + time.Duration(jitter(int64(d/2)+1))
+replace: return d/2 + time.Duration(jitter(int64(d/2)))
+pkg: ./core/vcs
+run: ^TestTheBackoffDoublesFromUnderAMillisecondToItsCap$
+
+id: vcs-the-pause-reports-the-context
+file: core/vcs/vcs.go
+find: return ctx.Err() // a context that ended before or during the pause ends the writer
+replace: return nil
+pkg: ./core/vcs
+run: ^(TestAWriterThatKeepsLosingStopsWithItsContext|TestAPauseEndsWithItsContext)$
+
+id: vcs-the-pause-ends-with-the-context
+file: core/vcs/vcs.go
+find: \tcase <-ctx.Done():\n\tcase <-t.C:
+replace: \tcase <-t.C:
+pkg: ./core/vcs
+run: ^TestAPauseEndsWithItsContext$
+
+# aging: a refresh of an unmoved root, index compaction, pending pack sizing
+
+id: aging-an-unmoved-root-is-not-reopened
+file: core/chunk/packstore/packstore.go
+find: unmoved := r.Version != blob.NoVersion && r.Version == s.ver
+replace: unmoved := false
+pkg: ./core/chunk/packstore
+run: ^TestARefreshOfAnUnmovedRootOpensNoManifest$
+
+id: aging-a-lost-index-object-rereads-the-root
+file: core/chunk/packstore/packstore.go
+find: if rerr != nil || again.Version == r.Version {
+replace: if rerr != nil || again.Version == again.Version {
+pkg: ./core/chunk/packstore
+run: ^TestARefreshThatLosesAnIndexObjectToANewerManifestReadsIt$
+
+id: aging-a-full-tier-is-merged
+file: core/chunk/packstore/compact.go
+find: if len(tiers[k]) < compactFanIn {
+replace: if true {
+pkg: ./core/chunk/packstore
+run: ^TestPublishesCompactSmallIndexObjects$
+
+id: aging-merged-objects-leave-the-list
+file: core/chunk/packstore/compact.go
+find: for _, sum := range list {\n\t\tif !gone[sum] {
+replace: for _, sum := range list {\n\t\tif true {
+pkg: ./core/chunk/packstore
+run: ^TestPublishesCompactSmallIndexObjects$
+
+id: aging-merged-objects-join-the-list
+file: core/chunk/packstore/compact.go
+find: for _, obj := range c.written {\n\t\tif !gone[obj.sum] {
+replace: for _, obj := range c.written {\n\t\tif false {
+pkg: ./core/chunk/packstore
+run: ^TestPublishesCompactSmallIndexObjects$
+
+id: aging-large-objects-are-not-merged
+file: core/chunk/packstore/compact.go
+find: if est, ok := sizes[sum]; ok && est < smallIndexObject {
+replace: if est, ok := sizes[sum]; ok {
+pkg: ./core/chunk/packstore
+run: ^TestLargeIndexObjectsAreNotMerged$
+
+id: aging-a-reader-skips-packs-it-holds-in-memory
+file: core/chunk/packstore/packstore.go
+find: if s.mem.HasPack(info.Name) {
+replace: if false && s.mem.HasPack(info.Name) {
+pkg: ./core/chunk/packstore
+run: ^TestAReaderOfCompactedIndexObjectsIndexesEachPackOnce$
+
+id: aging-a-reader-skips-packs-in-its-table
+file: core/chunk/packstore/packstore.go
+find: err == nil && s.disk.listed[sum] {
+replace: err == nil && s.disk.listed[sum] && false {
+pkg: ./core/chunk/packstore
+run: ^TestAReaderOfCompactedIndexObjectsIndexesEachPackOnce$
+
+id: aging-a-pending-pack-starts-small
+file: core/chunk/packstore/packstore.go
+find: s.o.PackSize, max(s.lastPack, minPending))
+replace: s.o.PackSize, s.o.PackSize)
+pkg: ./core/chunk/packstore
+run: ^TestSmallCommitsAllocateForSmallPacks$
+
+id: prolly-value-limit-not-negative
+file: core/prolly/prolly.go
+find: if c.MaxValue < 0 {
+replace: if c.MaxValue < 0 && false {
+pkg: ./core/prolly
+run: ^TestConfigIsValidated$
+
+id: stream-readall-refuses-over-limit
+file: core/stream/stream.go
+find: if ref.Size > limit {
+replace: if ref.Size > limit && false {
+pkg: ./core/stream
+run: ^TestRegression_SC23_ReadAllRefusesAStreamOverItsLimit$
+
+id: stream-readall-limit-inclusive
+file: core/stream/stream.go
+find: if ref.Size > limit {
+replace: if ref.Size >= limit {
+pkg: ./core/stream
+run: ^TestRegression_SC23_ReadAllRefusesAStreamOverItsLimit$
+
+id: stream-readall-not-grown-by-claim
+file: core/stream/stream.go
+find: var buf bytes.Buffer // not grown by ref.Size: that is a claim until the bytes are read
+replace: var buf bytes.Buffer\n\tbuf.Grow(int(min(ref.Size, 64<<20)))
+pkg: ./core/stream
+run: ^TestRegression_SC23_ReadAllGrowsWithWhatItReads$
+
+id: stream-read-starts-from-the-held-path
+file: core/stream/stream.go
+find: for len(r.path) > 0 && !r.path[len(r.path)-1].holds(pos) {
+replace: for len(r.path) > 0 {
+pkg: ./core/stream
+run: ^TestRegression_SC23_ASequentialReadReadsEachNodeOncePerPlace$
+
+id: stream-held-node-holds-from-its-start
+file: core/stream/stream.go
+find: return pos >= n.start && pos < n.ends[len(n.ends)-1]
+replace: return pos < n.ends[len(n.ends)-1]
+pkg: ./core/stream
+run: ^TestRandomAccessMatchesTheSource$
+
+id: stream-held-node-holds-to-its-end
+file: core/stream/stream.go
+find: return pos >= n.start && pos < n.ends[len(n.ends)-1]
+replace: return pos >= n.start
+pkg: ./core/stream
+run: ^TestRandomAccessMatchesTheSource$
+
+id: prolly-reads-hold-to-the-limit
+file: core/prolly/prolly.go
+find: return readValue(ctx, m.s, *v.ref, m.cfg.maxValue())
+replace: return readValue(ctx, m.s, *v.ref, 1<<62)
+pkg: ./core/prolly
+run: ^TestRegression_SC23_AMapReadsNoValueOverItsLimit$
+
+id: prolly-walk-holds-to-the-limit
+file: core/prolly/walk.go
+find: readValue(w.ctx, w.rd, *e.val.ref, w.maxValue)
+replace: readValue(w.ctx, w.rd, *e.val.ref, 1<<62)
+pkg: ./core/prolly
+run: ^TestRegression_SC23_AMapReadsNoValueOverItsLimit$
+
+id: prolly-value-refusal-named
+file: core/prolly/prolly.go
+find: if errors.Is(err, stream.ErrTooLarge) {
+replace: if errors.Is(err, stream.ErrTooLarge) && false {
+pkg: ./core/prolly
+run: ^TestRegression_SC23_AMapReadsNoValueOverItsLimit$
+
+id: prolly-editor-value-limit
+file: core/prolly/prolly.go
+find: if limit := e.m.cfg.maxValue(); len(val) > limit {
+replace: if limit := e.m.cfg.maxValue(); len(val) > limit && false {
+pkg: ./core/prolly
+run: ^TestRegression_SC23_AnEditorTakesNoValueOverItsLimit$
+
+id: prolly-editor-value-limit-inclusive
+file: core/prolly/prolly.go
+find: if limit := e.m.cfg.maxValue(); len(val) > limit {
+replace: if limit := e.m.cfg.maxValue(); len(val) >= limit {
+pkg: ./core/prolly
+run: ^TestRegression_SC23_AnEditorTakesNoValueOverItsLimit$
+
+id: prolly-default-value-limit
+file: core/prolly/prolly.go
+find: if c.MaxValue == 0 {
+replace: if c.MaxValue == 0 && false {
+pkg: ./core/prolly
+run: ^TestRegression_SC23_NoLimitNamedIsTheDefault$
+
+id: prolly-node-presize-bounded
+file: core/prolly/node.go
+find: make([]entry, 0, min(count, maxPresized))
+replace: make([]entry, 0, count)
+pkg: ./core/prolly
+run: ^TestRegression_SC24_ANodeIsNotSizedByItsClaimedCount$
+
+id: pack-index-presize-bounded
+file: core/pack/pack.go
+find: make([]Entry, 0, min(n, uint64(len(b))/minIndexEntry))
+replace: make([]Entry, 0, n)
+pkg: ./core/pack
+run: ^TestRegression_SC24_AnIndexIsNotSizedByItsClaimedCount$
+
+id: tree-records-no-longer-than-an-entry
+file: model/tree/tree.go
+find: c.MaxValue = EntrySize
+replace: c.MaxValue = 0
+pkg: ./model/tree
+run: ^TestRegression_SC23_ATreeReadsNoRecordLongerThanAnEntry$
+
+id: tree-read-not-sized-by-claim
+file: model/tree/tree.go
+find: out := map[string]Entry{} // not sized by m.Count()
+replace: out := make(map[string]Entry, m.Count()) //
+pkg: ./model/tree
+run: ^TestRegression_SC24_ReadingATreeDoesNotSizeByItsClaimedCount$
+
+id: object-namespace-values-are-refs
+file: core/object/object.go
+find: c.MaxValue = RefSize
+replace: c.MaxValue = 0
+pkg: ./core/object
+run: ^TestRegression_SC23_ANamespaceReadsNoValueLongerThanARef$
+
+id: stream-child-search-boundary
+file: core/stream/stream.go
+find: return n.ends[i] > pos })
+replace: return n.ends[i] > pos+1 })
+pkg: ./core/stream
+run: ^TestEveryByteReadAloneIsTheSourcesByte$
+
+id: seal-keyfile-fuzzer-keeps-its-kdf-budget
+file: core/seal/seal_test.go
+find: if !withinFuzzBudget(p) {\n\t\t\treturn errOverFuzzBudget
+replace: if false {\n\t\t\treturn errOverFuzzBudget
+pkg: ./core/seal
+run: ^TestRegression_SC25_TheKeyFileFuzzerNeverDerivesAboveItsBudget$
+
+id: seal-ceiling-time-inclusive
+file: core/seal/keyfile.go
+find: case p.Time < minArgonTime || p.Time > maxArgonTime:
+replace: case p.Time < minArgonTime || p.Time >= maxArgonTime:
+pkg: ./core/seal
+run: ^TestRegression_SC25_AKeyFileAtTheCeilingIsAccepted$
+
+id: seal-ceiling-memory-inclusive
+file: core/seal/keyfile.go
+find: case p.Memory < minArgonMemory || p.Memory > maxArgonMemory:
+replace: case p.Memory < minArgonMemory || p.Memory >= maxArgonMemory:
+pkg: ./core/seal
+run: ^TestRegression_SC25_AKeyFileAtTheCeilingIsAccepted$
+
+id: seal-ceiling-threads-inclusive
+file: core/seal/keyfile.go
+find: case p.Threads < 1 || p.Threads > maxArgonThread:
+replace: case p.Threads < 1 || p.Threads >= maxArgonThread:
+pkg: ./core/seal
+run: ^TestRegression_SC25_AKeyFileAtTheCeilingIsAccepted$
+
+id: seal-threads-ceiling-refused
+file: core/seal/keyfile.go
+find: case p.Threads < 1 || p.Threads > maxArgonThread:
+replace: case p.Threads < 1:
+pkg: ./core/seal
+run: ^TestRegression_SC25_AKeyFileAtTheCeilingIsAccepted$
+
+id: dedup-raw-frame-is-chunk-plus-seal
+file: core/dedup/dedup.go
+find: return stored == raw+pack.FrameOverhead
+replace: return stored >= raw+pack.FrameOverhead
+pkg: ./core/dedup
+run: ^TestRegression_SC26_AnEntryWhoseStoredLengthDisagreesWithItsRawIsRefused$
+
+id: dedup-compressed-frame-is-smaller
+file: core/dedup/dedup.go
+find: return stored >= pack.FrameOverhead && stored < raw+pack.FrameOverhead
+replace: return stored >= pack.FrameOverhead
+pkg: ./core/dedup
+run: ^TestRegression_SC26_AnEntryWhoseStoredLengthDisagreesWithItsRawIsRefused$
+
+id: dedup-compressed-frame-holds-a-seal
+file: core/dedup/dedup.go
+find: return stored >= pack.FrameOverhead && stored < raw+pack.FrameOverhead
+replace: return stored < raw+pack.FrameOverhead
+pkg: ./core/dedup
+run: ^TestRegression_SC26_AnEntryWhoseStoredLengthDisagreesWithItsRawIsRefused$
+
+id: packstore-frame-read-limited
+file: core/chunk/packstore/packstore.go
+find: frame, err := io.ReadAll(io.LimitReader(rc, want+1))
+replace: frame, err := io.ReadAll(rc)
+pkg: ./core/chunk/packstore
+run: ^TestRegression_SC26_AChunkReadStopsAtItsRange$
+
+id: packstore-frame-overrun-is-the-backends
+file: core/chunk/packstore/packstore.go
+find: if int64(len(frame)) > want {
+replace: if false {
+pkg: ./core/chunk/packstore
+run: ^TestRegression_SC26_AnOverrunningBackendIsNotReportedAsCorruptData$
+
+id: vcs-conflict-stops-when-its-bytes-do
+file: core/vcs/encode.go
+find: if r.Err() != nil {\n\t\t\tbreak // refused below
+replace: if false {\n\t\t\tbreak // refused below
+pkg: ./core/vcs
+run: ^TestRegression_SC26_ATruncatedConflictIsRefusedWithoutFillingItsClaim$
+
+id: cache-entry-serves-only-its-name
+file: core/blob/cache/cache.go
+find: if r.Err() != nil || string(magic) != entryMagic || string(n) != name {
+replace: if r.Err() != nil || string(magic) != entryMagic || (string(n) != name && false) {
+pkg: ./core/blob/cache
+run: ^FuzzDecodeEntry$
+
+id: cache-entry-magic-checked
+file: core/blob/cache/cache.go
+find: if r.Err() != nil || string(magic) != entryMagic || string(n) != name {
+replace: if r.Err() != nil || (string(magic) != entryMagic && false) || string(n) != name {
+pkg: ./core/blob/cache
+run: ^FuzzDecodeEntry$
+
+id: cache-entry-sum-checked-fuzzed
+file: core/blob/cache/cache.go
+find: if got := sha256.Sum256(content); !bytes.Equal(got[:], sum) {
+replace: if got := sha256.Sum256(content); !bytes.Equal(got[:], sum) && false {
+pkg: ./core/blob/cache
+run: ^FuzzDecodeEntry$
+
+id: cache-header-name-valid
+file: core/blob/cache/cache.go
+find: if r.Err() != nil || string(magic) != entryMagic || blob.ValidName(string(name)) != nil {
+replace: if r.Err() != nil || string(magic) != entryMagic {
+pkg: ./core/blob/cache
+run: ^FuzzDecodeEntry$
+
+id: cache-header-magic-checked
+file: core/blob/cache/cache.go
+find: if r.Err() != nil || string(magic) != entryMagic || blob.ValidName(string(name)) != nil {
+replace: if r.Err() != nil || (string(magic) != entryMagic && false) || blob.ValidName(string(name)) != nil {
+pkg: ./core/blob/cache
+run: ^FuzzDecodeEntry$
+
+id: dedup-frames-do-not-overlap
+file: core/dedup/dedup.go
+find: if uint64(e.Offset) < end {\n\t\t\treturn false
+replace: if false {\n\t\t\treturn false
+pkg: ./core/dedup
+run: ^TestRegression_SC26_IndexFramesLieWhereTheirPackHoldsThem$
+
+id: dedup-frames-end-before-the-index
+file: core/dedup/dedup.go
+find: return end <= indexOffset
+replace: return end <= indexOffset+index
+pkg: ./core/dedup
+run: ^TestRegression_SC26_IndexFramesLieWhereTheirPackHoldsThem$
+
+id: pack-sealed-index-len-counts-the-seal
+file: core/pack/pack.go
+find: n := uint64(len(indexMagic)+2+uvarintLen(uint64(len(entries)))) + sealOverhead
+replace: n := uint64(len(indexMagic)+2+uvarintLen(uint64(len(entries))))
+pkg: ./core/dedup
+run: ^TestRegression_SC26_IndexFramesLieWhereTheirPackHoldsThem$
+
+id: pack-sealed-index-len-counts-entries
+file: core/pack/pack.go
+find: n += uint64(hash.Size + uvarintLen(
+replace: n += 0 * uint64(hash.Size + uvarintLen(
+pkg: ./core/dedup
+run: ^TestRegression_SC26_IndexFramesLieWhereTheirPackHoldsThem$
+
+id: pack-uvarint-len-counts-bytes
+file: core/pack/pack.go
+find: for ; v >= 0x80; v >>= 7 {
+replace: for ; v >= 0x80 && false; v >>= 7 {
+pkg: ./core/dedup
+run: ^TestRegression_SC26_IndexFramesLieWhereTheirPackHoldsThem$
+
+id: dedup-index-fits-in-the-pack
+file: core/dedup/dedup.go
+find: if index > size-pack.TrailerSize { // the index offset would wrap
+replace: if false { // the index offset would wrap
+pkg: ./core/dedup
+run: ^TestRegression_SC26_AnEntryCannotWrapIntoPlace$
+
+id: pack-last-frame-ends-at-the-index
+file: core/pack/pack.go
+find: if end > indexOffset {
+replace: if false {
+pkg: ./core/pack
+run: ^TestRegression_SC26_APacksFramesEndAtItsIndex$
+
+id: vcs-merge-refuses-too-many-model-conflicts
+file: core/vcs/encode.go
+find: if len(c.Model) > maxModelConflicts {
+replace: if len(c.Model) > maxModelConflicts+1 {
+pkg: ./core/vcs
+run: ^TestRegression_SC27_AConflictTooLargeToRecordRefusesTheMerge$
+
+id: vcs-merge-records-the-most-model-conflicts
+file: core/vcs/encode.go
+find: if len(c.Model) > maxModelConflicts {
+replace: if len(c.Model) >= maxModelConflicts {
+pkg: ./core/vcs
+run: ^TestRegression_SC27_AConflictTooLargeToRecordRefusesTheMerge$
+
+id: vcs-merge-refuses-a-long-location
+file: core/vcs/encode.go
+find: if len(mc.Location) > maxLocationLen {
+replace: if len(mc.Location) > maxLocationLen+1 {
+pkg: ./core/vcs
+run: ^TestRegression_SC27_AConflictTooLargeToRecordRefusesTheMerge$
+
+id: vcs-merge-records-the-longest-location
+file: core/vcs/encode.go
+find: if len(mc.Location) > maxLocationLen {
+replace: if len(mc.Location) >= maxLocationLen {
+pkg: ./core/vcs
+run: ^TestRegression_SC27_AConflictTooLargeToRecordRefusesTheMerge$
+
+id: vcs-merge-refuses-a-long-reason
+file: core/vcs/encode.go
+find: if len(mc.Reason) > maxReasonLen {
+replace: if len(mc.Reason) > maxReasonLen+1 {
+pkg: ./core/vcs
+run: ^TestRegression_SC27_AConflictTooLargeToRecordRefusesTheMerge$
+
+id: vcs-merge-records-the-longest-reason
+file: core/vcs/encode.go
+find: if len(mc.Reason) > maxReasonLen {
+replace: if len(mc.Reason) >= maxReasonLen {
+pkg: ./core/vcs
+run: ^TestRegression_SC27_AConflictTooLargeToRecordRefusesTheMerge$
+
+id: vcs-merge-checks-before-writing
+file: core/vcs/vcs.go
+find: if err := recordable(c); err != nil {
+replace: if err := recordable(c); err != nil && false {
+pkg: ./core/vcs
+run: ^TestRegression_SC27_AConflictTooLargeToRecordRefusesTheMerge$
+
+# the refs and conflicts maps' value limits
+id: vcs-refs-values-are-hashes
+file: core/vcs/encode.go
+find: c.MaxValue = hash.Size
+replace: c.MaxValue = hash.Size + 1
+pkg: ./core/vcs
+run: ^TestTheRefsMapReadsNoValueLongerThanAHash$
+
+id: vcs-refs-read-under-their-limit
+file: core/vcs/vcs.go
+find: return prolly.Open(ctx, r.s, refsMap(r.o.Config), root)
+replace: return prolly.Open(ctx, r.s, r.o.Config, root)
+pkg: ./core/vcs
+run: ^TestTheRefsMapReadsNoValueLongerThanAHash$
+
+id: vcs-walk-reads-refs-under-their-limit
+file: core/vcs/walk.go
+find: err := prolly.Walk(ctx, rd, refsMap(o.Config), root, visit,
+replace: err := prolly.Walk(ctx, rd, o.Config, root, visit,
+pkg: ./core/vcs
+run: ^TestTheRefsMapReadsNoValueLongerThanAHash$
+
+id: vcs-conflict-records-no-longer-than-merge-writes
+file: core/vcs/encode.go
+find: c.MaxValue = maxConflictRecord()
+replace: c.MaxValue = maxConflictRecord() + 1
+pkg: ./core/vcs
+run: ^TestAConflictRecordIsReadUpToTheLargestMergeWrites$
+
+id: vcs-conflict-records-as-long-as-merge-writes
+file: core/vcs/encode.go
+find: c.MaxValue = maxConflictRecord()
+replace: c.MaxValue = maxConflictRecord() - 1
+pkg: ./core/vcs
+run: ^TestAConflictRecordIsReadUpToTheLargestMergeWrites$
+
+id: vcs-conflict-record-counts-three-sides
+file: core/vcs/encode.go
+find: return 1 + 3*(1+object.RefSize) + uv(maxModelConflicts) +
+replace: return 1 + 2*(1+object.RefSize) + uv(maxModelConflicts) +
+pkg: ./core/vcs
+run: ^TestAConflictRecordIsReadUpToTheLargestMergeWrites$
+
+id: vcs-conflict-record-counts-length-prefixes
+file: core/vcs/encode.go
+find: maxModelConflicts*(uv(maxLocationLen)+maxLocationLen+uv(maxReasonLen)+maxReasonLen)
+replace: maxModelConflicts*(maxLocationLen+uv(maxReasonLen)+maxReasonLen)
+pkg: ./core/vcs
+run: ^TestAConflictRecordIsReadUpToTheLargestMergeWrites$
+
+id: vcs-conflicts-listed-under-their-limit
+file: core/vcs/vcs.go
+find: if err != nil || ws.Merge == nil {\n\t\treturn nil, err\n\t}\n\tm, err := prolly.Open(ctx, r.s, conflictsMap(r.o.Config), ws.Merge.Conflicts)
+replace: if err != nil || ws.Merge == nil {\n\t\treturn nil, err\n\t}\n\tm, err := prolly.Open(ctx, r.s, r.o.Config, ws.Merge.Conflicts)
+pkg: ./core/vcs
+run: ^TestAConflictRecordIsReadUpToTheLargestMergeWrites$
+
+id: vcs-a-resolve-reads-the-conflict-under-its-limit
+file: core/vcs/vcs.go
+find: cm, err := prolly.Open(ctx, r.s, conflictsMap(r.o.Config), ws.Merge.Conflicts)
+replace: cm, err := prolly.Open(ctx, r.s, r.o.Config, ws.Merge.Conflicts)
+pkg: ./core/vcs
+run: ^TestAConflictRecordIsReadUpToTheLargestMergeWrites$
+
+id: vcs-walk-reads-conflicts-under-their-limit
+file: core/vcs/walk.go
+find: return prolly.Walk(w.ctx, w.rd, conflictsMap(w.o.Config), ws.Merge.Conflicts,
+replace: return prolly.Walk(w.ctx, w.rd, w.o.Config, ws.Merge.Conflicts,
+pkg: ./core/vcs
+run: ^TestAConflictRecordIsReadUpToTheLargestMergeWrites$

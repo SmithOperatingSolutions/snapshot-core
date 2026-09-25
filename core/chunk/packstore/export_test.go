@@ -169,3 +169,23 @@ func WaitUploads(s *Store) { s.finishers.Wait() }
 // HoldFinish makes every finisher call f before it names and builds its
 // pack, so a test can hold a pack at that point.
 func HoldFinish(s *Store, f func()) { s.holdFinish = f }
+
+// ManifestOpens is how many manifests the store's refreshes have opened.
+func ManifestOpens(s *Store) int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.opens
+}
+
+// IndexObjects is how many index objects the store's manifest lists.
+func IndexObjects(ctx context.Context, o Options) (int, error) {
+	r, err := o.Blobs.Root(ctx)
+	if err != nil {
+		return 0, err
+	}
+	m, err := openManifest(r.Value, o.Keys, o.Repo)
+	if err != nil {
+		return 0, err
+	}
+	return len(m.indexes), nil
+}

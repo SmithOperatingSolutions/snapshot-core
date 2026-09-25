@@ -392,7 +392,7 @@ func TestAValueOverTheInlineLimitIsAStream(t *testing.T) {
 	if !v.isRef || v.ref.Size != uint64(c.InlineLimit+1) {
 		t.Fatalf("a value over the inline limit is stored inline (%d bytes)", len(v.inline))
 	}
-	if b, err := stream.ReadAll(ctx, s, v.ref); err != nil || !bytes.Equal(b, over) {
+	if b, err := stream.ReadAll(ctx, s, v.ref, v.ref.Size); err != nil || !bytes.Equal(b, over) {
 		t.Fatalf("the long value's stream reads %d bytes (%v)", len(b), err)
 	}
 }

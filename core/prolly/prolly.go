@@ -29,6 +29,21 @@ const MaxKeySize = 4 << 10
 // maxInlineLimit keeps a leaf of one inline value and one key inside a chunk.
 const maxInlineLimit = 512 << 10
 
+// DefaultMaxValue is the longest value a map whose Config names no limit
+// holds.
+const DefaultMaxValue = 64 << 20
+
+// maxValue is the longest value the map holds.
+func (c Config) maxValue() int {
+	if c.MaxValue == 0 {
+		return DefaultMaxValue
+	}
+	return c.MaxValue
+}
+
+// ErrValueTooLarge is returned for a value over the map's MaxValue.
+var ErrValueTooLarge = errors.New("prolly: value over the map's limit")
+
 // ErrKeyTooLarge is returned for a key over MaxKeySize; the edit is not applied.
 var ErrKeyTooLarge = errors.New("prolly: key over 4 KiB")
 
@@ -37,6 +52,12 @@ type Config struct {
 	Nodes       boundary.Geometry // how nodes are split
 	InlineLimit int               // longer values are stored as streams
 	Stream      stream.Config     // how those streams are written
+	// MaxValue is the longest value the map holds: its editor refuses a
+	// longer one, and its reads (Get, iteration, Diff, Walk's values)
+	// refuse a longer stream before reading it, since a stream's length
+	// can be many times what it stores (#23). 0 is DefaultMaxValue. It is
+	// not repo geometry: nothing stored depends on it.
+	MaxValue int
 }
 
 // DefaultConfig is the default repo geometry: 512 B / 4 KiB / 16 KiB nodes,
@@ -48,6 +69,9 @@ func DefaultConfig() Config {
 func (c Config) rule() (boundary.Rule, error) {
 	if c.InlineLimit < 0 || c.InlineLimit > maxInlineLimit {
 		return boundary.Rule{}, fmt.Errorf("prolly: inline limit %d outside 0..%d", c.InlineLimit, maxInlineLimit)
+	}
+	if c.MaxValue < 0 {
+		return boundary.Rule{}, fmt.Errorf("prolly: value limit %d is negative", c.MaxValue)
 	}
 	return boundary.New(c.Nodes)
 }
@@ -145,7 +169,16 @@ func (m *Map) materialize(ctx context.Context, v value) ([]byte, error) {
 	if v.ref == nil {
 		return bytes.Clone(v.inline), nil
 	}
-	return stream.ReadAll(ctx, m.s, *v.ref)
+	return readValue(ctx, m.s, *v.ref, m.cfg.maxValue())
+}
+
+// readValue reads a long value's stream, refusing one over limit unread.
+func readValue(ctx context.Context, rd chunk.Reader, ref stream.Ref, limit int) ([]byte, error) {
+	b, err := stream.ReadAll(ctx, rd, ref, uint64(limit))
+	if errors.Is(err, stream.ErrTooLarge) {
+		return nil, fmt.Errorf("%w: %w", ErrValueTooLarge, err)
+	}
+	return b, err
 }
 
 // search is the first entry of n whose key is at least key.
@@ -229,10 +262,14 @@ type Editor struct {
 // Editor starts editing m.
 func (m *Map) Editor() *Editor { return &Editor{m: m, edits: map[string]*[]byte{}} }
 
-// Put sets key to val.
+// Put sets key to val. A value over the map's MaxValue is
+// ErrValueTooLarge, and the edit is not applied.
 func (e *Editor) Put(key, val []byte) error {
 	if len(key) > MaxKeySize {
 		return fmt.Errorf("%w: %d bytes", ErrKeyTooLarge, len(key))
+	}
+	if limit := e.m.cfg.maxValue(); len(val) > limit {
+		return fmt.Errorf("%w: %d bytes, the limit is %d", ErrValueTooLarge, len(val), limit)
 	}
 	v := bytes.Clone(val)
 	if v == nil {

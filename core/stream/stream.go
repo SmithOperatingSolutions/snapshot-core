@@ -6,7 +6,8 @@
 // Reads verify as they go: every chunk by SHA-256 (the chunk store), and at
 // every index node on the way down, its level and that its entries add up to
 // what its parent (or the Ref) claims; every data chunk must be exactly as
-// long as its entry says.
+// long as its entry says. So a read never yields more than the Ref's size,
+// and ReadAll refuses a Ref longer than its caller's limit before reading.
 package stream
 
 import (
@@ -18,6 +19,7 @@ import (
 	"math"
 	"math/bits"
 	"runtime"
+	"sort"
 
 	"github.com/SmithOperatingSolutions/snapshot-core/core/boundary"
 	"github.com/SmithOperatingSolutions/snapshot-core/core/cdc"
@@ -31,6 +33,10 @@ const (
 	maxDepth  = 63
 	entryMin  = hash.Size + 1 // the smallest encoded entry
 )
+
+// ErrTooLarge is returned for a stream longer than its reader will hold,
+// before any of it is read.
+var ErrTooLarge = errors.New("stream: longer than the reader's limit")
 
 // Ref names a stream: its top chunk, its length, and how many index levels
 // stand above the data (0: Root is the only data chunk).
@@ -314,14 +320,26 @@ type Reader struct {
 
 	cur      []byte // the data chunk read last
 	curStart int64
+	path     []held // the index nodes above cur, the root first
 }
+
+// held is an index node on the way to the data chunk read last, already
+// checked: where its bytes start in the stream, and where each entry's end.
+type held struct {
+	start int64
+	ends  []int64 // ends[i]: one past entry i's last byte, in the stream
+	es    []entry
+}
+
+// holds reports whether pos falls inside n.
+func (n *held) holds(pos int64) bool { return pos >= n.start && pos < n.ends[len(n.ends)-1] }
 
 // Open checks ref's root and returns a Reader; ctx serves its reads.
 func Open(ctx context.Context, rd chunk.Reader, ref Ref) (*Reader, error) {
 	if ref.Depth > maxDepth || ref.Size > math.MaxInt64 {
 		return nil, corrupt("ref: depth %d, size %d", ref.Depth, ref.Size)
 	}
-	r := &Reader{ctx: ctx, rd: rd, ref: ref}
+	r := &Reader{ctx: ctx, rd: rd, ref: ref, path: make([]held, 0, ref.Depth)}
 	if ref.Size == 0 { // the empty stream: its chunk must be the empty chunk
 		b, err := rd.Get(ctx, ref.Root)
 		if err != nil {
@@ -342,52 +360,84 @@ func Open(ctx context.Context, rd chunk.Reader, ref Ref) (*Reader, error) {
 func (r *Reader) Size() int64 { return int64(r.ref.Size) }
 
 // chunkAt returns the data chunk holding byte pos and where it starts,
-// checking every node on the way down.
+// checking every node on the way down. It starts from the deepest node
+// already held that holds pos, so reading a stream in order reads each
+// index node once for each place it stands, not once per chunk beneath it.
 func (r *Reader) chunkAt(pos int64) ([]byte, int64, error) {
 	if r.cur != nil && pos >= r.curStart && pos < r.curStart+int64(len(r.cur)) {
 		return r.cur, r.curStart, nil
 	}
 	h, want, start := r.ref.Root, r.ref.Size, int64(0)
-	for depth := int(r.ref.Depth); ; depth-- {
-		b, err := r.rd.Get(r.ctx, h)
-		if err != nil {
-			return nil, 0, err
-		}
+	for len(r.path) > 0 && !r.path[len(r.path)-1].holds(pos) {
+		r.path = r.path[:len(r.path)-1]
+	}
+	if n := len(r.path); n > 0 {
+		h, want, start = r.path[n-1].child(pos)
+	}
+	for depth := int(r.ref.Depth) - len(r.path); ; depth-- {
 		if depth == 0 {
+			b, err := r.rd.Get(r.ctx, h)
+			if err != nil {
+				return nil, 0, err
+			}
 			if uint64(len(b)) != want {
 				return nil, 0, corrupt("a data chunk is %d bytes, its entry says %d", len(b), want)
 			}
 			r.cur, r.curStart = b, start
 			return b, start, nil
 		}
-		level, es, err := decodeIndex(b)
+		n, err := r.node(h, depth, want, start)
 		if err != nil {
 			return nil, 0, err
 		}
-		if level != depth {
-			return nil, 0, corrupt("an index node at depth %d is level %d", depth, level)
-		}
-		if depth == int(r.ref.Depth) && len(es) < 2 {
-			return nil, 0, corrupt("the top index node has one child")
-		}
-		var sum uint64
-		next := -1
-		for i, e := range es {
-			if next < 0 && uint64(pos-start) < sum+e.size {
-				next = i
-			}
-			sum += e.size
-		}
-		if sum != want {
-			return nil, 0, corrupt("a level-%d node's entries add to %d bytes, its parent says %d", level, sum, want)
-		}
-		// pos-start < want = sum (callers stay under the Ref's size, and each
-		// level's sum is its parent's entry), so some entry holds pos.
-		for _, e := range es[:next] {
-			start += int64(e.size)
-		}
-		h, want = es[next].child, es[next].size
+		r.path = append(r.path, n)
+		// pos-start < want = the node's sum (callers stay under the Ref's
+		// size, and each level's sum is its parent's entry), so some entry
+		// holds pos.
+		h, want, start = n.child(pos)
 	}
+}
+
+// node reads and checks the index node h at depth, which its parent says
+// holds want bytes from start.
+func (r *Reader) node(h hash.Hash, depth int, want uint64, start int64) (held, error) {
+	b, err := r.rd.Get(r.ctx, h)
+	if err != nil {
+		return held{}, err
+	}
+	level, es, err := decodeIndex(b)
+	if err != nil {
+		return held{}, err
+	}
+	if level != depth {
+		return held{}, corrupt("an index node at depth %d is level %d", depth, level)
+	}
+	if depth == int(r.ref.Depth) && len(es) < 2 {
+		return held{}, corrupt("the top index node has one child")
+	}
+	var sum uint64
+	for _, e := range es {
+		sum += e.size // decodeIndex checked the sum fits
+	}
+	if sum != want {
+		return held{}, corrupt("a level-%d node's entries add to %d bytes, its parent says %d", depth, sum, want)
+	}
+	ends, end := make([]int64, len(es)), start
+	for i, e := range es {
+		end += int64(e.size) // at most want, which is at most the Ref's size
+		ends[i] = end
+	}
+	return held{start: start, ends: ends, es: es}, nil
+}
+
+// child is the entry of n holding pos: its hash, length and first byte.
+func (n *held) child(pos int64) (hash.Hash, uint64, int64) {
+	i := sort.Search(len(n.ends), func(i int) bool { return n.ends[i] > pos })
+	start := n.start
+	if i > 0 {
+		start = n.ends[i-1]
+	}
+	return n.es[i].child, n.es[i].size, start
 }
 
 // ReadAt implements io.ReaderAt.
@@ -468,15 +518,20 @@ func walk(ctx context.Context, rd chunk.Reader, h hash.Hash, depth int, want uin
 	return nil
 }
 
-// ReadAll returns the whole stream. It grows with the bytes actually read,
-// not with what the Ref claims.
-func ReadAll(ctx context.Context, rd chunk.Reader, ref Ref) ([]byte, error) {
+// ReadAll returns the whole stream if it is at most limit bytes long, and
+// ErrTooLarge, reading nothing, if it is longer: a Ref's size can be many
+// times what its chunks store, since an index node may name one chunk many
+// times (#23). It grows with the bytes actually read, not with what the
+// Ref claims.
+func ReadAll(ctx context.Context, rd chunk.Reader, ref Ref, limit uint64) ([]byte, error) {
+	if ref.Size > limit {
+		return nil, fmt.Errorf("%w: a %d-byte stream, the limit is %d", ErrTooLarge, ref.Size, limit)
+	}
 	r, err := Open(ctx, rd, ref)
 	if err != nil {
 		return nil, err
 	}
-	var buf bytes.Buffer
-	buf.Grow(int(min(ref.Size, 64<<20)))
+	var buf bytes.Buffer // not grown by ref.Size: that is a claim until the bytes are read
 	if _, err := io.Copy(&buf, r); err != nil {
 		return nil, err
 	}

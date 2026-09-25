@@ -307,6 +307,7 @@ func TestAnInitThatLosesTheRaceIsErrExists(t *testing.T) {
 func TestAWriterThatKeepsLosingGivesUp(t *testing.T) {
 	s := &racing{Store: memstore.New()}
 	f := newFixtureOn(t, s)
+	vcs.SetBackoff(f.r, func(ctx context.Context, _ time.Duration) error { return ctx.Err() }, noJitter) // 1000 pauses, taken at once
 	f.put(vcs.MainBranch, "a", f.obj(7, "a"))
 	before := f.head(vcs.MainBranch)
 	s.lose = true

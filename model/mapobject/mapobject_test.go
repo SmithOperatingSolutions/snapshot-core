@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"sort"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -349,5 +350,29 @@ func TestADecidersErrorAbortsTheMerge(t *testing.T) {
 	})
 	if !errors.Is(err, chunk.ErrCorrupt) {
 		t.Errorf("a decider storing a record the model refuses merged: %v, want ErrCorrupt", err)
+	}
+}
+
+// A key both sides changed to the same value still goes to the resolver, so
+// a model whose values add (a counter) can add both changes: a counter at
+// 1000 that each side set to 1001 merges to 1002. The default resolver
+// keeps such a key as it is.
+func TestAResolverIsAskedAboutTheSameValueOnBothSides(t *testing.T) {
+	s, sp := memstore.New(), notes()
+	base := write(t, s, sp, map[string]string{"hits": "v1000"})
+	same := write(t, s, sp, map[string]string{"hits": "v1001"})
+	add := func(key []byte, o, th prolly.Change) ([]byte, bool, string) {
+		n := func(v []byte) int { i, _ := strconv.Atoi(string(v[1:])); return i }
+		return []byte("v" + strconv.Itoa(n(o.To)+n(th.To)-n(o.From))), true, ""
+	}
+	r, err := sp.Merge(ctx, base, same, same, s, add)
+	if err != nil || len(r.Conflicts) != 0 {
+		t.Fatalf("the same increment on both sides = conflicts %+v, %v; want a clean merge", r.Conflicts, err)
+	}
+	if got := read(t, s, sp, r.Root)["hits"]; got != "v1002" {
+		t.Errorf("a counter each side added one to from 1000 reads %s after the merge, want v1002: an increment was lost", got)
+	}
+	if r, err := sp.Merge(ctx, base, same, same, s, nil); err != nil || read(t, s, sp, r.Root)["hits"] != "v1001" {
+		t.Errorf("the default resolver changed the same value on both sides: %v", err)
 	}
 }

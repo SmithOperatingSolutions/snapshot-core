@@ -14,6 +14,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math/rand/v2"
 	"sync"
 	"time"
 	"unicode/utf8"
@@ -35,6 +36,13 @@ const (
 	maxAttempts   = 1000 // root swaps lost to other writers before giving up
 )
 
+// The backoff between lost root swaps: from backoffBase, doubling, to
+// backoffCap, each pause jittered over its upper half.
+const (
+	backoffBase = 200 * time.Microsecond
+	backoffCap  = 20 * time.Millisecond
+)
+
 // Errors.
 var (
 	ErrExists              = errors.New("vcs: the store already holds a repository")
@@ -50,6 +58,11 @@ var (
 	ErrUnresolvedConflicts = errors.New("vcs: unresolved merge conflicts")
 	ErrMergeState          = errors.New("vcs: only merging, resolving, committing and abandoning change a merge in progress")
 	ErrNoMerge             = errors.New("vcs: no merge in progress")
+	// ErrConflictTooLarge refuses a merge whose model reported a conflict
+	// larger than a conflict record holds (10,000 model conflicts at one
+	// path, each located in 4,096 bytes with a 1,024-byte reason); the
+	// branch is left as it was.
+	ErrConflictTooLarge = errors.New("vcs: a model reported a conflict too large to record")
 	// ErrSessionLost is the chunk store's: GC deleted writes the repository
 	// had not published, and the host must reopen it and write again.
 	ErrSessionLost = chunk.ErrSessionLost
@@ -108,6 +121,9 @@ type Repo struct {
 
 	mu         sync.Mutex
 	checkedOut map[string]int
+
+	sleep  func(ctx context.Context, d time.Duration) error // the pause between lost swaps
+	jitter func(n int64) int64                              // uniform over [0, n)
 }
 
 func newRepo(s chunk.Store, o Options) (*Repo, error) {
@@ -117,7 +133,32 @@ func newRepo(s chunk.Store, o Options) (*Repo, error) {
 	if o.Clock == nil {
 		o.Clock = time.Now
 	}
-	return &Repo{s: s, o: o, checkedOut: map[string]int{}}, nil
+	return &Repo{s: s, o: o, checkedOut: map[string]int{}, sleep: sleep, jitter: rand.Int64N}, nil
+}
+
+// backoff is the pause after the attempt'th lost swap in a row (from 0).
+func backoff(attempt int, jitter func(n int64) int64) time.Duration {
+	d := backoffCap
+	if attempt < 16 {
+		d = min(backoffBase<<attempt, backoffCap)
+	}
+	return d/2 + time.Duration(jitter(int64(d/2)+1))
+}
+
+// pause waits out the backoff after the attempt'th lost swap in a row.
+func (r *Repo) pause(ctx context.Context, attempt int) error {
+	return r.sleep(ctx, backoff(attempt, r.jitter))
+}
+
+// sleep pauses for d, or until ctx is done.
+func sleep(ctx context.Context, d time.Duration) error {
+	t := time.NewTimer(d)
+	defer t.Stop()
+	select {
+	case <-ctx.Done():
+	case <-t.C:
+	}
+	return ctx.Err() // a context that ended before or during the pause ends the writer
 }
 
 func headKey(b string) []byte { return []byte("heads/" + b) }
@@ -151,7 +192,7 @@ func Init(ctx context.Context, s chunk.Store, p auth.Principal, o Options) (*Rep
 	if err != nil {
 		return nil, err
 	}
-	refs, err := prolly.Empty(ctx, s, o.Config)
+	refs, err := prolly.Empty(ctx, s, refsMap(o.Config))
 	if err != nil {
 		return nil, err
 	}
@@ -195,7 +236,7 @@ func (r *Repo) refs(ctx context.Context) (*prolly.Map, error) {
 	if root.IsZero() {
 		return nil, ErrNoRepo
 	}
-	return prolly.Open(ctx, r.s, r.o.Config, root)
+	return prolly.Open(ctx, r.s, refsMap(r.o.Config), root)
 }
 
 func ref(ctx context.Context, m *prolly.Map, key []byte) (hash.Hash, bool, error) {
@@ -210,9 +251,21 @@ func ref(ctx context.Context, m *prolly.Map, key []byte) (hash.Hash, bool, error
 }
 
 // update applies fn to the refs map and swaps the root, re-reading and
-// re-applying whenever another writer swapped first. fn's own errors end it.
+// re-applying whenever another writer swapped first, after a pause that
+// grows with each loss in a row. fn's own errors end it, as does ctx.
+//
+// The bound is on attempts, not time: it is deterministic, needs no
+// clock, and gives a slow backend as many tries as a fast one. The capped
+// pause keeps it finite in time (a writer that loses every swap gives up
+// within about 1000 × 15ms on average), and a caller that needs a
+// deadline sets one on ctx, which the pause honors.
 func (r *Repo) update(ctx context.Context, fn func(m *prolly.Map, e *prolly.Editor) error) error {
 	for attempt := 0; attempt < maxAttempts; attempt++ {
+		if attempt > 0 {
+			if err := r.pause(ctx, attempt-1); err != nil {
+				return err
+			}
+		}
 		m, err := r.refs(ctx)
 		if err != nil {
 			return err
@@ -460,7 +513,7 @@ func (r *Repo) conflictCount(ctx context.Context, ws WorkingSet) (uint64, error)
 	if ws.Merge == nil {
 		return 0, nil
 	}
-	m, err := prolly.Open(ctx, r.s, r.o.Config, ws.Merge.Conflicts)
+	m, err := prolly.Open(ctx, r.s, conflictsMap(r.o.Config), ws.Merge.Conflicts)
 	if err != nil {
 		return 0, err
 	}
@@ -916,10 +969,15 @@ func (r *Repo) Merge(ctx context.Context, p auth.Principal, branch string, their
 	if err != nil {
 		return merge.Result{}, err
 	}
+	for _, c := range res.Conflicts { // before anything is written
+		if err := recordable(c); err != nil {
+			return merge.Result{}, err
+		}
+	}
 	if err := r.checkPaths(ctx, p, branch, ws.Working, res.Merged.Root()); err != nil {
 		return merge.Result{}, err
 	}
-	conflicts, err := prolly.Empty(ctx, r.s, r.o.Config)
+	conflicts, err := prolly.Empty(ctx, r.s, conflictsMap(r.o.Config))
 	if err != nil {
 		return merge.Result{}, err
 	}
@@ -982,7 +1040,7 @@ func (r *Repo) Conflicts(ctx context.Context, p auth.Principal, branch string) (
 	if err != nil || ws.Merge == nil {
 		return nil, err
 	}
-	m, err := prolly.Open(ctx, r.s, r.o.Config, ws.Merge.Conflicts)
+	m, err := prolly.Open(ctx, r.s, conflictsMap(r.o.Config), ws.Merge.Conflicts)
 	if err != nil {
 		return nil, err
 	}
@@ -1014,6 +1072,11 @@ func (r *Repo) ResolveConflict(ctx context.Context, p auth.Principal, branch, pa
 		return err
 	}
 	for attempt := 0; attempt < maxAttempts; attempt++ {
+		if attempt > 0 {
+			if err := r.pause(ctx, attempt-1); err != nil {
+				return err
+			}
+		}
 		ws, err := r.WorkingSet(ctx, p, branch)
 		if err != nil {
 			return err
@@ -1021,7 +1084,7 @@ func (r *Repo) ResolveConflict(ctx context.Context, p auth.Principal, branch, pa
 		if ws.Merge == nil {
 			return fmt.Errorf("vcs: no merge is in progress on %s", branch)
 		}
-		cm, err := prolly.Open(ctx, r.s, r.o.Config, ws.Merge.Conflicts)
+		cm, err := prolly.Open(ctx, r.s, conflictsMap(r.o.Config), ws.Merge.Conflicts)
 		if err != nil {
 			return err
 		}

@@ -247,11 +247,11 @@ func TestAPublishFailsOnAnOldUploadThatIsGone(t *testing.T) {
 }
 
 // The writer's index objects are checked like its packs: one written at a
-// publish that lost, then deleted as an orphan (its pack is still there),
+// publish that failed at its swap, then deleted as an orphan (its pack is still there),
 // fails the next publish with ErrSessionLost instead of leaving a manifest
 // that names it, which no store could open (issue #3).
 func TestAPublishFailsOnAnIndexObjectRecordedAsADeletedOrphan(t *testing.T) {
-	bs, kr := mem.New(), keyring(t)
+	bs, kr := &swapFails{BlobStore: mem.New()}, keyring(t)
 	now := t0
 	s := slowWriter(t, bs, kr, &now)
 	hs := published(t, s, "a, the root")
@@ -272,7 +272,7 @@ func TestAPublishFailsOnAnIndexObjectRecordedAsADeletedOrphan(t *testing.T) {
 // An index object over an hour old that is gone, its record long lapsed,
 // fails the publish too (issue #3).
 func TestAPublishFailsOnAnOldIndexObjectThatIsGone(t *testing.T) {
-	bs, kr := mem.New(), keyring(t)
+	bs, kr := &swapFails{BlobStore: mem.New()}, keyring(t)
 	now := t0
 	s := slowWriter(t, bs, kr, &now)
 	hs := published(t, s, "a, the root")
@@ -287,18 +287,41 @@ func TestAPublishFailsOnAnOldIndexObjectThatIsGone(t *testing.T) {
 	}
 }
 
-// lostPublish puts a chunk and publishes it against the wrong root, which
-// fails after the store uploaded its pack and wrote its index object; it
-// returns the chunk and the index object's name.
-func lostPublish(t *testing.T, bs blob.BlobStore, s *packstore.Store) (hash.Hash, string) {
+// swapFails is a backend whose root swap fails once when armed, as a
+// backend's transient failure would.
+type swapFails struct {
+	blob.BlobStore
+	armed atomic.Bool
+}
+
+var errSwapFails = errors.New("injected: the root swap fails")
+
+func (f *swapFails) SwapRoot(ctx context.Context, expected blob.Version, next []byte) (blob.Version, error) {
+	if f.armed.CompareAndSwap(true, false) {
+		return blob.NoVersion, errSwapFails
+	}
+	return f.BlobStore.SwapRoot(ctx, expected, next)
+}
+
+// lostPublish puts a chunk and publishes it over the current root, and the
+// swap fails after the store uploaded its pack and wrote its index object
+// (a writer that finds the root moved before it writes writes nothing, so
+// a publish loses its objects this way, or to a root that moved after its
+// upload); it returns the chunk and the index object's name.
+func lostPublish(t *testing.T, bs *swapFails, s *packstore.Store) (hash.Hash, string) {
 	t.Helper()
 	c, err := s.Put(ctx, []byte("in a publish that lost"))
 	if err != nil {
 		t.Fatal(err)
 	}
+	root, err := s.Root(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
 	indexes := objects(t, bs, "index/")
-	if err := s.CompareAndSetRoot(ctx, hash.Sum([]byte("not the root")), c); !errors.Is(err, chunk.ErrRootConflict) {
-		t.Fatalf("fixture: a publish against the wrong root = %v, want ErrRootConflict", err)
+	bs.armed.Store(true)
+	if err := s.CompareAndSetRoot(ctx, root, c); !errors.Is(err, errSwapFails) {
+		t.Fatalf("fixture: a publish whose swap fails = %v, want the backend's failure", err)
 	}
 	added := newNames(indexes, objects(t, bs, "index/"))
 	if len(added) != 1 {

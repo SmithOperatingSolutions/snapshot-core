@@ -130,7 +130,8 @@ func decodePlain(b []byte) ([]pack.Info, error) {
 			copy(e.Hash[:], r.Fixed(hash.Size))
 			off, stored, raw := r.Uvarint(), r.Uvarint(), r.Uvarint()
 			e.Codec = r.U8()
-			if r.Err() != nil || off < pack.HeaderSize || off+stored > framesEnd || raw > pack.MaxChunkSize ||
+			if r.Err() != nil || off > framesEnd || stored > framesEnd-off || raw > pack.MaxChunkSize ||
+				!frameLengthsAgree(e.Codec, stored, raw) ||
 				(e.Codec != pack.CodecRaw && e.Codec != pack.CodecZstd) ||
 				(j > 0 && p.Entries[j-1].Hash.Compare(e.Hash) >= 0) {
 				return nil, fmt.Errorf("%w: pack %d entry %d", ErrCorrupt, i, j)
@@ -138,12 +139,52 @@ func decodePlain(b []byte) ([]pack.Info, error) {
 			e.Offset, e.StoredLen, e.RawLen = uint32(off), uint32(stored), uint32(raw)
 			p.Entries = append(p.Entries, e)
 		}
+		if !framesFit(p.Entries, size) {
+			return nil, fmt.Errorf("%w: pack %d: frames overlap each other, the header or the index", ErrCorrupt, i)
+		}
 		packs = append(packs, p)
 	}
 	if err := r.Done(); err != nil {
 		return nil, fmt.Errorf("%w: %w", ErrCorrupt, err)
 	}
 	return packs, nil
+}
+
+// framesFit lays a pack's frames out as pack's own index decoder does:
+// walked in offset order from the end of the header, none overlaps the one
+// before it, and the last ends at or before the index those entries make
+// (a record listing fewer entries than its pack only loosens the bound).
+func framesFit(entries []pack.Entry, size uint64) bool {
+	index := pack.SealedIndexLen(entries)
+	if index > size-pack.TrailerSize { // the index offset would wrap
+		return false
+	}
+	indexOffset := size - pack.TrailerSize - index
+	byOffset := append([]pack.Entry(nil), entries...)
+	sort.Slice(byOffset, func(i, j int) bool { return byOffset[i].Offset < byOffset[j].Offset })
+	end := uint64(pack.HeaderSize)
+	for _, e := range byOffset {
+		if uint64(e.Offset) < end {
+			return false
+		}
+		end = uint64(e.Offset) + uint64(e.StoredLen)
+	}
+	return end <= indexOffset
+}
+
+// frameLengthsAgree ties a frame's sealed length to its chunk's, as pack's
+// own index decoder does: a raw frame is the chunk plus the seal, a
+// compressed one is smaller than that (#26: untied, an entry could claim a
+// gibibyte frame for a kibibyte chunk, and GC repack allocates the claim
+// before reading). An unknown codec is the codec check's to refuse.
+func frameLengthsAgree(codec uint8, stored, raw uint64) bool {
+	switch codec {
+	case pack.CodecRaw:
+		return stored == raw+pack.FrameOverhead
+	case pack.CodecZstd:
+		return stored >= pack.FrameOverhead && stored < raw+pack.FrameOverhead
+	}
+	return true
 }
 
 // EncodeObject seals a batch of pack records into an index object.
@@ -258,6 +299,12 @@ func (x *Index) Add(info pack.Info) {
 		}
 		x.chunks[e.Hash] = loc{pack: pi, offset: e.Offset, stored: e.StoredLen, raw: e.RawLen, codec: e.Codec}
 	}
+}
+
+// HasPack reports whether the index has had pack name added.
+func (x *Index) HasPack(name string) bool {
+	_, ok := x.byName[name]
+	return ok
 }
 
 // Lookup locates a chunk.

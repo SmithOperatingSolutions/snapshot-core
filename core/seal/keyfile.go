@@ -126,8 +126,17 @@ func NewKeyFile(kr *Keyring, passphrase []byte, p Argon2Params) ([]byte, error) 
 	return w.Bytes(), nil
 }
 
+// kdf turns a passphrase into the AEAD that wraps the master key.
+type kdf func(passphrase, salt []byte, p Argon2Params) (*dnx.AEAD, error)
+
 // OpenKeyFile unwraps a key file.
 func OpenKeyFile(file, passphrase []byte) (*Keyring, error) {
+	return openKeyFile(file, passphrase, kekAEAD)
+}
+
+// openKeyFile is OpenKeyFile with the derivation handed in, so a test can
+// see which Argon2 costs a file asks for without paying them.
+func openKeyFile(file, passphrase []byte, derive kdf) (*Keyring, error) {
 	if err := validPassphrase(passphrase); err != nil {
 		return nil, err
 	}
@@ -147,7 +156,7 @@ func OpenKeyFile(file, passphrase []byte) (*Keyring, error) {
 	if err := p.validate(); err != nil {
 		return nil, err // before derivation: a crafted file cannot demand 4 TiB
 	}
-	aead, err := kekAEAD(passphrase, salt, p)
+	aead, err := derive(passphrase, salt, p)
 	if err != nil {
 		return nil, err
 	}

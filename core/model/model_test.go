@@ -100,3 +100,41 @@ func TestARegistryCannotChange(t *testing.T) {
 		t.Errorf("changing the slice IDs returned changed the registry: %v", again)
 	}
 }
+
+// adding is a model that says whether it accumulates.
+type adding struct {
+	fake
+	acc bool
+}
+
+func (a adding) Accumulates() bool { return a.acc }
+
+// A model accumulates when it implements Accumulator and says so; a
+// registry accumulates when one of its models does. A model that does not
+// implement the interface, or says false, does not, and a registry of only
+// those does not.
+func TestAModelAccumulatesWhenItSaysSo(t *testing.T) {
+	yes, no, silent := adding{fake{1, 1}, true}, adding{fake{2, 1}, false}, fake{3, 1}
+	for m, want := range map[model.Model]bool{yes: true, no: false, silent: false} {
+		if got := model.Accumulates(m); got != want {
+			t.Errorf("model %d accumulates = %v, want %v", m.ID(), got, want)
+		}
+	}
+	for name, c := range map[string]struct {
+		models []model.Model
+		want   bool
+	}{
+		"one model of three says it accumulates":    {[]model.Model{silent, yes, no}, true},
+		"one says it does not, one does not answer": {[]model.Model{silent, no}, false},
+		"no models": {nil, false},
+	} {
+		r, err := model.NewRegistry(c.models...)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := r.Accumulates(); got != c.want {
+			t.Errorf("%s: the registry accumulates = %v, want %v, so an identical change is %s", name, got, c.want,
+				map[bool]string{true: "summed by its model", false: "taken once"}[c.want])
+		}
+	}
+}

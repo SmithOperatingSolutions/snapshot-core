@@ -46,6 +46,7 @@ const (
 	MaxPackSize      = 1 << 30
 	HeaderSize       = 40
 	TrailerSize      = 16
+	FrameOverhead    = sealOverhead // what sealing adds to a frame's payload
 )
 
 // Codecs.
@@ -60,6 +61,9 @@ const (
 	indexMagic   = "SCPI"
 	version      = 1
 	sealOverhead = 28 // nonce + tag
+	// minIndexEntry is the shortest encoded index entry: hash, three
+	// one-byte uvarints and the codec.
+	minIndexEntry = hash.Size + 4
 	// maxEntryLen bounds one encoded index entry: hash, three uvarints of at
 	// most 5 bytes each (values < 2^32), the codec byte.
 	maxEntryLen = hash.Size + 3*5 + 1
@@ -191,6 +195,25 @@ func NewWriterSized(kr *seal.Keyring, repo seal.RepoID, codec *Codec, maxSize, e
 }
 
 // indexBound is the most the sealed index for n entries can take.
+// SealedIndexLen is the length of the sealed index a pack of these entries
+// carries, exactly as the writer encodes it: a record listing a pack's
+// entries places the index, and so where its frames must end.
+func SealedIndexLen(entries []Entry) uint64 {
+	n := uint64(len(indexMagic)+2+uvarintLen(uint64(len(entries)))) + sealOverhead
+	for _, e := range entries {
+		n += uint64(hash.Size + uvarintLen(uint64(e.Offset)) + uvarintLen(uint64(e.StoredLen)) + uvarintLen(uint64(e.RawLen)) + 1)
+	}
+	return n
+}
+
+func uvarintLen(v uint64) int {
+	n := 1
+	for ; v >= 0x80; v >>= 7 {
+		n++
+	}
+	return n
+}
+
 func indexBound(n int) int { return len(indexMagic) + 2 + 5 + n*maxEntryLen + sealOverhead }
 
 // Add appends a chunk whose identity the caller has computed. It refuses a
@@ -269,10 +292,26 @@ func (w *Writer) AddSealed(h hash.Hash, rawLen int, sealed []byte, codec uint8) 
 	if len(w.entries) > 0 && len(w.buf)+len(sealed)+indexBound(len(w.entries)+1)+TrailerSize > w.maxSize {
 		return ErrFull
 	}
+	if need := len(w.buf) + len(sealed); need > cap(w.buf) {
+		w.grow(need)
+	}
 	w.entries[h] = Entry{Hash: h, Offset: uint32(len(w.buf)), StoredLen: uint32(len(sealed)),
 		RawLen: uint32(rawLen), Codec: codec}
 	w.buf = append(w.buf, sealed...)
 	return nil
+}
+
+// grow moves the frames to a buffer of at least need bytes: twice the
+// current one, with room for the index and trailer, up to the pack's size.
+// Doubling copies each byte about once on the way to a full pack, where
+// append's growth past a few hundred KiB copied a large pack four times
+// over.
+func (w *Writer) grow(need int) {
+	size := max(2*cap(w.buf), need+indexBound(len(w.entries)+1)+TrailerSize)
+	size = max(min(size, w.maxSize), need) // a first chunk over the size limit still gets its pack
+	buf := make([]byte, len(w.buf), size)
+	copy(buf, w.buf)
+	w.buf = buf
 }
 
 // Size is the most the pack can take if finished now.
@@ -353,7 +392,9 @@ func decodeIndex(b []byte, indexOffset uint64) ([]Entry, error) {
 	if r.Err() != nil || string(magic) != indexMagic || v != version || n > MaxChunksPerPack {
 		return nil, fmt.Errorf("%w: index header", ErrCorrupt)
 	}
-	entries := make([]Entry, 0, n)
+	// n is a claim until the entries decode: room for no more than the
+	// bytes left could hold (#24).
+	entries := make([]Entry, 0, min(n, uint64(len(b))/minIndexEntry))
 	for i := uint64(0); i < n; i++ {
 		var e Entry
 		copy(e.Hash[:], r.Fixed(hash.Size))
@@ -363,7 +404,7 @@ func decodeIndex(b []byte, indexOffset uint64) ([]Entry, error) {
 			return nil, fmt.Errorf("%w: index entry %d: %w", ErrCorrupt, i, r.Err())
 		}
 		switch {
-		case stored < sealOverhead || off+stored > indexOffset:
+		case stored < sealOverhead || off > indexOffset: // an offset past 32 bits would truncate into place
 			return nil, fmt.Errorf("%w: entry %d frame [%d,+%d) outside the frames region", ErrCorrupt, i, off, stored)
 		case raw > MaxChunkSize:
 			return nil, fmt.Errorf("%w: entry %d claims %d bytes", ErrCorrupt, i, raw)
@@ -382,8 +423,9 @@ func decodeIndex(b []byte, indexOffset uint64) ([]Entry, error) {
 	if err := r.Done(); err != nil {
 		return nil, fmt.Errorf("%w: index: %w", ErrCorrupt, err)
 	}
-	// Walking frames in offset order from the end of the header refuses both
-	// overlapping frames and a frame reaching back into the header.
+	// Walking frames in offset order from the end of the header refuses
+	// overlapping frames, a frame reaching back into the header, and (the
+	// last) one reaching into the index.
 	byOffset := append([]Entry(nil), entries...)
 	sort.Slice(byOffset, func(i, j int) bool { return byOffset[i].Offset < byOffset[j].Offset })
 	end := uint64(HeaderSize)
@@ -392,6 +434,9 @@ func decodeIndex(b []byte, indexOffset uint64) ([]Entry, error) {
 			return nil, fmt.Errorf("%w: frames overlap each other or the header", ErrCorrupt)
 		}
 		end = uint64(e.Offset) + uint64(e.StoredLen)
+	}
+	if end > indexOffset {
+		return nil, fmt.Errorf("%w: the last frame ends at %d, past the index at %d", ErrCorrupt, end, indexOffset)
 	}
 	return entries, nil
 }

@@ -534,14 +534,39 @@ func FuzzOpenKeyFile(f *testing.F) {
 	}
 	f.Add([]byte("SCKF"))
 	f.Fuzz(func(t *testing.T, b []byte) {
-		// Opening arbitrary bytes never panics and never yields a key unless
-		// the bytes are a real key file for this passphrase.
-		kr, err := seal.OpenKeyFile(b, []byte("pw"))
-		if err == nil && kr == nil {
-			t.Fatal("nil keyring with nil error")
-		}
+		fuzzOpenKeyFile(t, b, func(seal.Argon2Params) error { return nil })
 	})
 }
+
+// fuzzKDFBudget is the most a key-file fuzz run may spend on one Argon2
+// derivation: the floor seal accepts, about 19 MiB and 40 ms. The ceiling
+// (a gibibyte, ten passes) is four seed bytes away and costs a gigabyte for
+// seconds per run, per worker (#25).
+var fuzzKDFBudget = seal.Argon2Params{Time: fast.Time, Memory: fast.Memory, Threads: 4}
+
+func withinFuzzBudget(p seal.Argon2Params) bool {
+	return p.Time <= fuzzKDFBudget.Time && p.Memory <= fuzzKDFBudget.Memory && p.Threads <= fuzzKDFBudget.Threads
+}
+
+// fuzzOpenKeyFile is FuzzOpenKeyFile's body: opening arbitrary bytes never
+// panics and never yields a key unless the bytes are a real key file for
+// this passphrase. deriving is told the costs of each Argon2 derivation the
+// body lets run, before it runs; an error from it stops that derivation.
+// A file over the budget is decoded and validated in full, and stops at
+// the derivation.
+func fuzzOpenKeyFile(t *testing.T, b []byte, deriving func(seal.Argon2Params) error) {
+	kr, err := seal.OpenKeyFileObserved(b, []byte("pw"), func(p seal.Argon2Params) error {
+		if !withinFuzzBudget(p) {
+			return errOverFuzzBudget
+		}
+		return deriving(p)
+	})
+	if err == nil && kr == nil {
+		t.Fatal("nil keyring with nil error")
+	}
+}
+
+var errOverFuzzBudget = errors.New("test: derivation over the fuzz budget")
 
 func FuzzUnwrapKeyring(f *testing.F) {
 	f.Add([]byte("SCKW\x01\x00"))
