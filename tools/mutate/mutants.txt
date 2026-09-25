@@ -812,10 +812,10 @@ run: ^TestForgedIndexesAreRefused$
 
 id: pack-index-frames-in-region
 file: core/pack/pack.go
-find: case stored < sealOverhead || off+stored > indexOffset:
+find: case stored < sealOverhead || off > indexOffset:
 replace: case stored < sealOverhead:
 pkg: ./core/pack
-run: ^TestForgedIndexesAreRefused$
+run: ^TestRegression_SC26_APacksFramesEndAtItsIndex$
 
 id: pack-index-frames-clear-the-header
 file: core/pack/pack.go
@@ -5137,3 +5137,10 @@ find: if index > size-pack.TrailerSize { // the index offset would wrap
 replace: if false { // the index offset would wrap
 pkg: ./core/dedup
 run: ^TestRegression_SC26_AnEntryCannotWrapIntoPlace$
+
+id: pack-last-frame-ends-at-the-index
+file: core/pack/pack.go
+find: if end > indexOffset {
+replace: if false {
+pkg: ./core/pack
+run: ^TestRegression_SC26_APacksFramesEndAtItsIndex$

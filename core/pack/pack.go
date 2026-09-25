@@ -404,7 +404,7 @@ func decodeIndex(b []byte, indexOffset uint64) ([]Entry, error) {
 			return nil, fmt.Errorf("%w: index entry %d: %w", ErrCorrupt, i, r.Err())
 		}
 		switch {
-		case stored < sealOverhead || off+stored > indexOffset:
+		case stored < sealOverhead || off > indexOffset: // an offset past 32 bits would truncate into place
 			return nil, fmt.Errorf("%w: entry %d frame [%d,+%d) outside the frames region", ErrCorrupt, i, off, stored)
 		case raw > MaxChunkSize:
 			return nil, fmt.Errorf("%w: entry %d claims %d bytes", ErrCorrupt, i, raw)
@@ -423,8 +423,9 @@ func decodeIndex(b []byte, indexOffset uint64) ([]Entry, error) {
 	if err := r.Done(); err != nil {
 		return nil, fmt.Errorf("%w: index: %w", ErrCorrupt, err)
 	}
-	// Walking frames in offset order from the end of the header refuses both
-	// overlapping frames and a frame reaching back into the header.
+	// Walking frames in offset order from the end of the header refuses
+	// overlapping frames, a frame reaching back into the header, and (the
+	// last) one reaching into the index.
 	byOffset := append([]Entry(nil), entries...)
 	sort.Slice(byOffset, func(i, j int) bool { return byOffset[i].Offset < byOffset[j].Offset })
 	end := uint64(HeaderSize)
@@ -433,6 +434,9 @@ func decodeIndex(b []byte, indexOffset uint64) ([]Entry, error) {
 			return nil, fmt.Errorf("%w: frames overlap each other or the header", ErrCorrupt)
 		}
 		end = uint64(e.Offset) + uint64(e.StoredLen)
+	}
+	if end > indexOffset {
+		return nil, fmt.Errorf("%w: the last frame ends at %d, past the index at %d", ErrCorrupt, end, indexOffset)
 	}
 	return entries, nil
 }
