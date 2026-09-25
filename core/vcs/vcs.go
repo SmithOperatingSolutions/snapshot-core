@@ -133,12 +133,27 @@ func newRepo(s chunk.Store, o Options) (*Repo, error) {
 
 // backoff is the pause after the attempt'th lost swap in a row (from 0).
 func backoff(attempt int, jitter func(n int64) int64) time.Duration {
-	return 0
+	d := backoffCap
+	if attempt < 16 {
+		d = min(backoffBase<<attempt, backoffCap)
+	}
+	return d/2 + time.Duration(jitter(int64(d/2)+1))
+}
+
+// pause waits out the backoff after the attempt'th lost swap in a row.
+func (r *Repo) pause(ctx context.Context, attempt int) error {
+	return r.sleep(ctx, backoff(attempt, r.jitter))
 }
 
 // sleep pauses for d, or until ctx is done.
 func sleep(ctx context.Context, d time.Duration) error {
-	return ctx.Err()
+	t := time.NewTimer(d)
+	defer t.Stop()
+	select {
+	case <-ctx.Done():
+	case <-t.C:
+	}
+	return ctx.Err() // a context that ended before or during the pause ends the writer
 }
 
 func headKey(b string) []byte { return []byte("heads/" + b) }
@@ -231,9 +246,21 @@ func ref(ctx context.Context, m *prolly.Map, key []byte) (hash.Hash, bool, error
 }
 
 // update applies fn to the refs map and swaps the root, re-reading and
-// re-applying whenever another writer swapped first. fn's own errors end it.
+// re-applying whenever another writer swapped first, after a pause that
+// grows with each loss in a row. fn's own errors end it, as does ctx.
+//
+// The bound is on attempts, not time: it is deterministic, needs no
+// clock, and gives a slow backend as many tries as a fast one. The capped
+// pause keeps it finite in time (a writer that loses every swap gives up
+// within about 1000 × 15ms on average), and a caller that needs a
+// deadline sets one on ctx, which the pause honors.
 func (r *Repo) update(ctx context.Context, fn func(m *prolly.Map, e *prolly.Editor) error) error {
 	for attempt := 0; attempt < maxAttempts; attempt++ {
+		if attempt > 0 {
+			if err := r.pause(ctx, attempt-1); err != nil {
+				return err
+			}
+		}
 		m, err := r.refs(ctx)
 		if err != nil {
 			return err
@@ -1035,6 +1062,11 @@ func (r *Repo) ResolveConflict(ctx context.Context, p auth.Principal, branch, pa
 		return err
 	}
 	for attempt := 0; attempt < maxAttempts; attempt++ {
+		if attempt > 0 {
+			if err := r.pause(ctx, attempt-1); err != nil {
+				return err
+			}
+		}
 		ws, err := r.WorkingSet(ctx, p, branch)
 		if err != nil {
 			return err
