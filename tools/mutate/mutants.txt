@@ -4630,3 +4630,10 @@ find: if Accumulates(m) {\n\t\t\treturn true
 replace: if false && Accumulates(m) {\n\t\t\treturn true
 pkg: ./core/merge
 run: ^TestAnAccumulatingModelIsAskedAboutTheSameChangeOnBothSides$
+
+id: merge-the-same-change-is-taken-once-otherwise
+file: core/merge/merge.go
+find: ours.To == theirs.To && !z.accumulates(ours):
+replace: ours.To == theirs.To && false:
+pkg: ./core/merge
+run: ^TestAModelThatDoesNotAccumulateIsNotAskedAboutTheSameChange$

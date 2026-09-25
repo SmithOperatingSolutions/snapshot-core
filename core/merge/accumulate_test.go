@@ -127,3 +127,20 @@ func TestAnAccumulatingModelIsAskedAboutTheSameChangeOnBothSides(t *testing.T) {
 		}
 	}
 }
+
+// Beside a model that accumulates, a model that does not implement the
+// interface is still never asked about the same change on both sides: one
+// that cannot combine anything (strict) and one that fails (failing) merge
+// it cleanly to that change, as they always have.
+func TestAModelThatDoesNotAccumulateIsNotAskedAboutTheSameChange(t *testing.T) {
+	f := fixtureOf(t, counter{acc: true}, lines{}, strict{}, failing{})
+	base := map[string]object.Ref{"s": f.obj(8, "a"), "f": f.obj(9, "a")}
+	same := map[string]object.Ref{"s": f.obj(8, "b"), "f": f.obj(9, "b")}
+	r, err := f.merge(base, same, same, merge.Options{})
+	if err != nil || len(r.Conflicts) != 0 {
+		t.Fatalf("the same change on both sides to models that do not accumulate = conflicts %+v, %v; want it taken once, the models unasked", r.Conflicts, err)
+	}
+	if rootOf(r) != f.ns(same).Root() {
+		t.Errorf("the merge of the same change on both sides is not that change")
+	}
+}
