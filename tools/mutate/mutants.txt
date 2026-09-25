@@ -112,8 +112,8 @@ run: ^TestValidateRefusesUnusableGeometry$
 
 id: cdc-new-validates
 file: core/cdc/cdc.go
-find: if err := g.Validate(); err != nil {\n\t\treturn nil, err\n\t}\n\treturn &Chunker
-replace: return &Chunker
+find: if err := g.Validate(); err != nil {\n\t\treturn nil, err\n\t}\n\trd := readSize
+replace: rd := readSize
 pkg: ./core/cdc
 run: ^TestValidateRefusesUnusableGeometry$
 

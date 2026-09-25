@@ -71,9 +71,6 @@ func Write(ctx context.Context, w chunk.Writer, r io.Reader, c Config) (Ref, err
 	if err != nil {
 		return Ref{}, err
 	}
-	if err := c.CDC.Validate(); err != nil {
-		return Ref{}, err
-	}
 	b := &builder{ctx: ctx, w: w, rule: rule}
 	defer func() { // the stream is over: what it left pending may be stored now (#10)
 		if f, ok := w.(chunk.Flusher); ok {
@@ -84,7 +81,7 @@ func Write(ctx context.Context, w chunk.Writer, r io.Reader, c Config) (Ref, err
 	if workers == 0 {
 		workers = runtime.GOMAXPROCS(0)
 	}
-	if pw, ok := w.(chunk.Preparer); ok && workers > 1 {
+	if pw, ok := w.(chunk.Preparer); ok && workers > 1 && !short(r) {
 		stop := make(chan struct{}) // the write is over: every goroutine winds down
 		defer close(stop)
 		par, err := cdc.NewParallel(r, c.CDC, workers)
@@ -116,6 +113,21 @@ func Write(ctx context.Context, w chunk.Writer, r io.Reader, c Config) (Ref, err
 			return Ref{}, err
 		}
 	}
+}
+
+// shortStream is the length under which a stream that says how long it is
+// (cdc.Lener) is cut and stored on the caller's goroutine (#40). Starting
+// the pipeline's goroutines and read blocks cost more than such a stream's
+// own work: a 100-byte object spent most of its write there, and on the
+// commitbench batch run the serial path wrote 16 KiB objects 2.6 times as
+// fast, 64 KiB ones 2.0, 128 KiB ones 1.6 and 512 KiB ones 1.3 (2 MiB:
+// even). The bar sits inside that, at the prolly inline limit.
+const shortStream = 256 << 10
+
+// short reports whether r says it holds less than shortStream bytes.
+func short(r io.Reader) bool {
+	l, ok := r.(cdc.Lener)
+	return ok && l.Len() < shortStream
 }
 
 // job is one chunk on its way through the workers: cut, then prepared,

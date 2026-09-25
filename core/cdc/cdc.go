@@ -88,13 +88,28 @@ const (
 	maxConsecutiveEmptyReads = 100 // (0, nil) reads before io.ErrNoProgress, as bufio
 )
 
+// Lener is a reader that knows how many bytes it has left
+// (bytes.Reader, strings.Reader, bytes.Buffer).
+type Lener interface{ Len() int }
+
 // New returns a chunker over r. It refuses an invalid geometry.
+//
+// Its buffers are sized to what the stream needs, not to the geometry
+// (#40): the chunk buffer grows toward Max as chunks need it, and a reader
+// that says how much it has left (Lener) is read in a buffer no larger
+// than that. A 100-byte stream costs a few hundred bytes, where both
+// buffers at full size, 576 KiB by default, were zeroed for each. The
+// size decides only how much a read asks for, never where a cut falls.
 func New(r io.Reader, g Geometry) (*Chunker, error) {
 	if err := g.Validate(); err != nil {
 		return nil, err
 	}
+	rd := readSize
+	if l, ok := r.(Lener); ok {
+		rd = min(rd, max(l.Len(), 1))
+	}
 	return &Chunker{r: r, g: g, hard: g.Mask<<2 | g.Mask, easy: g.Mask >> 2, hash: zeroWindowHash,
-		buf: make([]byte, 0, g.Max), rd: make([]byte, readSize)}, nil
+		rd: make([]byte, rd)}, nil
 }
 
 // Next returns the next chunk's bytes, owned by the caller, or io.EOF. A
