@@ -53,3 +53,46 @@ func TestRegression_SC25_TheKeyFileFuzzerNeverDerivesAboveItsBudget(t *testing.T
 		}
 	}
 }
+
+// #25: with the fuzzer kept under its budget, nothing fast exercises the
+// ceiling; this does, without deriving. A key file at exactly the ceiling
+// (a gibibyte, ten passes, 64 threads) passes validation and reaches its
+// derivation, which is observed and not paid for; one step over on any
+// cost is refused before derivation. The derivation at the ceiling itself
+// is TestSlowAKeyFileAtTheCeilingOpens (-tags slow).
+func TestRegression_SC25_AKeyFileAtTheCeilingIsAccepted(t *testing.T) {
+	seed, err := seal.NewKeyFile(mustKeyring(t), []byte("pw"), fast)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ceiling := seal.Argon2Params{Time: 10, Memory: 1024 * 1024, Threads: 64}
+	file := func(p seal.Argon2Params) []byte {
+		b := bytes.Clone(seed)
+		binary.LittleEndian.PutUint32(b[6:], p.Time)
+		binary.LittleEndian.PutUint32(b[10:], p.Memory)
+		b[14] = p.Threads
+		return b
+	}
+	var asked []seal.Argon2Params
+	observe := func(p seal.Argon2Params) error {
+		asked = append(asked, p)
+		return errNotPaid
+	}
+
+	if _, err := seal.OpenKeyFileObserved(file(ceiling), []byte("pw"), observe); !errors.Is(err, errNotPaid) ||
+		len(asked) != 1 || asked[0] != ceiling {
+		t.Fatalf("a key file at the ceiling %+v: %v, derivations asked %+v; want it accepted and derived: "+
+			"a host whose key file was written at the ceiling could not open its repository", ceiling, err, asked)
+	}
+	for name, p := range map[string]seal.Argon2Params{
+		"eleven passes":             {Time: 11, Memory: ceiling.Memory, Threads: ceiling.Threads},
+		"a gibibyte and a kibibyte": {Time: ceiling.Time, Memory: ceiling.Memory + 1, Threads: ceiling.Threads},
+		"65 threads":                {Time: ceiling.Time, Memory: ceiling.Memory, Threads: 65},
+	} {
+		asked = nil
+		if _, err := seal.OpenKeyFileObserved(file(p), []byte("pw"), observe); !errors.Is(err, seal.ErrParams) || len(asked) != 0 {
+			t.Errorf("a key file one step over the ceiling (%s): %v, derivations asked %+v; want ErrParams before any derivation",
+				name, err, asked)
+		}
+	}
+}

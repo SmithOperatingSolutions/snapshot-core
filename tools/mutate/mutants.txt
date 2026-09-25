@@ -4990,3 +4990,31 @@ find: if !withinFuzzBudget(p) {\n\t\t\treturn errOverFuzzBudget
 replace: if false {\n\t\t\treturn errOverFuzzBudget
 pkg: ./core/seal
 run: ^TestRegression_SC25_TheKeyFileFuzzerNeverDerivesAboveItsBudget$
+
+id: seal-ceiling-time-inclusive
+file: core/seal/keyfile.go
+find: case p.Time < minArgonTime || p.Time > maxArgonTime:
+replace: case p.Time < minArgonTime || p.Time >= maxArgonTime:
+pkg: ./core/seal
+run: ^TestRegression_SC25_AKeyFileAtTheCeilingIsAccepted$
+
+id: seal-ceiling-memory-inclusive
+file: core/seal/keyfile.go
+find: case p.Memory < minArgonMemory || p.Memory > maxArgonMemory:
+replace: case p.Memory < minArgonMemory || p.Memory >= maxArgonMemory:
+pkg: ./core/seal
+run: ^TestRegression_SC25_AKeyFileAtTheCeilingIsAccepted$
+
+id: seal-ceiling-threads-inclusive
+file: core/seal/keyfile.go
+find: case p.Threads < 1 || p.Threads > maxArgonThread:
+replace: case p.Threads < 1 || p.Threads >= maxArgonThread:
+pkg: ./core/seal
+run: ^TestRegression_SC25_AKeyFileAtTheCeilingIsAccepted$
+
+id: seal-threads-ceiling-refused
+file: core/seal/keyfile.go
+find: case p.Threads < 1 || p.Threads > maxArgonThread:
+replace: case p.Threads < 1:
+pkg: ./core/seal
+run: ^TestRegression_SC25_AKeyFileAtTheCeilingIsAccepted$
