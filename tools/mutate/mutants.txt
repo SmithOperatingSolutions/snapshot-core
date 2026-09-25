@@ -5605,3 +5605,10 @@ find: return s.journal != nil\n}
 replace: return true\n}
 pkg: ./core/chunk/packstore
 run: ^TestTheJournalOptionOnABackendWithoutOne$
+
+id: packstore-publish-waits-for-late-finisher
+file: core/chunk/packstore/packstore.go
+find: if s.running == 0 {
+replace: if true {
+pkg: ./core/chunk/packstore
+run: ^TestRegression_SC34_APublishWaitsForAFinisherStartedAfterItsWait$

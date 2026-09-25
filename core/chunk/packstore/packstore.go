@@ -105,6 +105,7 @@ type Store struct {
 	unuploaded []pack.Built      // finished packs whose upload failed; retried at CAS
 	finishing  []*pack.Writer    // full packs a finisher is naming and uploading; their chunks read from here meanwhile
 	finishers  sync.WaitGroup    // one per pack finishing
+	running    int               // finishers not yet done (under mu)
 	finishErr  error             // a finisher's failure to build its pack, surfaced at the next publish
 	slots      chan struct{}     // a token per pack that may be finishing or uploading at once (#10)
 	holdFinish func()            // tests: called by a finisher before it names its pack
@@ -565,6 +566,7 @@ func (s *Store) takePendingLocked() *pack.Writer {
 	s.lastPack = w.Size()
 	s.finishing = append(s.finishing, w)
 	s.finishers.Add(1)
+	s.running++
 	return w
 }
 
@@ -583,6 +585,9 @@ func (s *Store) startFinisher(ctx context.Context, w *pack.Writer) {
 		defer s.finishers.Done()
 		defer func() { <-s.slots }()
 		s.finish(context.WithoutCancel(ctx), w)
+		s.mu.Lock()
+		s.running--
+		s.mu.Unlock()
 	}()
 }
 
@@ -1080,12 +1085,20 @@ func (s *Store) CompareAndSetRoot(ctx context.Context, expected, next hash.Hash)
 // objects that list it, and swaps the manifest to name next, if the root
 // is still expected. Callers hold commitMu.
 func (s *Store) publish(ctx context.Context, expected, next hash.Hash) error {
-	// Every finisher has landed its pack or left it to retry here.
-	s.finishers.Wait()
-	if s.afterWait != nil {
-		s.afterWait()
+	// Every finisher has landed its pack or left it to retry here, and a
+	// put that filled the pending pack after the wait (another goroutine's)
+	// is waited for too: that pack may hold chunks next reaches.
+	for {
+		s.finishers.Wait()
+		if s.afterWait != nil {
+			s.afterWait()
+		}
+		s.mu.Lock()
+		if s.running == 0 {
+			break
+		}
+		s.mu.Unlock()
 	}
-	s.mu.Lock()
 	if s.finishErr != nil {
 		err := s.finishErr
 		s.mu.Unlock()
