@@ -3,8 +3,8 @@
 // claims, validating every record, walking the map for GC, a diff per key,
 // and a three-way merge per key that zips both sides' diffs from base and
 // asks a Resolver only where both sides changed one key. The core's tree
-// model and every map-shaped model outside the core (snapshot-engine's kv,
-// table and document) build on it instead of copying it.
+// model and every map-shaped model outside the core (a kv, table or
+// document model) build on it instead of copying it.
 //
 // A model supplies a Spec: its format, its map configuration and a Check
 // that decodes one record and refuses what is not one of its own.

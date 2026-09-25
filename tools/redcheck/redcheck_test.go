@@ -538,7 +538,7 @@ func TestContractRemote(t *testing.T) {
 `
 
 // A test brought in only because it calls a changed contract may need an
-// environment the check does not have (the MinIO tier skips without an
+// environment the check does not have (the S3 tier skips without an
 // endpoint): its skip is not a deleted test, and it is not judged. A contract
 // change must still be seen to fail somewhere, so every caller skipping is.
 func TestAContractCallerThatSkipsIsNotJudged(t *testing.T) {

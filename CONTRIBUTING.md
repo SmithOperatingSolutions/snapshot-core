@@ -92,6 +92,15 @@ afterwards is a regression guard: give its bar headroom against the
 measured value, on the slowest machine that will run it, so it fails on a
 regression and never on a bad day.
 
+**Resource bugs have bounded reds.** A bug that costs memory, time or loop
+iterations is proven like any other, with a failing test first. The red
+asserts a small budget that the unfixed code measurably exceeds on a small
+input, and never reproduces the blow-up itself. Budgets used here: a
+`runtime.MemStats` `TotalAlloc` delta over a few hundred KiB, a counter of
+reads, visits or root swaps, or growth between two input sizes. The red run
+allocates tens of MB at most. A refusal at a limit has a positive control at
+exactly that limit.
+
 **Property tests and their red.** A `test:` commit's red run fails its
 `rapid` properties on purpose, and rapid saves each failure under
 `testdata/rapid/`. Those files record the stub, not a bug: delete them
@@ -107,6 +116,46 @@ Every bug gets a test named after its ticket, written before the fix:
 `TestRegression_SC123_MergeDropsDeletedPath`, in `<pkg>/regress_test.go`.
 Regression tests are never deleted. A fuzz or property failure is minimized
 and checked in as a permanent seed (`testdata/fuzz/...`) or regression case.
+
+## Where work is tracked, and how it lands
+
+- **Issues.** Every piece of work, open question and decision to revisit is
+  an issue on this repository. A PR closes its issues with one keyword per
+  issue (`Closes #3`, then `Closes #4` on the next line): GitHub closes only
+  the first issue in "Closes #3, #4".
+- **Branches.** One branch per batch of issues, started from `origin/main`,
+  with one PR, squash-merged with its description as the commit body. The
+  branch is kept afterwards: it holds the test-first history the squash
+  hides.
+- **Releases** are annotated tags `vX.Y.Z` on `main`, cut after CI is green,
+  with a GitHub release whose notes list the changes. Until `v1` a minor
+  version may change Go APIs and says so; a patch version does not. A
+  throwaway module (`go get …@vX.Y.Z`, `go mod tidy`, `go build`) proves a
+  tag resolves.
+- **Before calling a branch done:** `mise run redcheck` over the branch, the
+  whole mutant catalog, and `go run ./tools/ci -only` for fmt, vet, lint,
+  race and cover. Update `docs/PROGRESS.md`, and `docs/DESIGN.md` for any
+  decision (a new one takes the next free D number).
+
+## Heavy runs
+
+The race suite, fuzzing, the mutant catalog and the slow tier can use many
+gigabytes. Once, uncapped fuzz workers (Go starts one per core) took a 62 GB
+development host out of memory and killed every session on it (#22). On a
+shared or development machine:
+
+- Run each heavy command under a memory ceiling of its own, so a runaway
+  kills only itself:
+  ```
+  systemd-run --user --scope -q -p MemoryMax=6G -p MemorySwapMax=0 go run ./tools/mutate -j 2
+  ```
+- The race suite fits 6 GiB only with `GOFLAGS=-p=1`: `core/gc` alone peaks
+  near 5.9 GB under the race detector (#33).
+- The fuzz step caps its own workers and memory (`-fuzzparallel`,
+  `-fuzzmemlimit`, #22); a fuzz run started by hand should do the same.
+- Timed runs on a shared machine take one lock per run (`flock <file> <cmd>`),
+  one run per acquisition, and start only when the load is under 2 with no
+  other tests running. Record the load beside the figures.
 
 ## Boundaries the build enforces
 
