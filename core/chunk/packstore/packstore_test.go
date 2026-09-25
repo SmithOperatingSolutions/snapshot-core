@@ -398,7 +398,10 @@ func TestPublishedChunksAreDurableBeforeTheRoot(t *testing.T) {
 
 // --- crash harness at the chunk layer (Engine Spec L0: kill mid-write, 1,000 times) ---
 
-const envCrash = "SNAPSHOT_PACKSTORE_CRASH_DIR"
+const (
+	envCrash        = "SNAPSHOT_PACKSTORE_CRASH_DIR"
+	envCrashJournal = "SNAPSHOT_PACKSTORE_CRASH_JOURNAL"
+)
 
 func TestMain(m *testing.M) {
 	if dir := os.Getenv(envCrash); dir != "" {
@@ -411,13 +414,19 @@ func crashChunk(n int) []byte {
 	return []byte(fmt.Sprintf("crash-chunk-%08d-%s", n, strings.Repeat("z", n%500)))
 }
 
+// crashOptions are the chunk store options of a crash harness child and
+// of the parent that reopens after it, with the journal or without.
+func crashOptions(bs blob.BlobStore, kr *seal.Keyring, journal bool) packstore.Options {
+	return packstore.Options{Blobs: bs, Keys: kr, Repo: repo, Journal: journal, JournalInterval: 3 * time.Millisecond}
+}
+
 func crashChild(dir string) {
 	bs, err := local.Open(dir, local.Options{})
 	if err != nil {
 		fmt.Printf("error open %v\n", err)
 		os.Exit(3)
 	}
-	s, err := packstore.Open(ctx, packstore.Options{Blobs: bs, Keys: keyring(&testing.T{}), Repo: repo})
+	s, err := packstore.Open(ctx, crashOptions(bs, keyring(&testing.T{}), os.Getenv(envCrashJournal) != ""))
 	if err != nil {
 		fmt.Printf("error open %v\n", err)
 		os.Exit(3)
@@ -447,7 +456,12 @@ func crashIterations() int {
 	return 20
 }
 
-func TestCrashDuringCommitLeavesOldOrNew(t *testing.T) {
+func TestCrashDuringCommitLeavesOldOrNew(t *testing.T) { crashCommits(t, false) }
+
+// crashCommits kills a child committing in a loop, over and over, and
+// checks after each kill that the reopened store is at the last commit
+// that returned or the one in flight, with its chunk.
+func crashCommits(t *testing.T, journal bool) {
 	dir := filepath.Join(t.TempDir(), "store")
 	if _, err := local.Create(dir, local.Options{}); err != nil {
 		t.Fatal(err)
@@ -457,6 +471,9 @@ func TestCrashDuringCommitLeavesOldOrNew(t *testing.T) {
 	for i := 0; i < crashIterations(); i++ {
 		cmd := exec.Command(os.Args[0], "-test.run=^$")
 		cmd.Env = append(os.Environ(), envCrash+"="+dir, "SNAPSHOT_PACKSTORE_CRASH_START="+strconv.Itoa(next))
+		if journal {
+			cmd.Env = append(cmd.Env, envCrashJournal+"=1")
+		}
 		out, err := cmd.StdoutPipe()
 		if err != nil {
 			t.Fatal(err)
@@ -511,7 +528,7 @@ func TestCrashDuringCommitLeavesOldOrNew(t *testing.T) {
 		if err != nil {
 			t.Fatalf("iteration %d: the store does not reopen: %v", i, err)
 		}
-		s, err := packstore.Open(ctx, packstore.Options{Blobs: bs, Keys: kr, Repo: repo})
+		s, err := packstore.Open(ctx, crashOptions(bs, kr, journal))
 		if err != nil {
 			t.Fatalf("iteration %d: the chunk store does not reopen after kill -9: %v", i, err)
 		}
