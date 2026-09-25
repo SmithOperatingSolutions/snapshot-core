@@ -71,8 +71,7 @@ func Write(ctx context.Context, w chunk.Writer, r io.Reader, c Config) (Ref, err
 	if err != nil {
 		return Ref{}, err
 	}
-	cut, err := cdc.New(r, c.CDC)
-	if err != nil {
+	if err := c.CDC.Validate(); err != nil {
 		return Ref{}, err
 	}
 	b := &builder{ctx: ctx, w: w, rule: rule}
@@ -94,6 +93,12 @@ func Write(ctx context.Context, w chunk.Writer, r io.Reader, c Config) (Ref, err
 		}
 		defer par.Close()
 		return b.parallel(par, pw, workers, stop)
+	}
+	// The serial chunker is built here, where it is used: its buffers are
+	// most of what a small stream costs (#40).
+	cut, err := cdc.New(r, c.CDC)
+	if err != nil {
+		return Ref{}, err
 	}
 	for {
 		data, err := cut.Next()
