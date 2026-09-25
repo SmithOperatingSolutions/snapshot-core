@@ -176,3 +176,16 @@ func ManifestOpens(s *Store) int {
 	defer s.mu.Unlock()
 	return s.opens
 }
+
+// IndexObjects is how many index objects the store's manifest lists.
+func IndexObjects(ctx context.Context, o Options) (int, error) {
+	r, err := o.Blobs.Root(ctx)
+	if err != nil {
+		return 0, err
+	}
+	m, err := openManifest(r.Value, o.Keys, o.Repo)
+	if err != nil {
+		return 0, err
+	}
+	return len(m.indexes), nil
+}

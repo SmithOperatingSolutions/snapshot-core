@@ -3,6 +3,7 @@ package packstore_test
 import (
 	"context"
 	"errors"
+	"fmt"
 	"testing"
 	"time"
 
@@ -122,5 +123,70 @@ func TestARefreshThatLosesAnIndexObjectToANewerManifestReadsIt(t *testing.T) {
 	remove(t, bs, objects(t, bs, "index/"))
 	if _, err := packstore.Open(ctx, packstore.Options{Blobs: bs, Keys: kr, Repo: repo}); !errors.Is(err, blob.ErrNotFound) {
 		t.Fatalf("opening a store whose manifest lists an index object that is gone = %v, want ErrNotFound", err)
+	}
+}
+
+// Each publish adds an index object, and GC rewrites them only when a pack
+// expires or is repacked, so a repository without garbage listed one per
+// publish until the manifest refused to grow past 100,000 ("run GC to
+// compact"), every refresh and publish costing more on the way. Publishes
+// compact the small ones: two writers taking turns over 300 one-chunk
+// commits leave the manifest listing a few dozen index objects at most,
+// every pack in exactly one of them, and every chunk reads from both
+// writers and from a store opened afresh.
+func TestPublishesCompactSmallIndexObjects(t *testing.T) {
+	const commits, bound = 300, 40
+	bs, kr := mem.New(), keyring(t)
+	writers := []*packstore.Store{open(t, bs, kr), open(t, bs, kr)}
+	o := packstore.Options{Blobs: bs, Keys: kr, Repo: repo}
+	var hs []hash.Hash
+	root, most := hash.Hash{}, 0
+	for i := range commits {
+		w := writers[i%2]
+		h, err := w.Put(ctx, []byte(fmt.Sprintf("commit %d", i)))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := w.CompareAndSetRoot(ctx, root, h); err != nil {
+			t.Fatalf("commit %d: %v", i, err)
+		}
+		root = h
+		hs = append(hs, h)
+		n, err := packstore.IndexObjects(ctx, o)
+		if err != nil {
+			t.Fatal(err)
+		}
+		most = max(most, n)
+		if i%37 == 0 { // the other writer reads what this one published, across compactions
+			if _, err := writers[(i+1)%2].Get(ctx, h); err != nil {
+				t.Fatalf("after commit %d the other writer cannot read it: %v", i, err)
+			}
+		}
+	}
+	if most > bound {
+		t.Fatalf("%d one-chunk commits: the manifest listed up to %d index objects, want at most %d: small index objects must be compacted as they accumulate", commits, most, bound)
+	}
+	order, err := packstore.PackOrder(ctx, o)
+	if err != nil {
+		t.Fatal(err)
+	}
+	listed := map[string]int{}
+	for _, p := range order {
+		listed[p]++
+	}
+	for _, p := range objects(t, bs, "packs/") {
+		if listed[p] != 1 {
+			t.Fatalf("pack %s is listed by %d of the manifest's index objects, want exactly 1", p, listed[p])
+		}
+	}
+	if len(order) != len(listed) {
+		t.Fatalf("the manifest's index objects list %d packs, %d of them distinct", len(order), len(listed))
+	}
+	for _, s := range append(writers, open(t, bs, kr)) {
+		for i, h := range hs {
+			if got, err := s.Get(ctx, h); err != nil || string(got) != fmt.Sprintf("commit %d", i) {
+				t.Fatalf("commit %d reads as %q, %v", i, got, err)
+			}
+		}
 	}
 }
