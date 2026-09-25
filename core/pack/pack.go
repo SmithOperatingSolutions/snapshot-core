@@ -55,6 +55,11 @@ const (
 	CodecZstd uint8 = 1
 )
 
+// RawBelow is the size under which a chunk is stored raw without trying
+// zstd (D13): on a chunk this small the encoder's setup and match-table
+// cache misses cost more than the few bytes it could save.
+const RawBelow = 256
+
 const (
 	headerMagic  = "SCPK"
 	trailerMagic = "SCPE"
