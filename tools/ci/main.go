@@ -41,6 +41,8 @@ func (e errSkip) Error() string { return e.why }
 type config struct {
 	base            string
 	fuzzTime        string
+	fuzzParallel    int    // fuzz workers per target
+	fuzzMemLimit    string // GOMEMLIMIT for each fuzz run
 	crashIterations int
 	layout          layout          // the module's product, adapters and path
 	required        map[string]bool // steps named with -only must not skip
@@ -314,6 +316,12 @@ func stepFuzz(ctx context.Context, c *config) error {
 		}
 	}
 	return nil
+}
+
+// defaultFuzzParallel is how many fuzz workers a target gets on a machine
+// with cpus cores.
+func defaultFuzzParallel(cpus int) int {
+	return cpus
 }
 
 // fuzzCommand is the environment and go arguments that fuzz one target.
