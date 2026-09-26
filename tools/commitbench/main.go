@@ -529,6 +529,15 @@ type countingStore struct {
 	lost atomic.Int64
 }
 
+// PutRaw passes the tree's raw hint (chunk.RawWriter, #42) through to the
+// store, as repo.Open's stack, which hands vcs the store itself, does.
+func (c *countingStore) PutRaw(ctx context.Context, data []byte) (hash.Hash, error) {
+	if rw, ok := c.Store.(chunk.RawWriter); ok {
+		return rw.PutRaw(ctx, data)
+	}
+	return c.Store.Put(ctx, data)
+}
+
 func (c *countingStore) CompareAndSetRoot(ctx context.Context, expected, next hash.Hash) error {
 	t0 := time.Now()
 	err := c.Store.CompareAndSetRoot(ctx, expected, next)
