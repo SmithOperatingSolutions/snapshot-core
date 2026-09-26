@@ -30,6 +30,7 @@ import (
 	"path/filepath"
 	"slices"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -550,28 +551,62 @@ var _ blob.Journaler = (*Store)(nil)
 // The journal is the file journal at the store's top level, beside the
 // root and outside objects/, so no name reaches it and no listing shows
 // it; its writer holds an exclusive flock on it, and a writer publishing
-// without it a shared one (blob.Journaler).
+// without it a shared one (blob.Journaler). The records are in segments
+// beside it, journal.<n> (n from 1, in order), the last the current one.
 func (s *Store) journalPath() string { return filepath.Join(s.dir, journalName) }
 
-// OpenJournal implements blob.Journaler.
-func (s *Store) OpenJournal(ctx context.Context) (blob.Journal, error) {
-	f, err := os.OpenFile(s.journalPath(), os.O_RDWR|os.O_CREATE|os.O_APPEND, filePerm)
+// segments lists the journal's segment numbers in order.
+func (s *Store) segments() ([]uint64, error) {
+	entries, err := os.ReadDir(s.dir)
 	if err != nil {
 		return nil, err
 	}
-	if err := fsutil.TryLock(f, true); err != nil {
-		_ = f.Close()
+	var out []uint64
+	for _, e := range entries {
+		rest, ok := strings.CutPrefix(e.Name(), journalName+".")
+		if !ok {
+			continue
+		}
+		n, err := strconv.ParseUint(rest, 10, 64)
+		if err != nil || n == 0 || strconv.FormatUint(n, 10) != rest {
+			continue
+		}
+		out = append(out, n)
+	}
+	slices.Sort(out)
+	return out, nil
+}
+
+func (s *Store) segmentPath(n uint64) string {
+	return filepath.Join(s.dir, journalName+"."+strconv.FormatUint(n, 10))
+}
+
+// OpenJournal implements blob.Journaler.
+func (s *Store) OpenJournal(ctx context.Context) (blob.Journal, error) {
+	lock, err := os.OpenFile(s.journalPath(), os.O_RDWR|os.O_CREATE|os.O_APPEND, filePerm)
+	if err != nil {
+		return nil, err
+	}
+	if err := fsutil.TryLock(lock, true); err != nil {
+		_ = lock.Close()
 		if errors.Is(err, fsutil.ErrLocked) {
 			return nil, blob.ErrJournalBusy
 		}
 		return nil, err
 	}
-	// The file's name is durable before anything is appended to it.
-	if err := fsutil.SyncDir(s.dir); err != nil {
-		_ = f.Close()
+	j := &journal{s: s, lock: lock}
+	segs, err := s.segments()
+	if err == nil && len(segs) == 0 {
+		err = j.newSegment(1)
+	} else if err == nil {
+		j.seq = segs[len(segs)-1]
+		j.cur, err = os.OpenFile(s.segmentPath(j.seq), os.O_RDWR|os.O_APPEND, filePerm)
+	}
+	if err != nil {
+		_ = lock.Close()
 		return nil, err
 	}
-	return &journal{f: f}, nil
+	return j, nil
 }
 
 // HoldJournal implements blob.Journaler.
@@ -587,37 +622,85 @@ func (s *Store) HoldJournal(ctx context.Context) (int64, func(), error) {
 		}
 		return 0, nil, err
 	}
-	info, err := f.Stat()
+	size, err := s.journalSize()
 	if err != nil {
 		_ = f.Close()
 		return 0, nil, err
 	}
 	var once sync.Once
-	return info.Size(), func() { once.Do(func() { _ = f.Close() }) }, nil
+	return size, func() { once.Do(func() { _ = f.Close() }) }, nil
 }
 
-// journal is an open journal file.
+// journalSize is the length of every segment.
+func (s *Store) journalSize() (int64, error) {
+	segs, err := s.segments()
+	if err != nil {
+		return 0, err
+	}
+	var n int64
+	for _, seg := range segs {
+		info, err := os.Stat(s.segmentPath(seg))
+		if err != nil {
+			return 0, err
+		}
+		n += info.Size()
+	}
+	return n, nil
+}
+
+// journal is an open journal: the lock file, and the current segment. A
+// Sync may run beside a Write (it fsyncs the segment it finds current).
 type journal struct {
-	f      *os.File
+	s      *Store
+	lock   *os.File
+	mu     sync.Mutex // guards cur and seq
+	cur    *os.File
+	seq    uint64
 	closed atomic.Bool
+}
+
+// newSegment creates segment n, durably, and makes it current. Callers hold
+// mu (or own j alone).
+func (j *journal) newSegment(n uint64) error {
+	f, err := os.OpenFile(j.s.segmentPath(n), os.O_RDWR|os.O_CREATE|os.O_EXCL|os.O_APPEND, filePerm)
+	if err != nil {
+		return err
+	}
+	if err := fsutil.SyncDir(j.s.dir); err != nil {
+		_ = f.Close()
+		return err
+	}
+	if j.cur != nil {
+		_ = j.cur.Close()
+	}
+	j.cur, j.seq = f, n
+	return nil
 }
 
 func (j *journal) Read(ctx context.Context, limit int64) ([]byte, error) {
 	if j.closed.Load() {
 		return nil, blob.ErrJournalClosed
 	}
-	info, err := j.f.Stat()
+	size, err := j.s.journalSize()
 	if err != nil {
 		return nil, err
 	}
-	if info.Size() > limit {
-		return nil, fmt.Errorf("%w: the journal holds %d bytes, over %d", blob.ErrTooLarge, info.Size(), limit)
+	if size > limit {
+		return nil, fmt.Errorf("%w: the journal holds %d bytes, over %d", blob.ErrTooLarge, size, limit)
 	}
-	b := make([]byte, info.Size())
-	if _, err := j.f.ReadAt(b, 0); err != nil && !errors.Is(err, io.EOF) {
+	segs, err := j.s.segments()
+	if err != nil {
 		return nil, err
 	}
-	return b, nil
+	out := make([]byte, 0, size)
+	for _, seg := range segs {
+		b, err := os.ReadFile(j.s.segmentPath(seg))
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, b...)
+	}
+	return out, nil
 }
 
 // Append writes b at the end (O_APPEND) and fsyncs.
@@ -625,40 +708,21 @@ func (j *journal) Append(ctx context.Context, b []byte) error {
 	if j.closed.Load() {
 		return blob.ErrJournalClosed
 	}
-	if _, err := j.f.Write(b); err != nil {
+	if err := j.Write(ctx, b); err != nil {
 		return err
 	}
-	return j.f.Sync()
+	return j.Sync(ctx)
 }
 
-func (j *journal) Reset(ctx context.Context) error {
-	if j.closed.Load() {
-		return blob.ErrJournalClosed
-	}
-	if err := j.f.Truncate(0); err != nil {
-		return err
-	}
-	return j.f.Sync()
-}
-
-// Close closes the file, which drops its lock.
-func (j *journal) Close() error {
-	if j.closed.Swap(true) {
-		return nil
-	}
-	return j.f.Close()
-}
-
-// JournalByDefault implements blob.Journaler: on, one fsync a commit (#34).
-func (s *Store) JournalByDefault() bool { return true }
-
-// Write implements blob.Journal: the bytes go to the file (O_APPEND), not
-// yet fsynced.
+// Write implements blob.Journal: the bytes go to the current segment
+// (O_APPEND), not yet fsynced.
 func (j *journal) Write(ctx context.Context, b []byte) error {
 	if j.closed.Load() {
 		return blob.ErrJournalClosed
 	}
-	_, err := j.f.Write(b)
+	j.mu.Lock()
+	defer j.mu.Unlock()
+	_, err := j.cur.Write(b)
 	return err
 }
 
@@ -667,13 +731,84 @@ func (j *journal) Sync(ctx context.Context) error {
 	if j.closed.Load() {
 		return blob.ErrJournalClosed
 	}
-	return j.f.Sync()
+	j.mu.Lock()
+	f := j.cur
+	j.mu.Unlock()
+	return f.Sync()
 }
 
-// Rotate implements blob.Journal.
-func (j *journal) Rotate(ctx context.Context) error { return errNoSegmentsYet }
+// Rotate implements blob.Journal: the current segment is fsynced, and the
+// next created.
+func (j *journal) Rotate(ctx context.Context) error {
+	if j.closed.Load() {
+		return blob.ErrJournalClosed
+	}
+	j.mu.Lock()
+	defer j.mu.Unlock()
+	if err := j.cur.Sync(); err != nil {
+		return err
+	}
+	return j.newSegment(j.seq + 1)
+}
 
 // Drop implements blob.Journal.
-func (j *journal) Drop(ctx context.Context) error { return errNoSegmentsYet }
+func (j *journal) Drop(ctx context.Context) error {
+	if j.closed.Load() {
+		return blob.ErrJournalClosed
+	}
+	j.mu.Lock()
+	cur := j.seq
+	j.mu.Unlock()
+	return j.removeBefore(cur)
+}
 
-var errNoSegmentsYet = errors.New("journal: no segments yet")
+// removeBefore removes the segments before n and makes that durable.
+func (j *journal) removeBefore(n uint64) error {
+	segs, err := j.s.segments()
+	if err != nil {
+		return err
+	}
+	removed := false
+	for _, seg := range segs {
+		if seg < n {
+			if err := os.Remove(j.s.segmentPath(seg)); err != nil && !errors.Is(err, fs.ErrNotExist) {
+				return err
+			}
+			removed = true
+		}
+	}
+	if !removed {
+		return nil
+	}
+	return fsutil.SyncDir(j.s.dir)
+}
+
+// Reset empties the journal: the earlier segments go, the current one is
+// truncated.
+func (j *journal) Reset(ctx context.Context) error {
+	if j.closed.Load() {
+		return blob.ErrJournalClosed
+	}
+	j.mu.Lock()
+	defer j.mu.Unlock()
+	if err := j.removeBefore(j.seq); err != nil {
+		return err
+	}
+	if err := j.cur.Truncate(0); err != nil {
+		return err
+	}
+	return j.cur.Sync()
+}
+
+// Close closes the files, which drops the lock.
+func (j *journal) Close() error {
+	if j.closed.Swap(true) {
+		return nil
+	}
+	j.mu.Lock()
+	defer j.mu.Unlock()
+	return errors.Join(j.cur.Close(), j.lock.Close())
+}
+
+// JournalByDefault implements blob.Journaler: on, one fsync a commit (#34).
+func (s *Store) JournalByDefault() bool { return true }

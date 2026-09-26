@@ -5,7 +5,6 @@ package mem
 import (
 	"bytes"
 	"context"
-	"errors"
 	"fmt"
 	"io"
 	"sort"
@@ -27,10 +26,10 @@ type Store struct {
 	objects map[string]object
 	root    []byte
 	version blob.Version
-	mirror  []byte // the root's copy a split store keeps here
-	journal []byte // blob.Journaler
-	jopen   bool   // a writer has the journal open
-	jholds  int    // HoldJournal calls not yet released
+	mirror  []byte   // the root's copy a split store keeps here
+	jsegs   [][]byte // blob.Journaler: the journal's segments, the current one last
+	jopen   bool     // a writer has the journal open
+	jholds  int      // HoldJournal calls not yet released
 }
 
 // New returns an empty store.
@@ -186,7 +185,7 @@ func (s *Store) HoldJournal(ctx context.Context) (int64, func(), error) {
 	}
 	s.jholds++
 	var once sync.Once
-	return int64(len(s.journal)), func() {
+	return int64(len(s.journalLocked())), func() {
 		once.Do(func() {
 			s.mu.Lock()
 			s.jholds--
@@ -207,10 +206,11 @@ func (j *journal) Read(ctx context.Context, limit int64) ([]byte, error) {
 	if j.closed {
 		return nil, blob.ErrJournalClosed
 	}
-	if int64(len(j.s.journal)) > limit {
-		return nil, fmt.Errorf("%w: the journal holds %d bytes, over %d", blob.ErrTooLarge, len(j.s.journal), limit)
+	all := j.s.journalLocked()
+	if int64(len(all)) > limit {
+		return nil, fmt.Errorf("%w: the journal holds %d bytes, over %d", blob.ErrTooLarge, len(all), limit)
 	}
-	return bytes.Clone(j.s.journal), nil
+	return all, nil
 }
 
 func (j *journal) Append(ctx context.Context, b []byte) error {
@@ -219,7 +219,11 @@ func (j *journal) Append(ctx context.Context, b []byte) error {
 	if j.closed {
 		return blob.ErrJournalClosed
 	}
-	j.s.journal = append(j.s.journal, b...)
+	if len(j.s.jsegs) == 0 {
+		j.s.jsegs = [][]byte{nil}
+	}
+	last := len(j.s.jsegs) - 1
+	j.s.jsegs[last] = append(j.s.jsegs[last], b...)
 	return nil
 }
 
@@ -229,7 +233,7 @@ func (j *journal) Reset(ctx context.Context) error {
 	if j.closed {
 		return blob.ErrJournalClosed
 	}
-	j.s.journal = nil
+	j.s.jsegs = nil
 	return nil
 }
 
@@ -261,9 +265,34 @@ func (j *journal) Sync(ctx context.Context) error {
 }
 
 // Rotate implements blob.Journal.
-func (j *journal) Rotate(ctx context.Context) error { return errNoSegmentsYet }
+func (j *journal) Rotate(ctx context.Context) error {
+	j.s.mu.Lock()
+	defer j.s.mu.Unlock()
+	if j.closed {
+		return blob.ErrJournalClosed
+	}
+	j.s.jsegs = append(j.s.jsegs, nil)
+	return nil
+}
 
 // Drop implements blob.Journal.
-func (j *journal) Drop(ctx context.Context) error { return errNoSegmentsYet }
+func (j *journal) Drop(ctx context.Context) error {
+	j.s.mu.Lock()
+	defer j.s.mu.Unlock()
+	if j.closed {
+		return blob.ErrJournalClosed
+	}
+	if n := len(j.s.jsegs); n > 1 {
+		j.s.jsegs = j.s.jsegs[n-1:]
+	}
+	return nil
+}
 
-var errNoSegmentsYet = errors.New("journal: no segments yet")
+// journalLocked is the journal's segments, in order, as one. Callers hold mu.
+func (s *Store) journalLocked() []byte {
+	var out []byte
+	for _, seg := range s.jsegs {
+		out = append(out, seg...)
+	}
+	return out
+}

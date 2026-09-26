@@ -5517,22 +5517,22 @@ run: ^TestJournalContract$
 
 id: mem-journal-read-limit
 file: core/blob/mem/mem.go
-find: if int64(len(j.s.journal)) > limit {
+find: if int64(len(all)) > limit {
 replace: if false {
 pkg: ./core/blob/mem
 run: ^TestJournalContract$
 
 id: mem-journal-closed-refuses-append
 file: core/blob/mem/mem.go
-find: if j.closed {\n\t\treturn blob.ErrJournalClosed\n\t}\n\tj.s.journal = append
-replace: if false {\n\t\treturn blob.ErrJournalClosed\n\t}\n\tj.s.journal = append
+find: if j.closed {\n\t\treturn blob.ErrJournalClosed\n\t}\n\tif len(j.s.jsegs) == 0 {
+replace: if false {\n\t\treturn blob.ErrJournalClosed\n\t}\n\tif len(j.s.jsegs) == 0 {
 pkg: ./core/blob/mem
 run: ^TestJournalContract$
 
 id: local-journal-exclusive
 file: core/blob/local/local.go
-find: if err := fsutil.TryLock(f, true); err != nil {
-replace: if err := fsutil.TryLock(f, false); err != nil {
+find: if err := fsutil.TryLock(lock, true); err != nil {
+replace: if err := fsutil.TryLock(lock, false); err != nil {
 pkg: ./core/blob/local
 run: ^TestJournalContract$
 
@@ -5545,22 +5545,22 @@ run: ^TestJournalContract$
 
 id: local-journal-read-limit
 file: core/blob/local/local.go
-find: if info.Size() > limit {
+find: if size > limit {
 replace: if false {
 pkg: ./core/blob/local
 run: ^TestJournalContract$
 
 id: local-journal-appends-at-the-end
 file: core/blob/local/local.go
-find: os.O_RDWR|os.O_CREATE|os.O_APPEND, filePerm)
-replace: os.O_RDWR|os.O_CREATE, filePerm)
+find: j.cur, err = os.OpenFile(s.segmentPath(j.seq), os.O_RDWR|os.O_APPEND, filePerm)
+replace: j.cur, err = os.OpenFile(s.segmentPath(j.seq), os.O_RDWR, filePerm)
 pkg: ./core/blob/local
 run: ^TestJournalContract$
 
 id: local-journal-reset-truncates
 file: core/blob/local/local.go
-find: if err := j.f.Truncate(0); err != nil {
-replace: if err := j.f.Sync(); err != nil {
+find: if err := j.cur.Truncate(0); err != nil {
+replace: if err := j.cur.Sync(); err != nil {
 pkg: ./core/blob/local
 run: ^TestJournalContract$
 
@@ -5573,8 +5573,8 @@ run: ^TestJournalContract$
 
 id: local-journal-closed-refuses-append
 file: core/blob/local/local.go
-find: if j.closed.Load() {\n\t\treturn blob.ErrJournalClosed\n\t}\n\tif _, err := j.f.Write(b)
-replace: if false {\n\t\treturn blob.ErrJournalClosed\n\t}\n\tif _, err := j.f.Write(b)
+find: if j.closed.Load() {\n\t\treturn blob.ErrJournalClosed\n\t}\n\tj.mu.Lock()\n\tdefer j.mu.Unlock()\n\t_, err := j.cur.Write(b)
+replace: if false {\n\t\treturn blob.ErrJournalClosed\n\t}\n\tj.mu.Lock()\n\tdefer j.mu.Unlock()\n\t_, err := j.cur.Write(b)
 pkg: ./core/blob/local
 run: ^TestJournalContract$
 
@@ -5958,15 +5958,15 @@ run: ^TestADefaultOpenFindingTheJournalHeldIsRefused$
 
 id: local-journal-sync-refuses-when-closed
 file: core/blob/local/local.go
-find: if j.closed.Load() {\n\t\treturn blob.ErrJournalClosed\n\t}\n\treturn j.f.Sync()
-replace: if false {\n\t\treturn blob.ErrJournalClosed\n\t}\n\treturn j.f.Sync()
+find: if j.closed.Load() {\n\t\treturn blob.ErrJournalClosed\n\t}\n\tj.mu.Lock()\n\tf := j.cur
+replace: if false {\n\t\treturn blob.ErrJournalClosed\n\t}\n\tj.mu.Lock()\n\tf := j.cur
 pkg: ./core/blob/local
 run: ^TestJournalContract$
 
 id: local-journal-write-writes
 file: core/blob/local/local.go
-find: \t_, err := j.f.Write(b)\n\treturn err
-replace: \treturn nil
+find: _, err := j.cur.Write(b)\n\treturn err
+replace: return nil
 pkg: ./core/blob/local
 run: ^TestJournalContract$
 
@@ -6025,3 +6025,31 @@ find: \t\t\td.Frames += len(r.frames)
 replace: \t\t\td.Frames += len(r.frames) * 0
 pkg: ./core/chunk/packstore
 run: ^TestAJournalThatCannotReplayIsDiscarded$
+
+id: local-journal-rotates
+file: core/blob/local/local.go
+find: return j.newSegment(j.seq + 1)
+replace: return nil
+pkg: ./core/blob/local
+run: ^TestJournalContract$
+
+id: local-journal-drops
+file: core/blob/local/local.go
+find: return j.removeBefore(cur)
+replace: return j.removeBefore(cur - cur)
+pkg: ./core/blob/local
+run: ^TestJournalContract$
+
+id: mem-journal-rotates
+file: core/blob/mem/mem.go
+find: j.s.jsegs = append(j.s.jsegs, nil)
+replace: _ = j.s.jsegs
+pkg: ./core/blob/mem
+run: ^TestJournalContract$
+
+id: mem-journal-drops
+file: core/blob/mem/mem.go
+find: j.s.jsegs = j.s.jsegs[n-1:]
+replace: _ = n
+pkg: ./core/blob/mem
+run: ^TestJournalContract$
