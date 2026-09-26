@@ -375,6 +375,16 @@ can refuse them) and a fuzz target.
     stored, and the replay publishes it and empties the journal. Chunks
     that only intermediate roots reached (a history that came back to the
     root it started from) are not published: no root reaches them.
+  - *Rotation.* A background publish takes the commit lock only to
+    rotate the journal (sync the segment, start the next), then publishes
+    beside the commits; the 16 MiB limit is per journal, every segment
+    counted, since the replay reads the whole journal into memory
+    (`TestAPublishInFlightDoesNotStallACommit`, `TestAReplayReadsEverySegment`).
+    Local, journal on, same session, 1-minute load under 2: 1 writer 134.0
+    to 151.2/s (p99 10.3 to 9.7 ms); 4 writers 354.4 to 361.5/s (p99 43.2
+    to 20.2 ms); 16 writers 592.6 to 594.1/s (p99 215 to 203 ms); 64
+    writers 216.8 to 211.3/s (p99 2.58 to 2.61 s, within noise). The gain
+    is in the tail: a commit no longer waits out a publish.
   - *Discard.* A journal no open can replay (the root moved under it, GC
     deleted what it counted on, or it does not verify) makes every open
     fail until an admin calls `repo.DiscardJournal` (`packstore.DiscardJournal`):
