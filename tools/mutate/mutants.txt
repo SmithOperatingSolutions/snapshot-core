@@ -3147,8 +3147,8 @@ run: ^TestWritesAreAuthorizedPerPath$
 
 id: vcs-commit-checks-paths
 file: core/vcs/vcs.go
-find: if err := r.checkPaths(ctx, p, branch, head.Namespace, ws.Staged); err != nil {
-replace: if err := r.checkPaths(ctx, p, branch, head.Namespace, ws.Staged); err != nil && false {
+find: if err := r.checkChanged(ctx, p, branch, head.Namespace, ws.Staged, flushed); err != nil {
+replace: if err := r.checkChanged(ctx, p, branch, head.Namespace, ws.Staged, flushed); err != nil && false {
 pkg: ./core/vcs
 run: ^TestWritesAreAuthorizedPerPath$
 
@@ -5453,3 +5453,38 @@ find: height: n.level, top: n}
 replace: height: n.level}
 pkg: ./core/prolly
 run: ^TestTheRootIsReadOnceWhenTheMapIsMade$
+
+id: vcs-checked-record-only-for-its-namespace
+file: core/vcs/vcs.go
+find: if n == nil || n.Root() != to {
+replace: if n == nil {
+pkg: ./core/vcs
+run: ^TestTheFlushedWorkingSetCallsAskForEveryChangeTheFlushDidNotSee$
+
+id: vcs-update-flushed-uses-the-record
+file: core/vcs/vcs.go
+find: return r.updateWorkingSet(ctx, p, branch, prev, next, flushed)
+replace: return r.updateWorkingSet(ctx, p, branch, prev, next, nil)
+pkg: ./core/vcs
+run: ^TestTheFlushedWorkingSetCallsReadNoNamespaceNode$
+
+id: vcs-commit-ws-flushed-uses-the-record
+file: core/vcs/vcs.go
+find: return r.commitWorkingSet(ctx, p, branch, message, flushed)
+replace: return r.commitWorkingSet(ctx, p, branch, message, nil)
+pkg: ./core/vcs
+run: ^TestTheFlushedWorkingSetCallsReadNoNamespaceNode$
+
+id: vcs-update-flushed-checks-its-base
+file: core/vcs/vcs.go
+find: if !ok || base != from {
+replace: if !ok || base != base {
+pkg: ./core/vcs
+run: ^TestTheFlushedWorkingSetCallsAskForEveryChangeTheFlushDidNotSee$
+
+id: vcs-flushed-calls-ask-every-path
+file: core/vcs/vcs.go
+find: 	for _, changed := range paths {
+replace: 	for _, changed := range paths[1:] {
+pkg: ./core/vcs
+run: ^TestTheFlushedWorkingSetCallsAskWhatTheDiffFinds$

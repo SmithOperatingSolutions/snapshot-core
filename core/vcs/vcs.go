@@ -479,6 +479,20 @@ func (r *Repo) WorkingSet(ctx context.Context, p auth.Principal, branch string) 
 // (ErrMergeState otherwise), which only merging, resolving, committing and
 // abandoning change.
 func (r *Repo) UpdateWorkingSet(ctx context.Context, p auth.Principal, branch string, prev, next WorkingSet) (WorkingSet, error) {
+	return r.updateWorkingSet(ctx, p, branch, prev, next, nil)
+}
+
+// UpdateWorkingSetFlushed is UpdateWorkingSet handed the namespaces next
+// names as their editors' flushes made them (#43). Where one of flushed
+// is next's working or staged namespace, flushed from the one stored, it
+// asks for write on the paths that flush changed instead of diffing; any
+// other namespace, and a flushed one that is not next's or was flushed
+// from elsewhere, is diffed. It asks exactly what UpdateWorkingSet asks.
+func (r *Repo) UpdateWorkingSetFlushed(ctx context.Context, p auth.Principal, branch string, prev, next WorkingSet, flushed ...*object.Namespace) (WorkingSet, error) {
+	return r.updateWorkingSet(ctx, p, branch, prev, next, flushed)
+}
+
+func (r *Repo) updateWorkingSet(ctx context.Context, p auth.Principal, branch string, prev, next WorkingSet, flushed []*object.Namespace) (WorkingSet, error) {
 	if err := r.branchCheck(ctx, p, auth.Write, branch); err != nil {
 		return WorkingSet{}, err
 	}
@@ -490,7 +504,7 @@ func (r *Repo) UpdateWorkingSet(ctx context.Context, p auth.Principal, branch st
 		return WorkingSet{}, err
 	}
 	for _, ns := range [][2]hash.Hash{{stored.Working, next.Working}, {stored.Staged, next.Staged}} {
-		if err := r.checkPaths(ctx, p, branch, ns[0], ns[1]); err != nil {
+		if err := r.checkChanged(ctx, p, branch, ns[0], ns[1], flushed); err != nil {
 			return WorkingSet{}, err
 		}
 	}
@@ -548,6 +562,19 @@ func (r *Repo) conflictCount(ctx context.Context, ws WorkingSet) (uint64, error)
 // CommitWorkingSet commits what is staged on a branch, onto its head as it
 // is when the commit lands; a merge in progress adds its second parent.
 func (r *Repo) CommitWorkingSet(ctx context.Context, p auth.Principal, branch, message string) (Commit, error) {
+	return r.commitWorkingSet(ctx, p, branch, message, nil)
+}
+
+// CommitWorkingSetFlushed is CommitWorkingSet handed the staged namespace
+// as its editor's flush made it (#43): where one of flushed is what is
+// staged when the commit lands, flushed from the head's namespace, it asks
+// for write on the paths that flush changed instead of diffing, and
+// otherwise diffs. It asks exactly what CommitWorkingSet asks.
+func (r *Repo) CommitWorkingSetFlushed(ctx context.Context, p auth.Principal, branch, message string, flushed ...*object.Namespace) (Commit, error) {
+	return r.commitWorkingSet(ctx, p, branch, message, flushed)
+}
+
+func (r *Repo) commitWorkingSet(ctx context.Context, p auth.Principal, branch, message string, flushed []*object.Namespace) (Commit, error) {
 	if err := r.branchCheck(ctx, p, auth.Commit, branch); err != nil {
 		return Commit{}, err
 	}
@@ -573,7 +600,7 @@ func (r *Repo) CommitWorkingSet(ctx context.Context, p auth.Principal, branch, m
 		if err != nil {
 			return err
 		}
-		if err := r.checkPaths(ctx, p, branch, head.Namespace, ws.Staged); err != nil {
+		if err := r.checkChanged(ctx, p, branch, head.Namespace, ws.Staged, flushed); err != nil {
 			return err
 		}
 		c := Commit{Parents: []hash.Hash{head.Hash}, Namespace: ws.Staged, Height: head.Height + 1,
@@ -1176,16 +1203,4 @@ func (r *Repo) ResolveConflict(ctx context.Context, p auth.Principal, branch, pa
 		}
 	}
 	return fmt.Errorf("vcs: the working set of %s kept changing", branch)
-}
-
-// UpdateWorkingSetFlushed is UpdateWorkingSet, handed the namespaces next
-// names as their flushes made them.
-func (r *Repo) UpdateWorkingSetFlushed(ctx context.Context, p auth.Principal, branch string, prev, next WorkingSet, flushed ...*object.Namespace) (WorkingSet, error) {
-	return WorkingSet{}, errors.New("vcs: UpdateWorkingSetFlushed is not implemented")
-}
-
-// CommitWorkingSetFlushed is CommitWorkingSet, handed the staged namespace
-// as its flush made it.
-func (r *Repo) CommitWorkingSetFlushed(ctx context.Context, p auth.Principal, branch, message string, flushed ...*object.Namespace) (Commit, error) {
-	return Commit{}, errors.New("vcs: CommitWorkingSetFlushed is not implemented")
 }
