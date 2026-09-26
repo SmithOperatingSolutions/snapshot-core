@@ -583,7 +583,7 @@ func (s *Store) segmentPath(n uint64) string {
 
 // OpenJournal implements blob.Journaler.
 func (s *Store) OpenJournal(ctx context.Context) (blob.Journal, error) {
-	lock, err := os.OpenFile(s.journalPath(), os.O_RDWR|os.O_CREATE|os.O_APPEND, filePerm)
+	lock, err := s.openJournalFile(os.O_RDWR | os.O_CREATE | os.O_APPEND)
 	if err != nil {
 		return nil, err
 	}
@@ -609,9 +609,34 @@ func (s *Store) OpenJournal(ctx context.Context) (blob.Journal, error) {
 	return j, nil
 }
 
+// errJournalNotRegular is a journal path that holds something other than
+// a regular file (a directory, a named pipe, a device).
+var errJournalNotRegular = errors.New("local: the journal is not a regular file")
+
+// openJournalFile opens the journal's lock file and refuses anything that
+// is not a regular file. Linux refuses a directory opened with O_CREATE
+// on its own and macOS does not, and a named pipe opens on either, so the
+// check is made here, after the open, on every platform (#34).
+func (s *Store) openJournalFile(flag int) (*os.File, error) {
+	f, err := os.OpenFile(s.journalPath(), flag, filePerm)
+	if err != nil {
+		return nil, err
+	}
+	info, err := f.Stat()
+	if err != nil {
+		_ = f.Close()
+		return nil, err
+	}
+	if !info.Mode().IsRegular() {
+		_ = f.Close()
+		return nil, fmt.Errorf("%w: %s is a %s", errJournalNotRegular, s.journalPath(), info.Mode().Type())
+	}
+	return f, nil
+}
+
 // HoldJournal implements blob.Journaler.
 func (s *Store) HoldJournal(ctx context.Context) (int64, func(), error) {
-	f, err := os.OpenFile(s.journalPath(), os.O_RDONLY|os.O_CREATE, filePerm)
+	f, err := s.openJournalFile(os.O_RDONLY | os.O_CREATE)
 	if err != nil {
 		return 0, nil, err
 	}
