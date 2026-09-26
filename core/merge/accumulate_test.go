@@ -149,8 +149,9 @@ func TestAModelThatDoesNotAccumulateIsNotAskedAboutTheSameChange(t *testing.T) {
 // registered model accumulates, as a fast-forward does.
 func TestTheSameChangesOnBothSidesDoNoWork(t *testing.T) {
 	f := newFixture(t)
-	base := f.ns(map[string]object.Ref{"a": f.obj(7, "a")})
-	same := f.ns(map[string]object.Ref{"a": f.obj(7, "b"), "c": f.obj(7, "c")})
+	base := f.ns(f.deep(map[string]object.Ref{"a": f.obj(7, "a")}))
+	same := f.ns(f.deep(map[string]object.Ref{"a": f.obj(7, "b"), "c": f.obj(7, "c")}))
+	f.seesADiff(base, same)
 	f.s.gets.Store(0)
 	r, err := merge.Merge(ctx, f.reg, base, same, same, f.s, merge.Options{})
 	if err != nil || rootOf(r) != same.Root() || len(r.Conflicts) != 0 {
