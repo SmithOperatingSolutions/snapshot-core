@@ -254,3 +254,38 @@ The storage core is built first; the table model (Engine Spec) and the access la
 - [ ] Can we rely on a disknexus release cadence and tagging policy, or do we pin and upgrade only on security fixes?
 - [ ] Which model is second after files: JSON documents or tables?
 - [ ] Do we need zero-copy import of existing S3 objects (lakeFS-style) in v1.x?
+
+## Addendum, 2026-09-26: the commit journal (chunk layer)
+
+*Added after v0.2.0 (#34); the text above is unchanged. Details are in
+`docs/DESIGN.md` §5, §6 and D12.*
+
+- **What it is.** On a backend that keeps one (`blob/local`,
+  `blob/multivol`; the optional `blob.Journaler`, beside the frozen
+  `BlobStore` port), the chunk layer commits into an append-only journal:
+  one sealed record per commit (its new chunks and its root, under the
+  domain tag `vdb/journal/v1`), made durable by one fsync that commits
+  queued meanwhile share. A background publish writes the packs, index
+  objects and root from it at most `JournalInterval` (1 s) after the
+  first commit it holds, and at close. On by default on disk; a host can
+  turn it off. S3 and `blob/split` publish every commit, as before.
+- **Durability.** A commit returns once its record is durable: every
+  chunk a root reaches is durable before the root names it, in the
+  journal until its pack is. Every open replays a journal left by a
+  writer that stopped; records after the last complete one that
+  authenticates are discarded.
+- **Visibility bound.** The committing process sees a commit at once.
+  Another process reads the published root: it sees the last published
+  state, and a journaled commit within `JournalInterval` of the first
+  commit the journal took plus the time of one publish.
+- **One writer.** One writer holds a repository's journal; another
+  writer, and an open that asks for the journal, is refused, naming
+  it. A journal that cannot be replayed (the root moved under it, or GC
+  deleted what it counted on) is discarded only by an admin's explicit
+  request, which reports what it discards.
+- **Do not run v0.2.0, writer or GC, on a repository whose journal holds
+  commits.** v0.2.0 knows no journal: its writer would swap the root under
+  those commits, and its GC would mark from a root that does not reach
+  what they counted on. Open the repository with a version that knows the
+  journal first; it replays and publishes it. With an empty journal,
+  v0.2.0 reads and writes the repository unchanged.
