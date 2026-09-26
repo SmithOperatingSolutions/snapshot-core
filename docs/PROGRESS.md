@@ -549,9 +549,11 @@ them, each tracked as an issue:
     `packstore-putraw-skips-compression`, `packstore-put-still-compresses`,
     `prolly-flush-uses-the-raw-hint`). Single writer on mem 2,757 to
     4,501 commits/s; a batch of 10,000 flushes in 9.9 ms, was 38.9; the
-    batch's pack bytes +12.8% (the nodes uncompressed), and one reader's
-    point reads 28% slower (cause not yet found, `docs/PERFORMANCE.md`):
-    the owner's call.
+    batch's pack bytes +12.7% (the nodes uncompressed), kept as the
+    owner's accepted trade (D17). One reader's point reads measured 28%
+    slower under default GC settings: the bench's smaller live heap
+    paces the GC faster; under equal GC headroom 88.1k against 88.6k
+    reads/s, 16 readers unchanged (`docs/PERFORMANCE.md`).
 18. **A pack writer's buffer reused** (measured, not landed): a new pack
     writer per commit is 29% of the bytes a single-writer commit
     allocates on mem (its 64 KiB `minPending` buffer), but 3.7% of the

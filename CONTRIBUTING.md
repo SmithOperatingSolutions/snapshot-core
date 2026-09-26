@@ -90,7 +90,9 @@ commit body, measured on the same machine in the same run, and any
 behavior it carries gets its own red. The test that guards the figure
 afterwards is a regression guard: give its bar headroom against the
 measured value, on the slowest machine that will run it, so it fails on a
-regression and never on a bad day.
+regression and never on a bad day. A small benchmark process's live heap
+sets its GC rate, so compare builds under equal GC headroom (`GOGC=off`
+with a `GOMEMLIMIT`) before calling a difference a regression.
 
 **Resource bugs have bounded reds.** A bug that costs memory, time or loop
 iterations is proven like any other, with a failing test first. The red

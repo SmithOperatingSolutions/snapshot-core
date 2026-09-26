@@ -66,11 +66,11 @@ average at each run's start.
 | batch 10,000, pack bytes the commit wrote | mem | 2,039,260 | 2,299,986 (+12.8%, D17) | |
 | bulk 256 MiB: write MB/s, then commit | local | 504 MB/s, 90.6 ms | 565 MB/s, 96.9 ms | 1.96 / 1.80 |
 | bulk 256 MiB | mem | 566 MB/s, 48.8 ms | 535 MB/s, 41.2 ms | 1.95 / 1.80 |
-| point reads, 1 reader: reads/s (p50, p99) | local | 79,940 (10 µs, 30 µs) | **57,026 (20 µs, 50 µs)** | 1.97 / 1.82 |
+| point reads, 1 reader: reads/s (p50, p99) | local | 79,940 (10 µs, 30 µs) | 57,026 (20 µs, 50 µs), GC pacing, below | 1.97 / 1.82 |
 | point reads, 16 readers | local | 360,163 (20 µs, 400 µs) | 361,801 (20 µs, 410 µs) | 1.97 / 1.82 |
 | 16 readers beside one committing writer (commits in the run) | local | 316,070 (p99 470 µs; 301) | 324,136 (p99 500 µs; 1,690) | 1.97 / 1.82 |
 | full read of 256 MiB | local | 568 MB/s | 577 MB/s | 1.97 / 1.82 |
-| point reads, 1 reader | mem | 82,608 (10 µs, 20 µs) | **59,524 (20 µs, 40 µs)** | 1.87 / 1.80 |
+| point reads, 1 reader | mem | 82,608 (10 µs, 20 µs) | 59,524 (20 µs, 40 µs), GC pacing, below | 1.87 / 1.80 |
 | point reads, 16 readers | mem | 347,706 (20 µs, 400 µs) | 366,946 (20 µs, 390 µs) | 1.87 / 1.80 |
 | 16 readers beside one committing writer | mem | 144,054 (p99 1.28 ms; 7,497) | 123,054 (p99 1.7 ms; 27,165) | 1.87 / 1.80 |
 | full read of 256 MiB | mem | 645 MB/s | 631 MB/s | 1.87 / 1.80 |
@@ -88,10 +88,15 @@ What the table says:
   readers nothing measurable on disk (16 readers 316k to 324k reads/s while
   the writer made 5.6× the commits). In memory the readers share the CPU
   with a writer that commits 3.6× as often.
-- **Open: one reader's point reads are 28–29% slower.** Isolated to the
-  D17 commit (a tree's nodes raw): the tree just before it read 81,894
-  reads/s on mem, with it 58,649 (5 s runs, load 1.6). 16 readers are
-  unaffected. In the profile a point read is the node reads' SHA-256
-  verification (36%) and node decoding (30%); the cause is not yet found.
-  Left to the owner with D17's pack bytes.
+- **One reader's point reads: the harness's GC pacing, not a read cost.**
+  Under default GC settings one reader reads 28% fewer objects a second
+  after D17 (83.0k to 61.9k on mem); 16 readers are unchanged. A read does
+  the same work either way (2.9 cache hits and about 7,680 bytes verified
+  per read, the same misses). What differs is the bench process's live
+  heap: with every node raw, no zstd encoder state stays live, the heap
+  falls from about 35 MB to about 10 MB, and the GC, paced by the live
+  heap, runs about 3.5 times as often. Under equal GC headroom
+  (`GOGC=off GOMEMLIMIT=512MiB`) one reader reads 88.1k reads/s with D17
+  and 88.6k without; a host's own live heap is far larger than the
+  bench's.
 - **Bulk** write and read are unchanged within noise.
