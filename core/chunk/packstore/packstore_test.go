@@ -56,6 +56,18 @@ func open(t testing.TB, bs blob.BlobStore, kr *seal.Keyring) *packstore.Store {
 	return s
 }
 
+// openReader opens a store without the journal, beside a writer that
+// holds it.
+func openReader(t testing.TB, bs blob.BlobStore, kr *seal.Keyring) *packstore.Store {
+	t.Helper()
+	s, err := packstore.Open(ctx, packstore.WithBackoff(packstore.Options{Blobs: bs, Keys: kr, Repo: repo, Journal: packstore.JournalOff}, time.Millisecond))
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	t.Cleanup(func() { _ = s.Close() })
+	return s
+}
+
 // tamper rewrites the byte in the middle of a chunk's frame in its pack
 // object, through the raw backend (packs are immutable, so: delete and put).
 func tamper(t *testing.T, bs blob.BlobStore, s *packstore.Store, h hash.Hash) {
@@ -88,7 +100,9 @@ func subject(t *testing.T, bs blob.BlobStore) contract.Subject {
 	return contract.Subject{
 		Store:  s,
 		Tamper: func(t *testing.T, h hash.Hash) { tamper(t, bs, s, h) },
-		Reopen: func(t *testing.T) chunk.Store { return open(t, bs, kr) },
+		// Beside the open store: on disk, where the journal is on by
+		// default and one writer holds it, the reopened store reads.
+		Reopen: func(t *testing.T) chunk.Store { return openReader(t, bs, kr) },
 	}
 }
 

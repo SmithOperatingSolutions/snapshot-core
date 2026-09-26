@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -1018,4 +1019,33 @@ func TestAFailedSyncFailsItsCommits(t *testing.T) {
 	if _, err := s.Put(ctx, payload("third", 100)); err == nil {
 		t.Fatal("a put after a failed sync succeeded: the journal cannot be trusted with another commit")
 	}
+}
+
+// The owner's decision (#34): a store opened with the default on a disk
+// backend, finding another writer holding the journal, is refused with an
+// error that says so, not opened quietly without the journal.
+func TestADefaultOpenFindingTheJournalHeldIsRefused(t *testing.T) {
+	bs := localStore(t)
+	kr := keyring(t)
+	first, err := packstore.Open(ctx, packstore.Options{Blobs: bs, Keys: kr, Repo: repo})
+	if err != nil {
+		t.Fatalf("positive control: the first default open: %v", err)
+	}
+	defer first.Close()
+	if !first.Journaled() {
+		t.Fatal("fixture: the first default open on local does not journal")
+	}
+	s2, err := packstore.Open(ctx, packstore.Options{Blobs: bs, Keys: kr, Repo: repo})
+	if err == nil {
+		_ = s2.Close()
+		t.Fatal("a second default open while a writer holds the journal succeeded: it would read stale state and refuse every publish without saying why")
+	}
+	if !errors.Is(err, blob.ErrJournalBusy) || !strings.Contains(err.Error(), "another writer") {
+		t.Fatalf("a second default open = %v, want ErrJournalBusy naming another writer", err)
+	}
+	ro, err := packstore.Open(ctx, packstore.Options{Blobs: bs, Keys: kr, Repo: repo, Journal: packstore.JournalOff})
+	if err != nil {
+		t.Fatalf("an open asking for no journal beside the writer: %v", err)
+	}
+	_ = ro.Close()
 }
