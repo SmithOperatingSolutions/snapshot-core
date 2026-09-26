@@ -669,3 +669,11 @@ func (j *journal) Sync(ctx context.Context) error {
 	}
 	return j.f.Sync()
 }
+
+// Rotate implements blob.Journal.
+func (j *journal) Rotate(ctx context.Context) error { return errNoSegmentsYet }
+
+// Drop implements blob.Journal.
+func (j *journal) Drop(ctx context.Context) error { return errNoSegmentsYet }
+
+var errNoSegmentsYet = errors.New("journal: no segments yet")

@@ -33,6 +33,7 @@ func Run(t *testing.T, newStore Factory) {
 	t.Run("ClosedRefuses", func(t *testing.T) { journalClosed(t, newStore) })
 	t.Run("IsNotAnObject", func(t *testing.T) { journalNotAnObject(t, newStore) })
 	t.Run("WritesAreReadAndSyncedInOrder", func(t *testing.T) { journalWriteSync(t, newStore) })
+	t.Run("SegmentsRotateAndDrop", func(t *testing.T) { journalSegments(t, newStore) })
 }
 
 func openJournal(t *testing.T, s blob.Journaler) blob.Journal {
@@ -307,3 +308,64 @@ func put(t *testing.T, s blob.BlobStore, name string, b []byte) {
 }
 
 var _ = io.EOF
+
+func journalSegments(t *testing.T, newStore Factory) {
+	ctx := context.Background()
+	s, reopen := newStore(t)
+	j := openJournal(t, s)
+	a, b, c := payload("seg-a", 3000), payload("seg-b", 2000), payload("seg-c", 100)
+	appendJournal(t, j, a)
+	if err := j.Rotate(ctx); err != nil {
+		t.Fatalf("Rotate: %v", err)
+	}
+	if err := j.Write(ctx, b); err != nil {
+		t.Fatal(err)
+	}
+	if err := j.Sync(ctx); err != nil {
+		t.Fatal(err)
+	}
+	ab := append(append([]byte(nil), a...), b...)
+	if got := readJournal(t, j); !bytes.Equal(got, ab) {
+		t.Fatalf("across a rotation the journal reads %d bytes, want the %d written, in order", len(got), len(ab))
+	}
+	if size, release, err := s.HoldJournal(ctx); !errors.Is(err, blob.ErrJournalBusy) {
+		if err == nil {
+			release()
+		}
+		t.Fatalf("HoldJournal while open = %d, %v", size, err)
+	}
+	if err := j.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if size, release, err := s.HoldJournal(ctx); err != nil || size != int64(len(ab)) {
+		t.Fatalf("HoldJournal reports %d bytes (%v), want every segment's %d", size, err, len(ab))
+	} else {
+		release()
+	}
+	j2 := openJournal(t, reopen(t))
+	if got := readJournal(t, j2); !bytes.Equal(got, ab) {
+		t.Fatalf("opened again, the journal reads %d bytes, want both segments' %d", len(got), len(ab))
+	}
+	appendJournal(t, j2, c) // lands in the current, last segment
+	if err := j2.Drop(ctx); err != nil {
+		t.Fatalf("Drop: %v", err)
+	}
+	bc := append(append([]byte(nil), b...), c...)
+	if got := readJournal(t, j2); !bytes.Equal(got, bc) {
+		t.Fatalf("after Drop the journal reads %d bytes, want the current segment's %d: Drop removed what was not published, or kept what was", len(got), len(bc))
+	}
+	if err := j2.Close(); err != nil {
+		t.Fatal(err)
+	}
+	j3 := openJournal(t, reopen(t))
+	defer j3.Close()
+	if got := readJournal(t, j3); !bytes.Equal(got, bc) {
+		t.Fatalf("opened again after Drop, the journal reads %d bytes, want %d", len(got), len(bc))
+	}
+	if err := j3.Reset(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if got := readJournal(t, j3); len(got) != 0 {
+		t.Fatalf("after Reset the journal holds %d bytes", len(got))
+	}
+}

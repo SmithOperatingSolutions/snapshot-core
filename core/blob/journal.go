@@ -53,6 +53,13 @@ type Journal interface {
 	// commits that wrote while another's fsync was in flight share the
 	// next one (#34).
 	Sync(ctx context.Context) error
+	// Rotate makes what was written durable and starts a new segment:
+	// later writes land in it, and Read returns the segments in order.
+	Rotate(ctx context.Context) error
+	// Drop removes, durably, every segment before the current one: a
+	// writer drops what it has published while later commits wait in the
+	// current segment (#34).
+	Drop(ctx context.Context) error
 	// Reset empties the journal, durably.
 	Reset(ctx context.Context) error
 	// Close releases the journal. Every other method fails afterwards.
