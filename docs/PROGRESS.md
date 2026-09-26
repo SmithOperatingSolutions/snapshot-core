@@ -504,7 +504,16 @@ them, each tracked as an issue:
     memory (593 to 422 µs), 29.9 to 30.4 on disk, where the fsyncs of
     the publish are 32 of the 33 ms and the host's own work fell from
     1.34 to 0.95 ms (`TestSlowACommitPerObjectCostsLittle`, a 2 ms
-    guard). Holding the root left two merge tests that count reads blind
+    guard). A host that stages then commits what is staged takes the
+    same path through `UpdateWorkingSetFlushed` and
+    `CommitWorkingSetFlushed`
+    (`TestTheFlushedWorkingSetCallsAskWhatTheDiffFinds`,
+    `TestTheFlushedWorkingSetCallsAskForEveryChangeTheFlushDidNotSee`,
+    `TestTheFlushedWorkingSetCallsReadNoNamespaceNode`): `-flow
+    two-step`, 1,351 / 1,433 to 1,792 / 1,826 commits a second in memory
+    (740 / 698 to 558 / 548 µs, 676 to 410 KiB a commit); on disk two
+    publishes' fsyncs (65 ms) hide it, the host's work 1.62 to 1.26 ms.
+    Holding the root left two merge tests that count reads blind
     in one-node namespaces; their fixtures now span many nodes. Left for
     the owner: the flush's nodes are compressed in
     `core/pack` on `packstore.Put` (about two thirds of the host's CPU
