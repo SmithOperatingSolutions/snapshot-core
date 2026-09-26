@@ -802,6 +802,11 @@ func (s *Store) Put(ctx context.Context, data []byte) (hash.Hash, error) {
 	return s.PutPrepared(ctx, p)
 }
 
+// PutRaw implements chunk.RawWriter.
+func (s *Store) PutRaw(ctx context.Context, data []byte) (hash.Hash, error) {
+	return s.Put(ctx, data)
+}
+
 // PutPrepared implements chunk.Preparer: the deduplication check, the seal
 // into the pending pack and its upload when full, under the store's lock.
 func (s *Store) PutPrepared(ctx context.Context, cp chunk.Prepared) (hash.Hash, error) {

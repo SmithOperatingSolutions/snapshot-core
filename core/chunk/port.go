@@ -75,6 +75,16 @@ type Preparer interface {
 	PutPrepared(ctx context.Context, p Prepared) (hash.Hash, error)
 }
 
+// RawWriter is a Writer that can store a chunk without trying to compress
+// it: for chunks its caller knows gain little from compression, such as a
+// tree's own nodes (hashes and short keys). The chunk is the same chunk a
+// Put of the same bytes stores: same hash, same bytes read back. Optional,
+// beside the port; a caller holding a plain Writer calls Put.
+type RawWriter interface {
+	Writer
+	PutRaw(ctx context.Context, data []byte) (hash.Hash, error)
+}
+
 // Stats describes what a store holds.
 type Stats struct {
 	Chunks int64 // distinct chunks stored (including ones not yet published)
