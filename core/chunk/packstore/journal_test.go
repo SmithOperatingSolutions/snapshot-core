@@ -1128,6 +1128,17 @@ type blockingPacks struct {
 	release chan struct{}
 	fail    atomic.Bool
 	dropErr atomic.Bool
+	// armSwap holds each root swap, once it has landed, until release.
+	armSwap atomic.Bool
+}
+
+func (b *blockingPacks) SwapRoot(ctx context.Context, expected blob.Version, next []byte) (blob.Version, error) {
+	v, err := b.Store.SwapRoot(ctx, expected, next)
+	if err == nil && b.armSwap.Load() {
+		b.reached <- struct{}{}
+		<-b.release
+	}
+	return v, err
 }
 
 func newBlockingPacks() *blockingPacks {
@@ -1283,5 +1294,115 @@ func TestAReplayReadsEverySegment(t *testing.T) {
 				t.Fatalf("the replay left the backend's root at %s, want %s", got.Short(), b.Short())
 			}
 		})
+	}
+}
+
+// A commit made after a background publish's swap has landed, before the
+// publish has finished, finds the backend at the published root: that is
+// the publish's own, not a conflict.
+func TestACommitBesideALandedPublishIsNotAConflict(t *testing.T) {
+	bs, kr := newBlockingPacks(), keyring(t)
+	s := openJournaled(t, bs, kr, time.Hour)
+	first := commit(t, s, hash.Hash{}, payload("first", 100))
+	a := commit(t, s, first, payload("a", 100))
+	bs.armSwap.Store(true)
+	published := make(chan error, 1)
+	go func() { published <- packstore.PublishJournal(s) }()
+	<-bs.reached // the swap to a has landed
+	if got := publishedRoot(t, bs, kr); got != a {
+		t.Fatalf("fixture: the backend's root is %s, want %s", got.Short(), a.Short())
+	}
+	h, err := s.Put(ctx, payload("b", 100))
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = s.CompareAndSetRoot(ctx, a, h)
+	bs.armSwap.Store(false)
+	close(bs.release)
+	if perr := <-published; perr != nil {
+		t.Fatalf("the publish: %v", perr)
+	}
+	if err != nil {
+		t.Fatalf("a commit while the publish's landed swap was finishing = %v, want it journaled", err)
+	}
+}
+
+// A chunk put before a background publish took its pending pack, and
+// committed after, is journaled: if that publish fails and the writer dies,
+// the replay still finds it.
+func TestAChunkPutBeforeAPublishTookItsPackIsJournaled(t *testing.T) {
+	bs, kr := newBlockingPacks(), keyring(t)
+	s := openJournaled(t, bs, kr, time.Hour)
+	first := commit(t, s, hash.Hash{}, payload("first", 100))
+	a := commit(t, s, first, payload("a", 100))
+	x, err := s.Put(ctx, payload("x, put before the publish", 300))
+	if err != nil {
+		t.Fatal(err)
+	}
+	bs.armed.Store(true)
+	bs.fail.Store(true)
+	published := make(chan error, 1)
+	go func() { published <- packstore.PublishJournal(s) }()
+	<-bs.reached // the publish took the pending pack, x in it
+	done := make(chan error, 1)
+	go func() { done <- s.CompareAndSetRoot(ctx, a, x) }()
+	select {
+	case err = <-done:
+	case <-time.After(2 * time.Second):
+		close(bs.release)
+		<-published
+		<-done
+		t.Fatal("a commit waited behind the publish")
+	}
+	close(bs.release)
+	<-published
+	if err != nil {
+		t.Fatalf("committing x beside the publish: %v", err)
+	}
+	bs.armed.Store(false)
+	packstore.Abandon(s)
+	re, err := packstore.Open(ctx, journalOptions(bs, kr, time.Hour))
+	if err != nil {
+		t.Fatalf("reopening after the publish failed and the writer died: %v", err)
+	}
+	defer re.Close()
+	if got, _ := re.Root(ctx); got != x {
+		t.Fatalf("after the crash the root is %s, want x %s", got.Short(), x.Short())
+	}
+}
+
+// A background publish forgets only the counted chunks it saw: one a
+// commit beside it counted on stays counted, and a GC that expires its
+// pack fails the next commit rather than letting a root name it.
+func TestAChunkCountedBesideAPublishStaysCounted(t *testing.T) {
+	bs, kr := newBlockingPacks(), keyring(t)
+	hs := published(t, open(t, bs, kr), "a, the root", "b, garbage")
+	s := openJournaled(t, bs, kr, time.Hour)
+	c1 := commit(t, s, hs[0], payload("c1", 100))
+	bs.armed.Store(true)
+	published := make(chan error, 1)
+	go func() { published <- packstore.PublishJournal(s) }()
+	<-bs.reached
+	if _, err := s.Put(ctx, []byte("b, garbage")); err != nil { // counted on beside the publish
+		t.Fatal(err)
+	}
+	h := commit(t, s, c1, payload("names b", 100))
+	close(bs.release)
+	if err := <-published; err != nil {
+		t.Fatalf("the publish: %v", err)
+	}
+	bs.armed.Store(false)
+	round(t, bs, kr, liveSet(hs[0], c1), t0)
+	out := round(t, bs, kr, liveSet(hs[0], c1), t0.Add(time.Hour))
+	if len(out.Expired) != 1 {
+		t.Fatalf("fixture: expired %v, want b's pack", out.Expired)
+	}
+	remove(t, bs, out.Expired)
+	h2, err := s.Put(ctx, payload("third", 100))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.CompareAndSetRoot(ctx, h, h2); !errors.Is(err, chunk.ErrSessionLost) {
+		t.Fatalf("a commit after GC expired a chunk counted on beside a publish = %v, want ErrSessionLost", err)
 	}
 }

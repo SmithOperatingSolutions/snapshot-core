@@ -6053,3 +6053,52 @@ find: j.s.jsegs = j.s.jsegs[n-1:]
 replace: _ = n
 pkg: ./core/blob/mem
 run: ^TestJournalContract$
+
+id: packstore-journal-publish-does-not-hold-the-commit-lock
+file: core/chunk/packstore/journal.go
+find: \ts.publishing, s.pubRoot = true, root\n\ts.mu.Unlock()\n\ts.commitMu.Unlock()\n
+replace: \ts.publishing, s.pubRoot = true, root\n\ts.mu.Unlock()\n\tdefer s.commitMu.Unlock()\n
+pkg: ./core/chunk/packstore
+run: ^TestAPublishInFlightDoesNotStallACommit$
+
+id: packstore-journal-commit-beside-a-landed-publish
+file: core/chunk/packstore/journal.go
+find: beside := s.publishing && m.root == s.pubRoot
+replace: beside := false && m.root == s.pubRoot
+pkg: ./core/chunk/packstore
+run: ^TestACommitBesideALandedPublishIsNotAConflict$
+
+id: packstore-journal-taken-pack-is-journaled
+file: core/chunk/packstore/journal.go
+find: if s.jpending != nil && s.jpending != w {
+replace: if s.jpending != nil && s.jpending != w && false {
+pkg: ./core/chunk/packstore
+run: ^TestAChunkPutBeforeAPublishTookItsPackIsJournaled$
+
+id: packstore-journal-publish-forgets-only-what-it-saw
+file: core/chunk/packstore/packstore.go
+find: \t\t\tif counted == nil {\n\t\t\t\ts.deduped, s.sessGen = map[hash.Hash]bool{}, upd.gcGen
+replace: \t\t\tif true {\n\t\t\t\ts.deduped, s.sessGen = map[hash.Hash]bool{}, upd.gcGen
+pkg: ./core/chunk/packstore
+run: ^TestAChunkCountedBesideAPublishStaysCounted$
+
+id: packstore-journal-own-pack-does-not-force-a-publish
+file: core/chunk/packstore/journal.go
+find: \t\ts.running > 0 || len(s.jcounted) > maxCounted
+replace: \t\ts.running > 0 || len(s.inflight) > 0 || len(s.jcounted) > maxCounted
+pkg: ./core/chunk/packstore
+run: ^TestAPublishInFlightDoesNotStallACommit$
+
+id: packstore-journal-replay-skips-published-segments
+file: core/chunk/packstore/journal.go
+find: \t\tif r.expected == root {\n\t\t\tfrom = k\n\t\t\tbreak
+replace: \t\tif r.expected == root && k == 0 {\n\t\t\tfrom = k\n\t\t\tbreak
+pkg: ./core/chunk/packstore
+run: ^TestAReplayReadsEverySegment$
+
+id: packstore-journal-publish-drops-its-segments
+file: core/chunk/packstore/journal.go
+find: if derr := j.Drop(ctx); derr != nil {
+replace: if derr := error(nil); derr != nil {
+pkg: ./core/chunk/packstore
+run: ^TestAReplayReadsEverySegment$
