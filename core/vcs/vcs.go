@@ -1177,3 +1177,15 @@ func (r *Repo) ResolveConflict(ctx context.Context, p auth.Principal, branch, pa
 	}
 	return fmt.Errorf("vcs: the working set of %s kept changing", branch)
 }
+
+// UpdateWorkingSetFlushed is UpdateWorkingSet, handed the namespaces next
+// names as their flushes made them.
+func (r *Repo) UpdateWorkingSetFlushed(ctx context.Context, p auth.Principal, branch string, prev, next WorkingSet, flushed ...*object.Namespace) (WorkingSet, error) {
+	return WorkingSet{}, errors.New("vcs: UpdateWorkingSetFlushed is not implemented")
+}
+
+// CommitWorkingSetFlushed is CommitWorkingSet, handed the staged namespace
+// as its flush made it.
+func (r *Repo) CommitWorkingSetFlushed(ctx context.Context, p auth.Principal, branch, message string, flushed ...*object.Namespace) (Commit, error) {
+	return Commit{}, errors.New("vcs: CommitWorkingSetFlushed is not implemented")
+}
