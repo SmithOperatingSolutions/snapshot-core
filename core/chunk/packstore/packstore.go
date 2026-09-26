@@ -757,10 +757,23 @@ func (s *Store) Flush(ctx context.Context) error {
 // is pending (#10). The seal is under that pack's keys; if the pack has
 // moved on by the time the chunk is stored, PutPrepared seals it again.
 func (s *Store) Prepare(data []byte) (chunk.Prepared, error) {
+	p, err := s.prepare(data, false)
+	if err != nil {
+		return nil, err
+	}
+	return p, nil
+}
+
+// prepare is Prepare; raw stores the chunk as a raw frame without trying
+// to compress it (PutRaw).
+func (s *Store) prepare(data []byte, raw bool) (*prepared, error) {
 	if len(data) > chunk.MaxChunkSize {
 		return nil, fmt.Errorf("%w: %d bytes", chunk.ErrTooLarge, len(data))
 	}
-	payload, codec := s.codec.Compress(data)
+	payload, codec := data, pack.CodecRaw
+	if !raw {
+		payload, codec = s.codec.Compress(data)
+	}
 	p := &prepared{h: hash.Sum(data), n: len(data), payload: payload, codec: codec}
 	s.mu.Lock()
 	if s.pending == nil && !s.closed {
@@ -802,9 +815,15 @@ func (s *Store) Put(ctx context.Context, data []byte) (hash.Hash, error) {
 	return s.PutPrepared(ctx, p)
 }
 
-// PutRaw implements chunk.RawWriter.
+// PutRaw implements chunk.RawWriter: Put, the chunk stored as a raw frame
+// without trying zstd (#42, D17). The pack format has had raw frames since
+// v1, so every reader reads it.
 func (s *Store) PutRaw(ctx context.Context, data []byte) (hash.Hash, error) {
-	return s.Put(ctx, data)
+	p, err := s.prepare(data, true)
+	if err != nil {
+		return hash.Hash{}, err
+	}
+	return s.PutPrepared(ctx, p)
 }
 
 // PutPrepared implements chunk.Preparer: the deduplication check, the seal

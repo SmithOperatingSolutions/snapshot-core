@@ -1612,8 +1612,8 @@ run: ^TestStoreErrorsSurfaceAtEveryPoint$
 
 id: prolly-store-put-error-surfaces
 file: core/prolly/flush.go
-find: if _, err := m.s.Put(ctx, b); err != nil {
-replace: if _, err := m.s.Put(ctx, b); err != nil && false {
+find: if _, err := put(ctx, b); err != nil {
+replace: if _, err := put(ctx, b); err != nil && false {
 pkg: ./core/prolly
 run: ^TestStoreErrorsSurfaceAtEveryPoint$
 
@@ -6137,3 +6137,24 @@ find: if errors.Is(err, chunk.ErrRootConflict) && live {
 replace: if errors.Is(err, chunk.ErrRootConflict) && live && false {
 pkg: ./core/chunk/packstore
 run: ^TestASyncPublishOverAMovedRootIsRefused$
+
+id: packstore-putraw-skips-compression
+file: core/chunk/packstore/packstore.go
+find: 	if !raw {\n		payload, codec = s.codec.Compress(data)
+replace: 	if true {\n		payload, codec = s.codec.Compress(data)
+pkg: ./core/chunk/packstore
+run: ^TestAChunkPutRawIsStoredRawAndAPutOneCompressed$
+
+id: packstore-put-still-compresses
+file: core/chunk/packstore/packstore.go
+find: p, err := s.prepare(data, false)
+replace: p, err := s.prepare(data, true)
+pkg: ./core/chunk/packstore
+run: ^TestAChunkPutRawIsStoredRawAndAPutOneCompressed$
+
+id: prolly-flush-uses-the-raw-hint
+file: core/prolly/flush.go
+find: 			put = rw.PutRaw
+replace: 			_ = rw
+pkg: ./core/prolly
+run: ^TestAFlushStoresItsNodesThroughTheRawHint$

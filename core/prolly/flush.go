@@ -5,6 +5,7 @@ import (
 	"context"
 
 	"github.com/SmithOperatingSolutions/snapshot-core/core/boundary"
+	"github.com/SmithOperatingSolutions/snapshot-core/core/chunk"
 	"github.com/SmithOperatingSolutions/snapshot-core/core/hash"
 )
 
@@ -104,7 +105,13 @@ func (m *Map) store(ctx context.Context, n *node, existing map[hash.Hash]bool) (
 	b := n.encode()
 	h := hash.Sum(b)
 	if !existing[h] {
-		if _, err := m.s.Put(ctx, b); err != nil {
+		put := m.s.Put
+		if rw, ok := m.s.(chunk.RawWriter); ok {
+			// Nodes are hashes and short keys: zstd saves little on them
+			// and costs its encoder on every commit (#42, D17).
+			put = rw.PutRaw
+		}
+		if _, err := put(ctx, b); err != nil {
 			return entry{}, err
 		}
 	}
