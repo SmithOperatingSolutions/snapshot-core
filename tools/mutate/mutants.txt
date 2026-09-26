@@ -5435,7 +5435,7 @@ run: ^TestCommitNamespaceAsksWhatTheDiffFinds$
 
 id: vcs-commit-namespace-uses-the-flush
 file: core/vcs/vcs.go
-find: return r.commit(ctx, p, branch, prev, n.Root(), n, message)
+find: return r.commit(ctx, p, branch, prev, n.Root(), []*object.Namespace{n}, message)
 replace: return r.commit(ctx, p, branch, prev, n.Root(), nil, message)
 pkg: ./core/vcs
 run: ^TestCommitNamespaceReadsNoNamespaceNode$

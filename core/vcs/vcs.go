@@ -337,27 +337,28 @@ func (r *Repo) checkPaths(ctx context.Context, p auth.Principal, branch string, 
 	}
 }
 
-// errNotFlushedFrom says a flushed namespace's record does not stand for
-// a diff against the namespace asked about.
-var errNotFlushedFrom = errors.New("vcs: not flushed from that namespace")
-
-// checkFlushed is checkPaths from from to flushed by what flushed's flush
-// changed: errNotFlushedFrom when flushed is nil, or its flush did not edit
-// from, and the caller must diff.
-func (r *Repo) checkFlushed(ctx context.Context, p auth.Principal, branch string, from hash.Hash, flushed *object.Namespace) error {
-	if flushed == nil {
-		return errNotFlushedFrom
-	}
-	base, paths, ok := flushed.Changes()
-	if !ok || base != from {
-		return errNotFlushedFrom
-	}
-	for _, changed := range paths {
-		if err := r.check(ctx, p, auth.Write, pathResource(branch, changed)); err != nil {
-			return err
+// checkChanged asks for write on every path that differs between two
+// namespaces of a branch, as checkPaths does. Where one of flushed is the
+// namespace to, as its flush made it from the namespace from, the paths
+// its flush changed are those paths (prolly.Map.Changes: exactly what a
+// diff reports), and it asks by them without diffing (#43).
+func (r *Repo) checkChanged(ctx context.Context, p auth.Principal, branch string, from, to hash.Hash, flushed []*object.Namespace) error {
+	for _, n := range flushed {
+		if n == nil || n.Root() != to {
+			continue
 		}
+		base, paths, ok := n.Changes()
+		if !ok || base != from {
+			continue
+		}
+		for _, changed := range paths {
+			if err := r.check(ctx, p, auth.Write, pathResource(branch, changed)); err != nil {
+				return err
+			}
+		}
+		return nil
 	}
-	return nil
+	return r.checkPaths(ctx, p, branch, from, to)
 }
 
 func (r *Repo) readCommit(ctx context.Context, h hash.Hash) (Commit, error) {
@@ -618,12 +619,12 @@ func (r *Repo) Commit(ctx context.Context, p auth.Principal, branch string, prev
 // diffing; against any other namespace it diffs, as Commit does. It asks
 // the Authorizer exactly what Commit asks.
 func (r *Repo) CommitNamespace(ctx context.Context, p auth.Principal, branch string, prev WorkingSet, n *object.Namespace, message string) (Commit, error) {
-	return r.commit(ctx, p, branch, prev, n.Root(), n, message)
+	return r.commit(ctx, p, branch, prev, n.Root(), []*object.Namespace{n}, message)
 }
 
-// commit is Commit; flushed, when not nil, is the namespace committed as
+// commit is Commit; flushed holds the namespace committed as
 // its flush made it.
-func (r *Repo) commit(ctx context.Context, p auth.Principal, branch string, prev WorkingSet, namespace hash.Hash, flushed *object.Namespace, message string) (Commit, error) {
+func (r *Repo) commit(ctx context.Context, p auth.Principal, branch string, prev WorkingSet, namespace hash.Hash, flushed []*object.Namespace, message string) (Commit, error) {
 	if err := r.branchCheck(ctx, p, auth.Write, branch); err != nil {
 		return Commit{}, err
 	}
@@ -667,11 +668,7 @@ func (r *Repo) commit(ctx context.Context, p auth.Principal, branch string, prev
 			if slices.Contains(froms[:i], from) {
 				continue
 			}
-			err := r.checkFlushed(ctx, p, branch, from, flushed)
-			if errors.Is(err, errNotFlushedFrom) {
-				err = r.checkPaths(ctx, p, branch, from, namespace)
-			}
-			if err != nil {
+			if err := r.checkChanged(ctx, p, branch, from, namespace, flushed); err != nil {
 				return err
 			}
 		}
