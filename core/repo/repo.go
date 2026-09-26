@@ -441,7 +441,30 @@ func GC(ctx context.Context, p auth.Principal, o Options, grace time.Duration) (
 
 // DiscardJournal empties a journal no open can replay (packstore.DiscardJournal,
 // #34): the commits in it are lost and the published state stays. It needs
-// admin. Not yet written.
+// admin, and the raw store or the repository's own.
 func DiscardJournal(ctx context.Context, p auth.Principal, o Options) (packstore.Discarded, error) {
-	return packstore.Discarded{}, nil
+	if err := o.check(); err != nil {
+		return packstore.Discarded{}, err
+	}
+	if err := auth.Check(ctx, o.Authorizer, p, auth.Admin, "repo"); err != nil {
+		return packstore.Discarded{}, err
+	}
+	ours, others, err := configs(ctx, o)
+	if err != nil {
+		return packstore.Discarded{}, err
+	}
+	if len(ours) == 0 {
+		if others != nil {
+			return packstore.Discarded{}, others
+		}
+		return packstore.Discarded{}, ErrNoRepo
+	}
+	for _, c := range ours {
+		d, err := packstore.DiscardJournal(ctx, packOptions(o, c))
+		if errors.Is(err, packstore.ErrManifest) {
+			continue // not this config's root
+		}
+		return d, err
+	}
+	return packstore.Discarded{}, fmt.Errorf("%w: no config of this key authenticates the root", ErrWrongKey)
 }

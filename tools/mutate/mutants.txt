@@ -5997,3 +5997,31 @@ find: \t\tif err != nil {\n\t\t\ts.jsyncErr = err\n\t\t} else if target > s.jsyn
 replace: \t\tif err != nil {\n\t\t\ts.jsynced = target\n\t\t} else if target > s.jsynced {
 pkg: ./core/chunk/packstore
 run: ^TestAFailedSyncFailsItsCommits$
+
+id: repo-discard-needs-admin
+file: core/repo/repo.go
+find: \tif err := auth.Check(ctx, o.Authorizer, p, auth.Admin, "repo"); err != nil {\n\t\treturn packstore.Discarded{}, err
+replace: \tif err := auth.Check(ctx, o.Authorizer, p, auth.Admin, "repo"); err != nil && false {\n\t\treturn packstore.Discarded{}, err
+pkg: ./core/repo
+run: ^TestDiscardingAJournalNeedsAdmin$
+
+id: packstore-discard-replays-first
+file: core/chunk/packstore/journal.go
+find: \ts, err := Open(ctx, o)\n\tif err == nil {
+replace: \ts, err := Open(ctx, o)\n\tif err == nil && false {
+pkg: ./core/chunk/packstore
+run: ^TestAJournalThatCannotReplayIsDiscarded$
+
+id: packstore-discard-empties
+file: core/chunk/packstore/journal.go
+find: \treturn d, j.Reset(ctx)
+replace: \treturn d, nil
+pkg: ./core/chunk/packstore
+run: ^TestAJournalThatCannotReplayIsDiscarded$
+
+id: packstore-discard-reports
+file: core/chunk/packstore/journal.go
+find: \t\t\td.Frames += len(r.frames)
+replace: \t\t\td.Frames += len(r.frames) * 0
+pkg: ./core/chunk/packstore
+run: ^TestAJournalThatCannotReplayIsDiscarded$

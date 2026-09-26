@@ -635,8 +635,51 @@ type Discarded struct {
 	Bytes    int       // the journal's length, torn tail included
 }
 
-// DiscardJournal empties a journal no open can replay (#34): its
-// commits are lost, the published state stays. Not yet written.
+// DiscardJournal empties a journal no open can replay (#34): one built
+// on a root the backend is no longer at (ErrJournalConflict), one whose
+// commits counted on chunks GC deleted (chunk.ErrSessionLost), or one that
+// does not verify (chunk.ErrCorrupt). The commits in it are lost; the
+// published state stays. It first opens the store without the journal,
+// which replays a journal that can be: then nothing is discarded
+// (Replayed). A journal a writer holds is ErrJournalBusy.
 func DiscardJournal(ctx context.Context, o Options) (Discarded, error) {
-	return Discarded{}, nil
+	js, ok := o.Blobs.(blob.Journaler)
+	if !ok {
+		return Discarded{}, nil
+	}
+	j, err := js.OpenJournal(ctx)
+	if err != nil {
+		return Discarded{}, err
+	}
+	b, err := j.Read(ctx, maxJournal)
+	_ = j.Close()
+	if err != nil {
+		return Discarded{}, err
+	}
+	if len(b) == 0 {
+		return Discarded{}, nil
+	}
+	o.Journal = JournalOff
+	s, err := Open(ctx, o)
+	if err == nil {
+		return Discarded{Replayed: true}, s.Close()
+	}
+	if !errors.Is(err, ErrJournalConflict) && !errors.Is(err, chunk.ErrSessionLost) && !errors.Is(err, chunk.ErrCorrupt) {
+		return Discarded{}, err
+	}
+	if j, err = js.OpenJournal(ctx); err != nil {
+		return Discarded{}, err
+	}
+	defer j.Close()
+	if b, err = j.Read(ctx, maxJournal); err != nil {
+		return Discarded{}, err
+	}
+	d := Discarded{Bytes: len(b)}
+	if recs, _, derr := decodeJournal(o.Keys, o.Repo, b); derr == nil && len(recs) > 0 {
+		d.Records, d.Base, d.Last = len(recs), recs[0].expected, recs[len(recs)-1].next
+		for _, r := range recs {
+			d.Frames += len(r.frames)
+		}
+	}
+	return d, j.Reset(ctx)
 }
