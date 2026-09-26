@@ -5949,12 +5949,12 @@ replace: func (s *Store) JournalByDefault() bool { return true }
 pkg: ./core/repo
 run: ^TestTheJournalIsOnByDefaultOnDisk$
 
-id: packstore-journal-default-busy-reads-published
+id: packstore-journal-busy-is-refused
 file: core/chunk/packstore/journal.go
-find: \t\t\ts.o.Journal = JournalOff\n\t\t\treturn nil
-replace: \t\t\treturn err
+find: \t\tif errors.Is(err, blob.ErrJournalBusy) {\n\t\t\treturn fmt.Errorf("packstore: another writer
+replace: \t\tif errors.Is(err, blob.ErrJournalBusy) {\n\t\t\treturn nil\n\t\t}\n\t\tif false {\n\t\t\treturn fmt.Errorf("packstore: another writer
 pkg: ./core/chunk/packstore
-run: ^TestContractOverEveryBackend$
+run: ^TestADefaultOpenFindingTheJournalHeldIsRefused$
 
 id: local-journal-sync-refuses-when-closed
 file: core/blob/local/local.go

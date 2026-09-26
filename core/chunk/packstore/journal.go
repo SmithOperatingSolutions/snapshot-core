@@ -213,24 +213,12 @@ func (s *Store) openJournal(ctx context.Context) error {
 	if !ok {
 		return nil
 	}
-	fallback := false
 	if s.o.Journal == JournalDefault && js.JournalByDefault() {
-		s.o.Journal, fallback = JournalOn, true
+		s.o.Journal = JournalOn
 	}
 	var j blob.Journal
 	var err error
-	switch {
-	case s.o.Journal.journaled() && fallback:
-		// The default on a disk backend, and another writer holds the
-		// journal: this store opens without it, reading the published
-		// state; its publishes refuse while that writer holds it.
-		if j, err = js.OpenJournal(ctx); errors.Is(err, blob.ErrJournalBusy) {
-			s.o.Journal = JournalOff
-			return nil
-		} else if err != nil {
-			return fmt.Errorf("packstore: opening the journal: %w", err)
-		}
-	case s.o.Journal.journaled():
+	if s.o.Journal.journaled() {
 		// A writer without the journal holds it only around a publish:
 		// wait that out, as a lost manifest swap is waited out.
 		for attempt := 0; ; attempt++ {
@@ -242,10 +230,13 @@ func (s *Store) openJournal(ctx context.Context) error {
 				return err
 			}
 		}
+		if errors.Is(err, blob.ErrJournalBusy) {
+			return fmt.Errorf("packstore: another writer holds this repository's journal (open with JournalOff to read beside it): %w", err)
+		}
 		if err != nil {
 			return fmt.Errorf("packstore: opening the journal: %w", err)
 		}
-	default:
+	} else {
 		size, release, err := js.HoldJournal(ctx)
 		if errors.Is(err, blob.ErrJournalBusy) {
 			return nil // a journal writer is open
