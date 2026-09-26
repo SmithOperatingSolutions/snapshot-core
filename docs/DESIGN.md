@@ -343,7 +343,10 @@ can refuse them) and a fuzz target.
     published state only: they see a commit once the background publish
     lands it. The bound is `JournalInterval` (1 s by default) after the
     first commit the journal took, plus one publish (33 ms here); `Close`
-    publishes what is left. A reader never replays a journal it does not
+    publishes what is left. The interval stays 1 s, the owner's decision
+    (2026-09-26): at 100 ms one writer made 110.2 commits/s with p99
+    49.4 ms, against 144.2/s and 10.0 ms at 1 s, each publish then taking
+    the commit lock ten times as often. A reader never replays a journal it does not
     hold.
   - *Publish.* The publisher wakes on the first commit after a publish and
     publishes an interval later: the ordinary publish, with the journal's
