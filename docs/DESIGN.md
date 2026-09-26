@@ -375,6 +375,14 @@ can refuse them) and a fuzz target.
     stored, and the replay publishes it and empties the journal. Chunks
     that only intermediate roots reached (a history that came back to the
     root it started from) are not published: no root reaches them.
+  - *Discard.* A journal no open can replay (the root moved under it, GC
+    deleted what it counted on, or it does not verify) makes every open
+    fail until an admin calls `repo.DiscardJournal` (`packstore.DiscardJournal`):
+    it opens the store without the journal first, which replays a journal
+    that can be (nothing discarded: `Replayed`), and otherwise reports the
+    commits, frames and roots it holds and empties it; the published state
+    stays (`TestAJournalThatCannotReplayIsDiscarded`,
+    `TestDiscardingAJournalNeedsAdmin`).
   - *Crash.* The chunk-layer crash harness runs again with the child
     committing through the journal and publishing every 3 ms, so kills
     land mid-append and mid-publish: old root or new, never torn, the
@@ -385,9 +393,11 @@ can refuse them) and a fuzz target.
     root, and after every crash the store and another process stand at
     the last acknowledged root with every committed chunk readable.
   - *Default and grouping.* `JournalDefault` follows
-    `blob.Journaler.JournalByDefault` (true on disk); a default store that
-    finds the journal held by another writer opens without it, reading the
-    published state. A commit writes its record under the commit lock
+    `blob.Journaler.JournalByDefault` (true on disk); a store that asks for
+    the journal, by default or `JournalOn`, and finds another writer holding
+    it is refused with an error that says so (the owner's decision); one
+    that asks for `JournalOff` opens beside it, reading the published state
+    (`TestADefaultOpenFindingTheJournalHeldIsRefused`). A commit writes its record under the commit lock
     (`Journal.Write`, not durable), releases the lock, and waits for a
     sync that covers it (`Journal.Sync`, one fsync): one waiter syncs
     everything written by then, and every commit written while that sync
