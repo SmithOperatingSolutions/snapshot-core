@@ -484,6 +484,12 @@ them, each tracked as an issue:
     (`TestRegression_SC41_AHintedShortStreamWritesLikeABytesReader`,
     `TestRegression_SC41_AWrongHintStoresTheSameStream`,
     `TestALenerThatUndercountsIsCutTheSameAndReadInFullBlocks`).
+14. ✅ **Tiny chunks stored raw** (#42, compression half; D14): a chunk
+    under 256 B is written as a raw frame without trying zstd
+    (`TestAChunkUnderTheRawCutoffIsStoredRaw`, mutants
+    `pack-tiny-chunks-stored-raw`, `pack-raw-cutoff-is-strict`). Batch
+    writes 148–184k to 203–233k a second in memory, pack bytes
+    unchanged; the seal half of #42 (a cached AEAD) is the owner's call.
 
 Open, each as an issue: one extra root read per publish on S3 (#29); one
 pack per publish, and an unmoved root's backend read (#30); how the value
