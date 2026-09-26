@@ -2258,8 +2258,8 @@ run: ^TestRefsNameOnlyStoredObjects$
 
 id: vcs-commit-message-bounded
 file: core/vcs/vcs.go
-find: func (r *Repo) CommitWorkingSet(ctx context.Context, p auth.Principal, branch, message string) (Commit, error) {\n\tif err := r.branchCheck(ctx, p, auth.Commit, branch); err != nil {\n\t\treturn Commit{}, err\n\t}\n\tif len(message) > MaxMessageLen || !utf8.ValidString(message) {
-replace: func (r *Repo) CommitWorkingSet(ctx context.Context, p auth.Principal, branch, message string) (Commit, error) {\n\tif err := r.branchCheck(ctx, p, auth.Commit, branch); err != nil {\n\t\treturn Commit{}, err\n\t}\n\tif (len(message) > MaxMessageLen || !utf8.ValidString(message)) && false {
+find: func (r *Repo) commitWorkingSet(ctx context.Context, p auth.Principal, branch, message string, flushed []*object.Namespace) (Commit, error) {\n\tif err := r.branchCheck(ctx, p, auth.Commit, branch); err != nil {\n\t\treturn Commit{}, err\n\t}\n\tif len(message) > MaxMessageLen || !utf8.ValidString(message) {
+replace: func (r *Repo) commitWorkingSet(ctx context.Context, p auth.Principal, branch, message string, flushed []*object.Namespace) (Commit, error) {\n\tif err := r.branchCheck(ctx, p, auth.Commit, branch); err != nil {\n\t\treturn Commit{}, err\n\t}\n\tif (len(message) > MaxMessageLen || !utf8.ValidString(message)) && false {
 pkg: ./core/vcs
 run: ^TestMessagesAreBoundedUTF8$
 
@@ -2384,8 +2384,8 @@ run: ^TestEveryCallIsAuthorized$
 
 id: vcs-update-working-set-authorized
 file: core/vcs/vcs.go
-find: func (r *Repo) UpdateWorkingSet(ctx context.Context, p auth.Principal, branch string, prev, next WorkingSet) (WorkingSet, error) {\n\tif err := r.branchCheck(ctx, p, auth.Write, branch); err != nil {
-replace: func (r *Repo) UpdateWorkingSet(ctx context.Context, p auth.Principal, branch string, prev, next WorkingSet) (WorkingSet, error) {\n\tif err := r.branchCheck(ctx, p, auth.Write, branch); err != nil && false {
+find: func (r *Repo) updateWorkingSet(ctx context.Context, p auth.Principal, branch string, prev, next WorkingSet, flushed []*object.Namespace) (WorkingSet, error) {\n\tif err := r.branchCheck(ctx, p, auth.Write, branch); err != nil {
+replace: func (r *Repo) updateWorkingSet(ctx context.Context, p auth.Principal, branch string, prev, next WorkingSet, flushed []*object.Namespace) (WorkingSet, error) {\n\tif err := r.branchCheck(ctx, p, auth.Write, branch); err != nil && false {
 pkg: ./core/vcs
 run: ^TestEveryCallIsAuthorized$
 
@@ -4491,8 +4491,8 @@ run: ^TestMutantsRunAtOnceOnWorkers$
 
 id: vcs-commit-bounds-the-message
 file: core/vcs/vcs.go
-find: func (r *Repo) commit(ctx context.Context, p auth.Principal, branch string, prev WorkingSet, namespace hash.Hash, flushed *object.Namespace, message string) (Commit, error) {\n\tif err := r.branchCheck(ctx, p, auth.Write, branch); err != nil {\n\t\treturn Commit{}, err\n\t}\n\tif err := r.check(ctx, p, auth.Commit, "branch:"+branch); err != nil { // it writes the working set and commits it\n\t\treturn Commit{}, err\n\t}\n\tif len(message) > MaxMessageLen || !utf8.ValidString(message) {
-replace: func (r *Repo) commit(ctx context.Context, p auth.Principal, branch string, prev WorkingSet, namespace hash.Hash, flushed *object.Namespace, message string) (Commit, error) {\n\tif err := r.branchCheck(ctx, p, auth.Write, branch); err != nil {\n\t\treturn Commit{}, err\n\t}\n\tif err := r.check(ctx, p, auth.Commit, "branch:"+branch); err != nil { // it writes the working set and commits it\n\t\treturn Commit{}, err\n\t}\n\tif (len(message) > MaxMessageLen || !utf8.ValidString(message)) && false {
+find: func (r *Repo) commit(ctx context.Context, p auth.Principal, branch string, prev WorkingSet, namespace hash.Hash, flushed []*object.Namespace, message string) (Commit, error) {\n\tif err := r.branchCheck(ctx, p, auth.Write, branch); err != nil {\n\t\treturn Commit{}, err\n\t}\n\tif err := r.check(ctx, p, auth.Commit, "branch:"+branch); err != nil { // it writes the working set and commits it\n\t\treturn Commit{}, err\n\t}\n\tif len(message) > MaxMessageLen || !utf8.ValidString(message) {
+replace: func (r *Repo) commit(ctx context.Context, p auth.Principal, branch string, prev WorkingSet, namespace hash.Hash, flushed []*object.Namespace, message string) (Commit, error) {\n\tif err := r.branchCheck(ctx, p, auth.Write, branch); err != nil {\n\t\treturn Commit{}, err\n\t}\n\tif err := r.check(ctx, p, auth.Commit, "branch:"+branch); err != nil { // it writes the working set and commits it\n\t\treturn Commit{}, err\n\t}\n\tif (len(message) > MaxMessageLen || !utf8.ValidString(message)) && false {
 pkg: ./core/vcs
 run: ^TestCommitRefusesWhatTheTwoStepsRefuse$
 
