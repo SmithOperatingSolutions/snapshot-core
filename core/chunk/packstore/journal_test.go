@@ -5,8 +5,10 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -1107,5 +1109,172 @@ func TestAJournalThatCannotReplayIsDiscarded(t *testing.T) {
 	defer s3.Close()
 	if got, _ := s3.Root(ctx); got != intruder {
 		t.Fatalf("after the discard the root is %s, want the published %s", got.Short(), intruder.Short())
+	}
+}
+
+// blockingPacks is a store whose pack uploads wait for release once armed,
+// signalling reached as each one starts; fail makes them fail instead.
+type blockingPacks struct {
+	*mem.Store
+	armed   atomic.Bool
+	reached chan struct{}
+	release chan struct{}
+	fail    atomic.Bool
+	dropErr atomic.Bool
+}
+
+func newBlockingPacks() *blockingPacks {
+	return &blockingPacks{Store: mem.New(), reached: make(chan struct{}, 16), release: make(chan struct{})}
+}
+
+func (b *blockingPacks) Put(ctx context.Context, name string, r io.Reader, size int64) error {
+	if b.armed.Load() && strings.HasPrefix(name, "packs/") {
+		b.reached <- struct{}{}
+		<-b.release
+		if b.fail.Load() {
+			return errors.New("the backend went away")
+		}
+	}
+	return b.Store.Put(ctx, name, r, size)
+}
+
+func (b *blockingPacks) OpenJournal(ctx context.Context) (blob.Journal, error) {
+	j, err := b.Store.OpenJournal(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return dropFails{j, b}, nil
+}
+
+type dropFails struct {
+	blob.Journal
+	b *blockingPacks
+}
+
+func (d dropFails) Drop(ctx context.Context) error {
+	if d.b.dropErr.Load() {
+		return errors.New("disk gone")
+	}
+	return d.Journal.Drop(ctx)
+}
+
+// Segment rotation (#34, the owner's item): a background publish no longer
+// holds the commit lock through its uploads and swap. With the publish held
+// at its pack upload, a commit returns (it waits for its own record's sync
+// alone), and the publish, released, lands the root it started with while
+// the store stands at the newer one.
+func TestAPublishInFlightDoesNotStallACommit(t *testing.T) {
+	bs, kr := newBlockingPacks(), keyring(t)
+	s := openJournaled(t, bs, kr, time.Hour)
+	first := commit(t, s, hash.Hash{}, payload("first", 100))
+	a := commit(t, s, first, payload("a", 100))
+	bs.armed.Store(true)
+	published := make(chan error, 1)
+	go func() { published <- packstore.PublishJournal(s) }()
+	select {
+	case <-bs.reached:
+	case <-time.After(10 * time.Second):
+		t.Fatal("fixture: the publish never reached its pack upload")
+	}
+	committed := make(chan error, 1)
+	var b hash.Hash
+	go func() {
+		h, err := s.Put(ctx, payload("b", 100))
+		if err == nil {
+			b, err = h, s.CompareAndSetRoot(ctx, a, h)
+		}
+		committed <- err
+	}()
+	var err error
+	select {
+	case err = <-committed:
+	case <-time.After(2 * time.Second):
+		close(bs.release)
+		<-published
+		<-committed
+		t.Fatal("a commit waited 2s behind a publish held at its pack upload: the publish holds the commit lock")
+	}
+	if err != nil {
+		t.Fatalf("the commit beside the publish: %v", err)
+	}
+	close(bs.release)
+	if err := <-published; err != nil {
+		t.Fatalf("the publish: %v", err)
+	}
+	if got := publishedRoot(t, bs, kr); got != a {
+		t.Fatalf("the publish landed %s, want the root it started with, %s", got.Short(), a.Short())
+	}
+	if got, _ := s.Root(ctx); got != b {
+		t.Fatalf("after the publish the store's root is %s, want the newer commit %s", got.Short(), b.Short())
+	}
+	packstore.Abandon(s)
+	re := openJournaled(t, bs, kr, time.Hour)
+	if got, _ := re.Root(ctx); got != b {
+		t.Fatalf("after a crash the root is %s, want the commit made beside the publish, %s", got.Short(), b.Short())
+	}
+}
+
+// A publish that fails leaves its segment; a crash then replays every
+// segment in order. A publish that lands and cannot drop its segment
+// leaves a journal whose first records are published: the replay starts
+// after them.
+func TestAReplayReadsEverySegment(t *testing.T) {
+	for _, landed := range []bool{false, true} {
+		t.Run(fmt.Sprintf("landed=%v", landed), func(t *testing.T) {
+			bs, kr := newBlockingPacks(), keyring(t)
+			s := openJournaled(t, bs, kr, time.Hour)
+			first := commit(t, s, hash.Hash{}, payload("first", 100))
+			a := commit(t, s, first, payload("a", 100))
+			bs.armed.Store(true)
+			bs.fail.Store(!landed)
+			bs.dropErr.Store(landed)
+			published := make(chan error, 1)
+			go func() { published <- packstore.PublishJournal(s) }()
+			<-bs.reached
+			done := make(chan hash.Hash, 1)
+			go func() {
+				h, err := s.Put(ctx, payload("b", 100))
+				if err == nil {
+					err = s.CompareAndSetRoot(ctx, a, h)
+				}
+				if err != nil {
+					h = hash.Hash{}
+				}
+				done <- h
+			}()
+			var b hash.Hash
+			select {
+			case b = <-done:
+			case <-time.After(2 * time.Second):
+				close(bs.release)
+				<-published
+				<-done
+				t.Fatal("a commit waited 2s behind a publish held at its pack upload")
+			}
+			if b.IsZero() {
+				t.Fatal("the commit beside the publish failed")
+			}
+			close(bs.release)
+			if err := <-published; err == nil {
+				t.Fatal("fixture: the publish reported success")
+			}
+			want := first
+			if landed {
+				want = a
+			}
+			if got := publishedRoot(t, bs, kr); got != want {
+				t.Fatalf("fixture: the backend's root is %s, want %s", got.Short(), want.Short())
+			}
+			bs.armed.Store(false)
+			bs.dropErr.Store(false)
+			packstore.Abandon(s)
+			re := openJournaled(t, bs, kr, time.Hour)
+			if got, _ := re.Root(ctx); got != b {
+				t.Fatalf("after a crash the root is %s, want the last commit %s: a segment was not replayed", got.Short(), b.Short())
+			}
+			if got := publishedRoot(t, bs, kr); got != b {
+				t.Fatalf("the replay left the backend's root at %s, want %s", got.Short(), b.Short())
+			}
+		})
 	}
 }
