@@ -6158,3 +6158,10 @@ find: 			put = rw.PutRaw
 replace: 			_ = rw
 pkg: ./core/prolly
 run: ^TestAFlushStoresItsNodesThroughTheRawHint$
+
+id: local-journal-must-be-a-regular-file
+file: core/blob/local/local.go
+find: \tif !info.Mode().IsRegular() {
+replace: \tif false {
+pkg: ./core/blob/local
+run: ^TestAJournalThatIsNotARegularFileIsRefused$
