@@ -11,7 +11,7 @@ consumers build on its frozen data-model port.
 C0 to C4, are done: backends and encrypted packs, content-defined chunking and
 prolly trees, commits and merges over typed objects, and garbage collection.
 Every checklist item and the test that proves it: [`docs/PROGRESS.md`](docs/PROGRESS.md).
-The current release is `v0.2.0` ([Versioning and stability](#versioning-and-stability)).
+The current release is `v0.3.0` ([Versioning and stability](#versioning-and-stability)).
 Remaining work is tracked in the [issues](https://github.com/SmithOperatingSolutions/snapshot-core/issues).
 
 ## Using it
