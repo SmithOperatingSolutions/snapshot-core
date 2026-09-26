@@ -6130,3 +6130,10 @@ find: \tif j.closed.Load() {\n\t\treturn blob.ErrJournalClosed\n\t}\n\tj.mu.Lock
 replace: \tif false {\n\t\treturn blob.ErrJournalClosed\n\t}\n\tj.mu.Lock()\n\tdefer j.mu.Unlock()\n\tif err := j.cur.Sync(); err != nil {
 pkg: ./core/blob/local
 run: ^TestJournalContract$
+
+id: packstore-journal-sync-publish-conflict-sticks
+file: core/chunk/packstore/journal.go
+find: if errors.Is(err, chunk.ErrRootConflict) && live {
+replace: if errors.Is(err, chunk.ErrRootConflict) && live && false {
+pkg: ./core/chunk/packstore
+run: ^TestASyncPublishOverAMovedRootIsRefused$

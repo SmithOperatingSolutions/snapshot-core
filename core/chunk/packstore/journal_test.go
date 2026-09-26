@@ -1406,3 +1406,26 @@ func TestAChunkCountedBesideAPublishStaysCounted(t *testing.T) {
 		t.Fatalf("a commit after GC expired a chunk counted on beside a publish = %v, want ErrSessionLost", err)
 	}
 }
+
+// The publish a store makes itself (at Close, or for a commit that must
+// publish) over a root that moved under the journal is ErrJournalConflict,
+// as the background publish's is, and publishes nothing over it.
+func TestASyncPublishOverAMovedRootIsRefused(t *testing.T) {
+	bs, kr := mem.New(), keyring(t)
+	s, err := packstore.Open(ctx, journalOptions(bs, kr, time.Hour))
+	if err != nil {
+		t.Fatal(err)
+	}
+	first := commit(t, s, hash.Hash{}, payload("first", 100))
+	_ = commit(t, s, first, payload("journaled", 100))
+	intruder := commit(t, open(t, mem.New(), kr), hash.Hash{}, payload("v0.2.0's", 100))
+	if err := packstore.ForceRoot(ctx, packstore.Options{Blobs: bs, Keys: kr, Repo: repo}, intruder); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Close(); !errors.Is(err, packstore.ErrJournalConflict) {
+		t.Fatalf("Close publishing over a root that moved under the journal = %v, want ErrJournalConflict", err)
+	}
+	if got := publishedRoot(t, bs, kr); got != intruder {
+		t.Fatalf("the backend's root is %s, want the intruder's left alone", got.Short())
+	}
+}
