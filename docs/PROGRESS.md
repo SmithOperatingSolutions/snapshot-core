@@ -532,6 +532,14 @@ them, each tracked as an issue:
     `TestGCSafetyPropertyWithTheJournal`); sealed record with a golden file
     and `FuzzDecodeJournal`. On disk one writer 29.5 to 144 commits/s,
     p50 33 to 6.6 ms (`tools/commitbench`).
+    Since (2026-09-26, the owner's decisions): the interval stays 1 s; a
+    background publish rotates the journal and publishes beside the
+    commits (`TestAPublishInFlightDoesNotStallACommit`,
+    `TestAReplayReadsEverySegment`; 4 writers p99 43 to 20 ms); an admin
+    discards a journal no open can replay (`TestAJournalThatCannotReplayIsDiscarded`,
+    `TestDiscardingAJournalNeedsAdmin`); a default open finding the journal
+    held is refused (`TestADefaultOpenFindingTheJournalHeldIsRefused`); the
+    spec carries a 2026-09-26 addendum.
 
 Open, each as an issue: one extra root read per publish on S3 (#29); one
 pack per publish, and an unmoved root's backend read (#30); how the value
