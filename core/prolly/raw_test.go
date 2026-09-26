@@ -18,7 +18,7 @@ type rawCounting struct {
 
 func (r *rawCounting) PutRaw(ctx context.Context, data []byte) (hash.Hash, error) {
 	r.raw.Add(1)
-	return r.counting.Put(ctx, data)
+	return r.Put(ctx, data)
 }
 
 // A flush stores the map's nodes through the store's raw hint where it has

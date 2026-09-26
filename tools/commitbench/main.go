@@ -535,7 +535,7 @@ func (c *countingStore) PutRaw(ctx context.Context, data []byte) (hash.Hash, err
 	if rw, ok := c.Store.(chunk.RawWriter); ok {
 		return rw.PutRaw(ctx, data)
 	}
-	return c.Store.Put(ctx, data)
+	return c.Put(ctx, data)
 }
 
 func (c *countingStore) CompareAndSetRoot(ctx context.Context, expected, next hash.Hash) error {
@@ -992,7 +992,6 @@ func reads(c config, backend string) ([]row, error) {
 	if err != nil {
 		return nil, err
 	}
-	src = nil
 	if err := e.commitRef(ctx, vcs.MainBranch, "bulk.bin", root); err != nil {
 		return nil, err
 	}
