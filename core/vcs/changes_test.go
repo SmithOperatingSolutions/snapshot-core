@@ -247,17 +247,7 @@ func TestCommitNamespaceReadsNoNamespaceNode(t *testing.T) {
 	}
 	f.edit(alice, main, puts)
 	f.commit(main, "base")
-	nodes := func(root hash.Hash) map[hash.Hash]bool {
-		out := map[hash.Hash]bool{}
-		err := prolly.Walk(ctx, f.s, f.o.Config, root, func(h hash.Hash, _ bool) (bool, error) {
-			out[h] = true
-			return true, nil
-		}, nil)
-		if err != nil {
-			t.Fatal(err)
-		}
-		return out
-	}
+	nodes := func(root hash.Hash) map[hash.Hash]bool { return walkNodes(t, f, root) }
 	for _, c := range []struct {
 		name   string
 		commit func(ws vcs.WorkingSet, n *object.Namespace) error
@@ -296,4 +286,18 @@ func TestCommitNamespaceReadsNoNamespaceNode(t *testing.T) {
 			t.Fatalf("committing one edit of the stored namespace through %s read %d namespace nodes: it diffed what the flush already knew", c.name, hit)
 		}
 	}
+}
+
+// walkNodes is every node of the namespace at root.
+func walkNodes(t *testing.T, f *fixture, root hash.Hash) map[hash.Hash]bool {
+	t.Helper()
+	out := map[hash.Hash]bool{}
+	err := prolly.Walk(ctx, f.s, f.o.Config, root, func(h hash.Hash, _ bool) (bool, error) {
+		out[h] = true
+		return true, nil
+	}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return out
 }
