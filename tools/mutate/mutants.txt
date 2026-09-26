@@ -1598,8 +1598,8 @@ run: ^TestStoreErrorsSurfaceAtEveryPoint$
 
 id: prolly-flush-level-error-surfaces
 file: core/prolly/flush.go
-find: if edits, err = m.applyLevel(ctx, level, edits); err != nil {\n\t\t\treturn nil, err
-replace: if edits, err = m.applyLevel(ctx, level, edits); err != nil {\n\t\t\treturn m, nil
+find: if edits, err = m.applyLevel(ctx, level, edits, changed); err != nil {\n\t\t\treturn nil, err
+replace: if edits, err = m.applyLevel(ctx, level, edits, changed); err != nil {\n\t\t\treturn m, nil
 pkg: ./core/prolly
 run: ^TestStoreErrorsSurfaceAtEveryPoint$
 
@@ -4491,8 +4491,8 @@ run: ^TestMutantsRunAtOnceOnWorkers$
 
 id: vcs-commit-bounds-the-message
 file: core/vcs/vcs.go
-find: func (r *Repo) Commit(ctx context.Context, p auth.Principal, branch string, prev WorkingSet, namespace hash.Hash, message string) (Commit, error) {\n\tif err := r.branchCheck(ctx, p, auth.Write, branch); err != nil {\n\t\treturn Commit{}, err\n\t}\n\tif err := r.check(ctx, p, auth.Commit, "branch:"+branch); err != nil { // it writes the working set and commits it\n\t\treturn Commit{}, err\n\t}\n\tif len(message) > MaxMessageLen || !utf8.ValidString(message) {
-replace: func (r *Repo) Commit(ctx context.Context, p auth.Principal, branch string, prev WorkingSet, namespace hash.Hash, message string) (Commit, error) {\n\tif err := r.branchCheck(ctx, p, auth.Write, branch); err != nil {\n\t\treturn Commit{}, err\n\t}\n\tif err := r.check(ctx, p, auth.Commit, "branch:"+branch); err != nil { // it writes the working set and commits it\n\t\treturn Commit{}, err\n\t}\n\tif (len(message) > MaxMessageLen || !utf8.ValidString(message)) && false {
+find: func (r *Repo) commit(ctx context.Context, p auth.Principal, branch string, prev WorkingSet, namespace hash.Hash, flushed *object.Namespace, message string) (Commit, error) {\n\tif err := r.branchCheck(ctx, p, auth.Write, branch); err != nil {\n\t\treturn Commit{}, err\n\t}\n\tif err := r.check(ctx, p, auth.Commit, "branch:"+branch); err != nil { // it writes the working set and commits it\n\t\treturn Commit{}, err\n\t}\n\tif len(message) > MaxMessageLen || !utf8.ValidString(message) {
+replace: func (r *Repo) commit(ctx context.Context, p auth.Principal, branch string, prev WorkingSet, namespace hash.Hash, flushed *object.Namespace, message string) (Commit, error) {\n\tif err := r.branchCheck(ctx, p, auth.Write, branch); err != nil {\n\t\treturn Commit{}, err\n\t}\n\tif err := r.check(ctx, p, auth.Commit, "branch:"+branch); err != nil { // it writes the working set and commits it\n\t\treturn Commit{}, err\n\t}\n\tif (len(message) > MaxMessageLen || !utf8.ValidString(message)) && false {
 pkg: ./core/vcs
 run: ^TestCommitRefusesWhatTheTwoStepsRefuse$
 
@@ -5428,8 +5428,8 @@ run: ^TestCommitNamespaceAsksForEveryChangeTheFlushDidNotSee$
 
 id: vcs-flushed-list-asks-every-path
 file: core/vcs/vcs.go
-find: 	for _, path := range paths {
-replace: 	for _, path := range paths[:0] {
+find: 	for _, changed := range paths {
+replace: 	for _, changed := range paths[:0] {
 pkg: ./core/vcs
 run: ^TestCommitNamespaceAsksWhatTheDiffFinds$
 

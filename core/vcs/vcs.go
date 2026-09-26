@@ -352,8 +352,8 @@ func (r *Repo) checkFlushed(ctx context.Context, p auth.Principal, branch string
 	if !ok || base != from {
 		return errNotFlushedFrom
 	}
-	for _, path := range paths {
-		if err := r.check(ctx, p, auth.Write, pathResource(branch, path)); err != nil {
+	for _, changed := range paths {
+		if err := r.check(ctx, p, auth.Write, pathResource(branch, changed)); err != nil {
 			return err
 		}
 	}
