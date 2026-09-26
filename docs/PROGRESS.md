@@ -504,7 +504,9 @@ them, each tracked as an issue:
     memory (593 to 422 µs), 29.9 to 30.4 on disk, where the fsyncs of
     the publish are 32 of the 33 ms and the host's own work fell from
     1.34 to 0.95 ms (`TestSlowACommitPerObjectCostsLittle`, a 2 ms
-    guard). Left for the owner: the flush's nodes are compressed in
+    guard). Holding the root left two merge tests that count reads blind
+    in one-node namespaces; their fixtures now span many nodes. Left for
+    the owner: the flush's nodes are compressed in
     `core/pack` on `packstore.Put` (about two thirds of the host's CPU
     now) and a pack writer is allocated per commit; both are outside
     this work's packages.
