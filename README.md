@@ -169,6 +169,38 @@ deliberately, in its own pull request.
   under `GOMEMLIMIT`: `-fuzzparallel`/`FUZZPARALLEL` and
   `-fuzzmemlimit`/`FUZZMEMLIMIT` (#22).
 
+**v0.3.0.** What changes for a host or a model (a minor version: a new
+on-disk structure, the commit journal; no existing format changes):
+
+- **The commit journal** (#34, docs/DESIGN.md D16): `repo.Options.Journal`
+  (`packstore.JournalDefault`, `JournalOn`, `JournalOff`) commits with one
+  append and one fsync and publishes in the background within the
+  interval (1 s). On by default on disk (`blob/local`, `blob/multivol`),
+  off on `blob/mem`. Other processes see a commit once it is published.
+  `repo.DiscardJournal` (admin) empties a journal no open can replay.
+- **Compatibility with v0.2.0:** v0.3.0 opens every repository v0.2.0
+  wrote. v0.2.0 can read and write a v0.3.0 repository whose journal is
+  empty, but **do not run v0.2.0 (writer or GC) on a repository whose
+  journal holds commits**: it does not see them, and a v0.2.0 root swap
+  makes them unpublishable (`ErrJournalConflict`). Open it with v0.3.0
+  first, which replays the journal.
+- New APIs: `stream.WithLen(r, n)`, a size hint for a reader that does not
+  say its length (#41); `vcs.CommitNamespace`, `UpdateWorkingSetFlushed`
+  and `CommitWorkingSetFlushed`, commits that ask the Authorizer by the
+  flush's record instead of diffing (#43); `repo.Chunks()` is also a
+  `chunk.Preparer` and `chunk.Flusher` (#40); `chunk.RawWriter`
+  (`PutRaw`), optional beside the port, which `core/prolly` uses for its
+  nodes (#42, D17).
+- Bug fixes present in v0.2.0: a publish could swap the root before a
+  finisher started on another goroutine had uploaded the pack holding the
+  new root's chunks (the finisher race); and a chunk a put counted on,
+  held only by a pack a GC round repacked without it, was deleted a grace
+  window later while reachable (GC repack data loss, present since #1).
+- Behaviour: a small object's write is cut on the caller's goroutine
+  (#40); chunks under 256 B, and every tree node, are stored raw, not
+  zstd (#42, D14 and D17): new packs differ in bytes from v0.2.0's (a
+  namespace's nodes take more space), and every version reads them.
+
 ## Developing
 
 ```
@@ -199,6 +231,7 @@ and the testing standard, [`docs/TESTING.md`](docs/TESTING.md).
 - [`docs/specs/storage-core-spec.md`](docs/specs/storage-core-spec.md): the spec this repository implements
 - [`docs/DESIGN.md`](docs/DESIGN.md): how the spec became code, on-disk formats, protocols, GC
 - [`docs/PROGRESS.md`](docs/PROGRESS.md): milestones, checklists and their tests, what testing found
+- [`docs/PERFORMANCE.md`](docs/PERFORMANCE.md): what writes and reads cost, v0.2.0 against v0.3.0
 - [`docs/specs/engine-spec.md`](docs/specs/engine-spec.md): the consuming engine's spec; its L0 to L3 rules apply here
 
 ## License

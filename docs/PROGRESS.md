@@ -5,7 +5,7 @@ every "first failing test" checkbox in both specs. Updated at each milestone
 boundary and whenever a checklist item turns green; the evidence for each item
 is the named test, and the commit that added it carries its red.
 
-**Updated 2026-09-25** (v0.2.0: #22 to #27, a consumer's performance review, model.Accumulator; #40, small objects' write; #41, a size hint; #42, tiny chunks raw; #43, a commit per object) · red-check clean · every checked-in mutant killed ·
+**Updated 2026-09-26, v0.3.0 candidate** (branch `v030`: #40 small objects' write, #41 a size hint, #42 tiny chunks and tree nodes raw, #43 a commit per object, #34 journaled commits; figures in `docs/PERFORMANCE.md`) · red-check clean · every checked-in mutant killed ·
 lint clean · every package at or above its coverage gate
 
 ## Milestones
@@ -541,9 +541,29 @@ them, each tracked as an issue:
     held is refused (`TestADefaultOpenFindingTheJournalHeldIsRefused`); the
     spec carries a 2026-09-26 addendum.
 
+17. ✅ **A tree's nodes stored raw** (#42, the owner's option 3; D17):
+    `chunk.RawWriter` beside the port, `packstore.PutRaw`, and prolly's
+    flush stores its nodes through it
+    (`TestAChunkPutRawIsStoredRawAndAPutOneCompressed`,
+    `TestAFlushStoresItsNodesThroughTheRawHint`; mutants
+    `packstore-putraw-skips-compression`, `packstore-put-still-compresses`,
+    `prolly-flush-uses-the-raw-hint`). Single writer on mem 2,757 to
+    4,501 commits/s; a batch of 10,000 flushes in 9.9 ms, was 38.9; the
+    batch's pack bytes +12.8% (the nodes uncompressed), and one reader's
+    point reads 28% slower (cause not yet found, `docs/PERFORMANCE.md`):
+    the owner's call.
+18. **A pack writer's buffer reused** (measured, not landed): a new pack
+    writer per commit is 29% of the bytes a single-writer commit
+    allocates on mem (its 64 KiB `minPending` buffer), but 3.7% of the
+    CPU (mostly `pack.DeriveKeys`, which a fresh salt needs and a pool
+    cannot save). The upper bound, the buffer never allocated (a 4 KiB
+    `minPending`), measured 4,666 against 4,501 commits/s (+3.7%), under
+    the 5% bar; a pool would also have to prove that no reader still
+    holds a slice of an uploaded pack's bytes.
+
 Open, each as an issue: one extra root read per publish on S3 (#29); one
 pack per publish, and an unmoved root's backend read (#30); how the value
 limits report and cost (#31); read-path performance candidates (#32); the
-race suite's memory (#33); journaled commits (#34); sync between
+race suite's memory (#33); the seal half of #42 (a cached AEAD); sync between
 repositories (#35); purge (#36); key rotation (#37); production readiness
 (#38).
