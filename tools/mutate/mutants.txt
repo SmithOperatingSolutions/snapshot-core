@@ -5615,8 +5615,8 @@ run: ^TestRegression_SC34_APublishWaitsForAFinisherStartedAfterItsWait$
 
 id: packstore-journal-refuses-a-moved-root
 file: core/chunk/packstore/journal.go
-find: if n > 0 && m.root != base {
-replace: if false {
+find: if live && m.root != base && !beside {
+replace: if live && m.root != base && !beside && false {
 pkg: ./core/chunk/packstore
 run: ^TestARootMovedUnderAJournalIsRefused$
 
@@ -5636,15 +5636,15 @@ run: ^TestManyJournaledCommitsReplay$
 
 id: packstore-journal-publishes-after-a-full-pack
 file: core/chunk/packstore/journal.go
-find: must := len(s.session) > 0 || len(s.unuploaded) > 0 || len(s.sessionIdx) > 0 ||
-replace: must := len(s.unuploaded) > 0 || len(s.sessionIdx) > 0 ||
+find: must := len(s.session) > 0 || len(s.unuploaded) > 0 ||
+replace: must := len(s.unuploaded) > 0 ||
 pkg: ./core/chunk/packstore
 run: ^TestACommitAfterAFullPackPublishes$
 
 id: packstore-journal-size-limit
 file: core/chunk/packstore/journal.go
-find: if err == nil && s.jbytes+len(b) <= maxJournal {
-replace: if err == nil {
+find: fits := s.jbytes+len(b) <= maxJournal
+replace: fits := true || s.jbytes+len(b) <= maxJournal
 pkg: ./core/chunk/packstore
 run: ^TestACommitTooLargeToJournalPublishes$
 
@@ -5678,14 +5678,14 @@ run: ^TestAJournalChecksTheChunksItCountedOn$
 
 id: packstore-journal-published-not-replayed-twice
 file: core/chunk/packstore/journal.go
-find: case root == recs[len(recs)-1].next: // published
+find: case from < 0 && root == recs[len(recs)-1].next: // published
 replace: case false: // published
 pkg: ./core/chunk/packstore
 run: ^TestAPublishedJournalLeftUnresetIsNotReplayedTwice$
 
 id: packstore-journal-replay-refuses-a-moved-root
 file: core/chunk/packstore/journal.go
-find: case root != recs[0].expected:
+find: case from < 0:
 replace: case false:
 pkg: ./core/chunk/packstore
 run: ^TestARootMovedUnderAJournalIsRefused$
@@ -5727,7 +5727,7 @@ run: ^TestAJournalLeftByADeadWriterIsReplayedByAnyOpen$
 
 id: packstore-journal-root-is-the-journaled
 file: core/chunk/packstore/packstore.go
-find: \tif s.jrecords > 0 {\n\t\treturn s.jroot, nil\n\t}
+find: \tif !s.jroot.IsZero() {\n\t\treturn s.jroot, nil\n\t}
 replace: 
 pkg: ./core/chunk/packstore
 run: ^TestAJournaledCommitIsDurableBeforeItIsPublished$
@@ -5741,8 +5741,8 @@ run: ^TestCloseLandsTheJournal$
 
 id: packstore-journal-publish-conflict-sticks
 file: core/chunk/packstore/journal.go
-find: if errors.Is(err, chunk.ErrRootConflict) && n > 0 {
-replace: if false {
+find: \tif errors.Is(err, chunk.ErrRootConflict) {\n\t\treturn s.journalFailed(fmt.Errorf("%w: publishing it", ErrJournalConflict))
+replace: \tif false {\n\t\treturn s.journalFailed(fmt.Errorf("%w: publishing it", ErrJournalConflict))
 pkg: ./core/chunk/packstore
 run: ^TestAPublishOverAMovedRootIsRefused$
 
@@ -5755,22 +5755,22 @@ run: ^TestARootMovedUnderAJournalIsRefused$
 
 id: packstore-journal-close-publishes
 file: core/chunk/packstore/journal.go
-find: if publish && n > 0 && jerr == nil {
-replace: if publish && n > 0 && jerr == nil && false {
+find: if publish && !root.IsZero() && jerr == nil {
+replace: if publish && !root.IsZero() && jerr == nil && false {
 pkg: ./core/chunk/packstore
 run: ^TestCloseLandsTheJournal$
 
 id: packstore-journal-first-commit-wakes-the-publisher
 file: core/chunk/packstore/journal.go
-find: \t\t\t\ts.jbase = m.root\n\t\t\t\tselect {\n\t\t\t\tcase s.jkick <- struct{}{}:
-replace: \t\t\t\ts.jbase = m.root\n\t\t\t\tselect {\n\t\t\t\tcase <-make(chan struct{}):
+find: \t\t\t\ts.jbase = expected\n\t\t\t\tselect {\n\t\t\t\tcase s.jkick <- struct{}{}:
+replace: \t\t\t\ts.jbase = expected\n\t\t\t\tselect {\n\t\t\t\tcase <-make(chan struct{}):
 pkg: ./core/chunk/packstore
 run: ^TestTheBackgroundPublishLandsWithinTheInterval$
 
 id: packstore-journal-reset-failure-sticks
 file: core/chunk/packstore/journal.go
-find: return s.journalFailed(fmt.Errorf("packstore: the journal was published and could not be emptied
-replace: return (fmt.Errorf("packstore: the journal was published and could not be emptied
+find: return s.journalFailed(fmt.Errorf("packstore: the journal was published and its segments could not be dropped
+replace: return (fmt.Errorf("packstore: the journal was published and its segments could not be dropped
 pkg: ./core/chunk/packstore
 run: ^TestAPublishedJournalLeftUnresetIsNotReplayedTwice$
 
