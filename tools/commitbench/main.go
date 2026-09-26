@@ -83,6 +83,7 @@ type config struct {
 	memprofile string
 	objectSize int
 	reader     string
+	flow       string
 }
 
 // objectReader is how the batch run hands a small object to the write:
@@ -113,6 +114,7 @@ func run() int {
 	flag.StringVar(&c.memprofile, "memprofile", "", "write an allocation profile on the first backend here: of the first batch run's write phase with -only batch, else of the single-writer run with -cpuprofile")
 	flag.IntVar(&c.objectSize, "object", 100, "bytes in each small object")
 	flag.StringVar(&c.reader, "reader", "lener", "how the batch run hands each object to the write: lener (a strings.Reader), plain (a reader without a length), hinted (plain, with stream.WithLen)")
+	flag.StringVar(&c.flow, "flow", "commit", "how a commit is made: commit (CommitNamespace, one publish), two-step (UpdateWorkingSet then CommitWorkingSet), two-step-flushed (their Flushed forms, handed the flush's record)")
 	flag.Parse()
 	if c.reader != "lener" && c.reader != "plain" && c.reader != "hinted" {
 		fmt.Fprintf(os.Stderr, "commitbench: bad -reader %q\n", c.reader)
@@ -269,11 +271,12 @@ type env struct {
 	v       *vcs.Repo
 	geo     repo.Geometry
 	me      auth.Principal
+	flow    string
 }
 
 func newEnv(c config, backend string) (*env, error) {
 	ctx := context.Background()
-	e := &env{backend: backend, me: auth.Principal{ID: "user:bench"}}
+	e := &env{backend: backend, me: auth.Principal{ID: "user:bench"}, flow: c.flow}
 	switch backend {
 	case "local":
 		dir, err := os.MkdirTemp(c.dir, "commitbench-")
@@ -342,6 +345,11 @@ func (e *env) commitOne(ctx context.Context, branch, path string, size int) erro
 }
 
 func (e *env) commitRef(ctx context.Context, branch, path string, root model.Root) error {
+	return e.commitVia(ctx, e.flow, branch, path, root)
+}
+
+// commitVia is commitRef by one of -flow's ways.
+func (e *env) commitVia(ctx context.Context, flow, branch, path string, root model.Root) error {
 	ws, err := e.v.WorkingSet(ctx, e.me, branch)
 	if err != nil {
 		return err
@@ -357,7 +365,21 @@ func (e *env) commitRef(ctx context.Context, branch, path string, root model.Roo
 	if n, err = ed.Flush(ctx); err != nil {
 		return err
 	}
-	_, err = e.v.CommitNamespace(ctx, e.me, branch, ws, n, "put "+path)
+	switch flow {
+	case "two-step", "two-step-flushed":
+		next := ws
+		next.Working, next.Staged = n.Root(), n.Root()
+		var rec []*object.Namespace
+		if flow == "two-step-flushed" {
+			rec = []*object.Namespace{n}
+		}
+		if _, err := e.v.UpdateWorkingSetFlushed(ctx, e.me, branch, ws, next, rec...); err != nil {
+			return err
+		}
+		_, err = e.v.CommitWorkingSetFlushed(ctx, e.me, branch, "put "+path, rec...)
+	default:
+		_, err = e.v.CommitNamespace(ctx, e.me, branch, ws, n, "put "+path)
+	}
 	return err
 }
 
