@@ -26,7 +26,12 @@
 //     namespace through one editor, flushed once, committed once: writes/s,
 //     the flush, the commit and the publish inside it, and the pack bytes
 //     the commit wrote; -reader plain hides each object's length from the
-//     write, -reader hinted hints it with stream.WithLen (#41).
+//     write, -reader hinted hints it with stream.WithLen (#41);
+//   - read: point reads of 10,000 small objects committed once (1 and 16
+//     readers, -readers: Gets/s, p50, p99), a full read of the bulk stream
+//     (MB/s), and the 16 readers again while one writer commits back to back
+//     (through the journal where the backend keeps one): what a background
+//     publish costs readers.
 //
 // -journal commits through the backend's journal (#34), and the tables add
 // the journal's appends.
@@ -85,6 +90,7 @@ type config struct {
 	cpuprofile string
 	memprofile string
 	objectSize int
+	readers    []int
 	reader     string
 	flow       string
 	journal    string
@@ -109,7 +115,8 @@ func (c *config) objectReader(body string) io.Reader {
 func run() int {
 	var c config
 	backends := flag.String("backends", "local,mem", "comma-separated backends: local, mem")
-	only := flag.String("only", "single,concurrent,bulk,batch", "comma-separated runs: single, concurrent, bulk, batch")
+	only := flag.String("only", "single,concurrent,bulk,batch", "comma-separated runs: single, concurrent, bulk, batch, read")
+	readers := flag.String("readers", "1,16", "comma-separated reader counts for the read run's point reads")
 	batches := flag.String("batch", "1000,10000", "comma-separated object counts for the batch run")
 	writers := flag.String("writers", "4,16,64", "comma-separated writer counts for the concurrent run")
 	flag.StringVar(&c.dir, "dir", os.TempDir(), "where blob/local stores are created (and removed afterwards)")
@@ -154,6 +161,14 @@ func run() int {
 		}
 		c.writers = append(c.writers, n)
 	}
+	for _, w := range strings.Split(*readers, ",") {
+		n, err := strconv.Atoi(strings.TrimSpace(w))
+		if err != nil || n < 1 {
+			fmt.Fprintf(os.Stderr, "commitbench: bad reader count %q\n", w)
+			return 2
+		}
+		c.readers = append(c.readers, n)
+	}
 	if err := bench(c); err != nil {
 		fmt.Fprintln(os.Stderr, "commitbench:", err)
 		return 1
@@ -183,6 +198,7 @@ func bench(c config) error {
 	var rows []row
 	var breakdowns []string
 	var batchRows []string
+	var readRows []row
 	for i, b := range c.backends {
 		if c.only["single"] {
 			prof := ""
@@ -221,6 +237,13 @@ func bench(c config) error {
 				batchRows = append(batchRows, r)
 			}
 		}
+		if c.only["read"] {
+			rs, err := reads(c, b)
+			if err != nil {
+				return fmt.Errorf("%s read: %w", b, err)
+			}
+			readRows = append(readRows, rs...)
+		}
 		if c.only["bulk"] {
 			r, err := bulk(c, b)
 			if err != nil {
@@ -238,6 +261,12 @@ func bench(c config) error {
 	if len(batchRows) > 0 {
 		fmt.Printf("\n| backend | objects | write phase | writes/s | flush | commit | publish in it | total | pack bytes the commit wrote | journal bytes it appended |\n| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |\n")
 		for _, r := range batchRows {
+			fmt.Println(r)
+		}
+	}
+	if len(readRows) > 0 {
+		fmt.Printf("\n| backend | run | readers | reads | reads/s | p50 | p99 | commits beside |\n| --- | --- | --- | --- | --- | --- | --- | --- |\n")
+		for _, r := range readRows {
 			fmt.Println(r)
 		}
 	}
@@ -791,6 +820,189 @@ func batch(c config, backend string, n int, prof profiles) (string, error) {
 	r := func(d time.Duration) time.Duration { return d.Round(10 * time.Microsecond) }
 	return fmt.Sprintf("| %s | %d | %v | %.0f | %v | %v | %v | %v | %d | %d |", backend, n, r(write), float64(n)/write.Seconds(),
 		r(flush), r(cm), r(pub), r(write+flush+cm), e.timed.packBytes.Load(), e.timed.appendBytes.Load()), nil
+}
+
+// --- reads ---
+
+// reads commits 10,000 small objects in one commit and reads them back by
+// path from a namespace opened once: one reader and c.readers at once, then
+// the most readers again beside one writer committing back to back; then
+// writes the bulk stream, commits it, and reads it through.
+func reads(c config, backend string) ([]row, error) {
+	ctx := context.Background()
+	e, err := newEnv(c, backend)
+	if err != nil {
+		return nil, err
+	}
+	defer e.close()
+	const objects = 10000
+	if err := e.commitOne(ctx, vcs.MainBranch, "warm", c.objectSize); err != nil {
+		return nil, err
+	}
+	ws, err := e.v.WorkingSet(ctx, e.me, vcs.MainBranch)
+	if err != nil {
+		return nil, err
+	}
+	ns, err := e.v.Namespace(ctx, ws.Working)
+	if err != nil {
+		return nil, err
+	}
+	ed := ns.Editor()
+	body := make([]byte, c.objectSize)
+	for i := range objects {
+		_, _ = rand.Read(body)
+		root, err := mblob.Write(ctx, e.chunks, strings.NewReader(string(body)), e.geo.Stream())
+		if err != nil {
+			return nil, err
+		}
+		if err := ed.Put(fmt.Sprintf("r/%06d", i), object.Ref{Model: mblob.ID, Root: root}); err != nil {
+			return nil, err
+		}
+	}
+	if ns, err = ed.Flush(ctx); err != nil {
+		return nil, err
+	}
+	if _, err := e.v.Commit(ctx, e.me, vcs.MainBranch, ws, ns.Root(), "objects"); err != nil {
+		return nil, err
+	}
+	// The readers read the committed namespace, opened once, as a host
+	// serving reads from a branch head would.
+	ws, err = e.v.WorkingSet(ctx, e.me, vcs.MainBranch)
+	if err != nil {
+		return nil, err
+	}
+	if ns, err = e.v.Namespace(ctx, ws.Working); err != nil {
+		return nil, err
+	}
+	get := func(path string) error {
+		ref, _, ok, err := ns.Get(ctx, path)
+		if err != nil {
+			return err
+		}
+		if !ok {
+			return fmt.Errorf("%s not found", path)
+		}
+		sr, err := mblob.Open(ctx, e.chunks, ref.Root)
+		if err != nil {
+			return err
+		}
+		n, err := io.Copy(io.Discard, sr)
+		if err == nil && n != int64(c.objectSize) {
+			err = fmt.Errorf("%s read %d bytes, want %d", path, n, c.objectSize)
+		}
+		return err
+	}
+	var out []row
+	run := func(readers int, label string, beside func(stop <-chan struct{}) (int, error)) error {
+		d := c.duration
+		lats := make([][]time.Duration, readers)
+		errs := make([]error, readers)
+		stop := make(chan struct{})
+		var wg sync.WaitGroup
+		commits, werr := 0, error(nil)
+		wdone := make(chan struct{})
+		if beside != nil {
+			go func() { commits, werr = beside(stop); close(wdone) }()
+		}
+		t0 := time.Now()
+		deadline := t0.Add(d)
+		for w := range readers {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				rng := mrand.New(mrand.NewPCG(uint64(w), 1))
+				for time.Now().Before(deadline) {
+					s := time.Now()
+					if err := get(fmt.Sprintf("r/%06d", rng.IntN(objects))); err != nil {
+						errs[w] = err
+						return
+					}
+					lats[w] = append(lats[w], time.Since(s))
+				}
+			}()
+		}
+		wg.Wait()
+		el := time.Since(t0)
+		close(stop)
+		if beside != nil {
+			<-wdone
+			if werr != nil {
+				return werr
+			}
+		}
+		var all []time.Duration
+		for w := range readers {
+			if errs[w] != nil {
+				return errs[w]
+			}
+			all = append(all, lats[w]...)
+		}
+		r := row{backend: backend, run: label, writers: readers, count: len(all), rate: float64(len(all)) / el.Seconds(),
+			p50: percentile(all, .5), p99: percentile(all, .99), lost: int64(commits)}
+		out = append(out, r)
+		return nil
+	}
+	most := 0
+	for _, n := range c.readers {
+		most = max(most, n)
+		if err := run(n, "point reads", nil); err != nil {
+			return nil, err
+		}
+	}
+	writer := func(stop <-chan struct{}) (int, error) {
+		n := 0
+		for {
+			select {
+			case <-stop:
+				return n, nil
+			default:
+			}
+			if err := e.commitOne(ctx, "w", fmt.Sprintf("w/%06d", n), c.objectSize); err != nil {
+				return n, err
+			}
+			n++
+		}
+	}
+	head, err := e.v.Head(ctx, e.me, vcs.MainBranch)
+	if err != nil {
+		return nil, err
+	}
+	if err := e.v.CreateBranch(ctx, e.me, "w", head.Hash); err != nil {
+		return nil, err
+	}
+	if err := run(most, "point reads, one writer committing", writer); err != nil {
+		return nil, err
+	}
+
+	// The bulk stream, read through.
+	size := int64(c.bulkMiB) << 20
+	src := make([]byte, size)
+	cc := mrand.NewChaCha8([32]byte{7})
+	_, _ = cc.Read(src)
+	root, err := mblob.Write(ctx, e.chunks, strings.NewReader(string(src)), e.geo.Stream())
+	if err != nil {
+		return nil, err
+	}
+	src = nil
+	if err := e.commitRef(ctx, vcs.MainBranch, "bulk.bin", root); err != nil {
+		return nil, err
+	}
+	t0 := time.Now()
+	sr, err := mblob.Open(ctx, e.chunks, root)
+	if err != nil {
+		return nil, err
+	}
+	n, err := io.Copy(io.Discard, sr)
+	if err != nil {
+		return nil, err
+	}
+	if n != size {
+		return nil, fmt.Errorf("the bulk stream read %d bytes, want %d", n, size)
+	}
+	rd := time.Since(t0)
+	out = append(out, row{backend: backend, run: fmt.Sprintf("full read of %d MiB", c.bulkMiB), writers: 1, count: 1, rate: 1 / rd.Seconds(),
+		p50: rd, p99: rd, note: fmt.Sprintf("(%.0f MB/s)", float64(size)/1e6/rd.Seconds())})
+	return out, nil
 }
 
 // --- the fsync floor ---
