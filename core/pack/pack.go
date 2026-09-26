@@ -56,7 +56,7 @@ const (
 )
 
 // RawBelow is the size under which a chunk is stored raw without trying
-// zstd (D13): on a chunk this small the encoder's setup and match-table
+// zstd (D14): on a chunk this small the encoder's setup and match-table
 // cache misses cost more than the few bytes it could save.
 const RawBelow = 256
 
@@ -235,7 +235,7 @@ func (w *Writer) Add(h hash.Hash, data []byte) error {
 }
 
 // Compress is the payload a chunk is stored as: zstd when that is shorter,
-// else the bytes themselves; a chunk under RawBelow is not tried (D13). Safe to call from many goroutines at once.
+// else the bytes themselves; a chunk under RawBelow is not tried (D14). Safe to call from many goroutines at once.
 // The encoder writes into a scratch buffer kept from call to call, so a
 // chunk that does not compress costs no allocation, and one that does
 // costs its compressed size.

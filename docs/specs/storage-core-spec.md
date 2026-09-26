@@ -258,7 +258,7 @@ The storage core is built first; the table model (Engine Spec) and the access la
 ## Addendum, 2026-09-26: the commit journal (chunk layer)
 
 *Added after v0.2.0 (#34); the text above is unchanged. Details are in
-`docs/DESIGN.md` §5, §6 and D12.*
+`docs/DESIGN.md` §5, §6 and D16.*
 
 - **What it is.** On a backend that keeps one (`blob/local`,
   `blob/multivol`; the optional `blob.Journaler`, beside the frozen

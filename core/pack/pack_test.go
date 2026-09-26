@@ -334,7 +334,7 @@ func FuzzReadInfo(f *testing.F) {
 	})
 }
 
-// D13: a chunk under RawBelow is stored raw even when zstd would shrink it,
+// D14: a chunk under RawBelow is stored raw even when zstd would shrink it,
 // and one at RawBelow is compressed; a pack holding both kinds of frame
 // reads back, as the v1 golden pack (raw and zstd frames) still does.
 func TestAChunkUnderTheRawCutoffIsStoredRaw(t *testing.T) {
