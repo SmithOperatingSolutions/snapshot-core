@@ -1049,3 +1049,63 @@ func TestADefaultOpenFindingTheJournalHeldIsRefused(t *testing.T) {
 	}
 	_ = ro.Close()
 }
+
+// A journal no open can replay is discarded on request, reporting what it
+// held, and the published state stays; a journal that replays is replayed
+// instead, nothing discarded; one a writer holds is refused.
+func TestAJournalThatCannotReplayIsDiscarded(t *testing.T) {
+	bs, kr := mem.New(), keyring(t)
+	o := packstore.Options{Blobs: bs, Keys: kr, Repo: repo}
+
+	// A journal that replays.
+	s := openJournaled(t, bs, kr, time.Hour)
+	first := commit(t, s, hash.Hash{}, payload("first", 100))
+	h := commit(t, s, first, payload("replays", 100))
+	if _, err := packstore.DiscardJournal(ctx, o); !errors.Is(err, blob.ErrJournalBusy) {
+		t.Fatalf("discarding a journal a writer holds = %v, want ErrJournalBusy", err)
+	}
+	packstore.Abandon(s)
+	d, err := packstore.DiscardJournal(ctx, o)
+	if err != nil || !d.Replayed || d.Records != 0 {
+		t.Fatalf("positive control: discarding a journal that replays = %+v, %v; want it replayed and nothing discarded", d, err)
+	}
+	if got := publishedRoot(t, bs, kr); got != h {
+		t.Fatalf("the replayable journal's commit was not published (root %s, want %s)", got.Short(), h.Short())
+	}
+
+	// A journal whose root moved under it.
+	s = openJournaled(t, bs, kr, time.Hour)
+	if _, err := s.Put(ctx, payload("extra", 50)); err != nil {
+		t.Fatal(err)
+	}
+	h2 := commit(t, s, h, payload("lost", 100))
+	packstore.Abandon(s)
+	intruder := commit(t, open(t, mem.New(), kr), hash.Hash{}, payload("v0.2.0's", 100))
+	if err := packstore.ForceRoot(ctx, o, intruder); err != nil {
+		t.Fatal(err)
+	}
+	if s2, err := packstore.Open(ctx, journalOptions(bs, kr, time.Hour)); !errors.Is(err, packstore.ErrJournalConflict) {
+		if err == nil {
+			_ = s2.Close()
+		}
+		t.Fatalf("fixture: opening over the moved root = %v, want ErrJournalConflict", err)
+	}
+	d, err = packstore.DiscardJournal(ctx, o)
+	if err != nil {
+		t.Fatalf("DiscardJournal: %v", err)
+	}
+	if d.Replayed || d.Records != 1 || d.Frames != 2 || d.Base != h || d.Last != h2 || d.Bytes == 0 {
+		t.Fatalf("DiscardJournal reported %+v; want one commit, its two frames, from %s to %s", d, h.Short(), h2.Short())
+	}
+	if got := publishedRoot(t, bs, kr); got != intruder {
+		t.Fatalf("discarding moved the published root to %s", got.Short())
+	}
+	s3, err := packstore.Open(ctx, journalOptions(bs, kr, time.Hour))
+	if err != nil {
+		t.Fatalf("after the discard the repository does not open: %v", err)
+	}
+	defer s3.Close()
+	if got, _ := s3.Root(ctx); got != intruder {
+		t.Fatalf("after the discard the root is %s, want the published %s", got.Short(), intruder.Short())
+	}
+}

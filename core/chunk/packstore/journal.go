@@ -624,3 +624,19 @@ func (s *Store) closeJournal(publish bool) error {
 	s.mu.Unlock()
 	return errors.Join(err, j.Close())
 }
+
+// Discarded is what DiscardJournal did.
+type Discarded struct {
+	Replayed bool      // the journal replayed, and nothing was discarded
+	Records  int       // commits discarded
+	Frames   int       // chunk frames they held
+	Base     hash.Hash // the root they built on
+	Last     hash.Hash // the root the last of them set
+	Bytes    int       // the journal's length, torn tail included
+}
+
+// DiscardJournal empties a journal no open can replay (#34): its
+// commits are lost, the published state stays. Not yet written.
+func DiscardJournal(ctx context.Context, o Options) (Discarded, error) {
+	return Discarded{}, nil
+}

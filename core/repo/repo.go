@@ -438,3 +438,10 @@ func GC(ctx context.Context, p auth.Principal, o Options, grace time.Duration) (
 	return gc.Run(ctx, gc.Options{Blobs: o.Blobs, Keys: o.Keys, Repo: c.RepoID, Config: c.Geometry.Prolly(),
 		Registry: o.Registry, Grace: grace, Clock: o.Clock})
 }
+
+// DiscardJournal empties a journal no open can replay (packstore.DiscardJournal,
+// #34): the commits in it are lost and the published state stays. It needs
+// admin. Not yet written.
+func DiscardJournal(ctx context.Context, p auth.Principal, o Options) (packstore.Discarded, error) {
+	return packstore.Discarded{}, nil
+}

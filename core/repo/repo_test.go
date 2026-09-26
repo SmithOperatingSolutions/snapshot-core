@@ -1214,3 +1214,37 @@ func TestTheJournalIsOnByDefaultOnDisk(t *testing.T) {
 		t.Error("with default options on blob/mem a commit was journaled: mem's default is off")
 	}
 }
+
+// Discarding a journal needs admin (#34), and goes through to the chunk
+// layer: a journal no open can replay is reported and emptied.
+func TestDiscardingAJournalNeedsAdmin(t *testing.T) {
+	bs := mem.New()
+	o := options(t, bs, keyring(t))
+	r := initRepo(t, o)
+	_ = r.Close()
+	denied := o
+	denied.Authorizer = auth.DenyAll{}
+	if _, err := repo.DiscardJournal(ctx, alice, denied); !errors.Is(err, auth.ErrDenied) {
+		t.Fatalf("DiscardJournal without admin = %v, want ErrDenied", err)
+	}
+	oj := o
+	oj.Journal, oj.JournalInterval = packstore.JournalOn, time.Hour
+	rj, err := repo.Open(ctx, oj)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ws, err := rj.WorkingSet(ctx, alice, vcs.MainBranch)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := rj.Commit(ctx, alice, vcs.MainBranch, ws, ws.Working, "journaled"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := repo.DiscardJournal(ctx, alice, o); !errors.Is(err, blob.ErrJournalBusy) {
+		t.Fatalf("DiscardJournal while the repository holds the journal = %v, want ErrJournalBusy", err)
+	}
+	_ = rj.Close()
+	if d, err := repo.DiscardJournal(ctx, alice, o); err != nil || d.Records != 0 {
+		t.Fatalf("DiscardJournal of an empty journal = %+v, %v; want nothing discarded", d, err)
+	}
+}
