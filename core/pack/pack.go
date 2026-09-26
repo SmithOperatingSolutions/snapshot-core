@@ -55,6 +55,11 @@ const (
 	CodecZstd uint8 = 1
 )
 
+// RawBelow is the size under which a chunk is stored raw without trying
+// zstd (D14): on a chunk this small the encoder's setup and match-table
+// cache misses cost more than the few bytes it could save.
+const RawBelow = 256
+
 const (
 	headerMagic  = "SCPK"
 	trailerMagic = "SCPE"
@@ -157,6 +162,7 @@ type Writer struct {
 	maxSize  int
 	buf      []byte
 	entries  map[hash.Hash]Entry
+	order    []hash.Hash // the entries in the order they were added
 	finished bool
 }
 
@@ -229,12 +235,12 @@ func (w *Writer) Add(h hash.Hash, data []byte) error {
 }
 
 // Compress is the payload a chunk is stored as: zstd when that is shorter,
-// else the bytes themselves. Safe to call from many goroutines at once.
+// else the bytes themselves; a chunk under RawBelow is not tried (D14). Safe to call from many goroutines at once.
 // The encoder writes into a scratch buffer kept from call to call, so a
 // chunk that does not compress costs no allocation, and one that does
 // costs its compressed size.
 func (c *Codec) Compress(data []byte) (payload []byte, codec uint8) {
-	if len(data) == 0 {
+	if len(data) < RawBelow {
 		return data, CodecRaw
 	}
 	scratch := c.scratch.Get().([]byte)
@@ -297,6 +303,7 @@ func (w *Writer) AddSealed(h hash.Hash, rawLen int, sealed []byte, codec uint8) 
 	}
 	w.entries[h] = Entry{Hash: h, Offset: uint32(len(w.buf)), StoredLen: uint32(len(sealed)),
 		RawLen: uint32(rawLen), Codec: codec}
+	w.order = append(w.order, h)
 	w.buf = append(w.buf, sealed...)
 	return nil
 }
@@ -334,6 +341,26 @@ func (w *Writer) Get(h hash.Hash) ([]byte, bool, error) {
 	}
 	data, err := OpenFrame(w.keys, w.codec, e, w.buf[e.Offset:e.Offset+e.StoredLen])
 	return data, true, err
+}
+
+// Frame is a chunk's sealed frame in an unfinished pack.
+type Frame struct {
+	Entry
+	Sealed []byte // the writer's bytes: read them before the writer is finished
+}
+
+// FramesSince lists the frames added after the first n, in the order they
+// were added.
+func (w *Writer) FramesSince(n int) []Frame {
+	if n >= len(w.order) {
+		return nil
+	}
+	out := make([]Frame, 0, len(w.order)-n)
+	for _, h := range w.order[n:] {
+		e := w.entries[h]
+		out = append(out, Frame{Entry: e, Sealed: w.buf[e.Offset : e.Offset+e.StoredLen : e.Offset+e.StoredLen]})
+	}
+	return out
 }
 
 // Finish seals the index and returns the pack.

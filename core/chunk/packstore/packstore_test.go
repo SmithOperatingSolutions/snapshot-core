@@ -56,6 +56,18 @@ func open(t testing.TB, bs blob.BlobStore, kr *seal.Keyring) *packstore.Store {
 	return s
 }
 
+// openReader opens a store without the journal, beside a writer that
+// holds it.
+func openReader(t testing.TB, bs blob.BlobStore, kr *seal.Keyring) *packstore.Store {
+	t.Helper()
+	s, err := packstore.Open(ctx, packstore.WithBackoff(packstore.Options{Blobs: bs, Keys: kr, Repo: repo, Journal: packstore.JournalOff}, time.Millisecond))
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	t.Cleanup(func() { _ = s.Close() })
+	return s
+}
+
 // tamper rewrites the byte in the middle of a chunk's frame in its pack
 // object, through the raw backend (packs are immutable, so: delete and put).
 func tamper(t *testing.T, bs blob.BlobStore, s *packstore.Store, h hash.Hash) {
@@ -88,7 +100,9 @@ func subject(t *testing.T, bs blob.BlobStore) contract.Subject {
 	return contract.Subject{
 		Store:  s,
 		Tamper: func(t *testing.T, h hash.Hash) { tamper(t, bs, s, h) },
-		Reopen: func(t *testing.T) chunk.Store { return open(t, bs, kr) },
+		// Beside the open store: on disk, where the journal is on by
+		// default and one writer holds it, the reopened store reads.
+		Reopen: func(t *testing.T) chunk.Store { return openReader(t, bs, kr) },
 	}
 }
 
@@ -398,7 +412,10 @@ func TestPublishedChunksAreDurableBeforeTheRoot(t *testing.T) {
 
 // --- crash harness at the chunk layer (Engine Spec L0: kill mid-write, 1,000 times) ---
 
-const envCrash = "SNAPSHOT_PACKSTORE_CRASH_DIR"
+const (
+	envCrash        = "SNAPSHOT_PACKSTORE_CRASH_DIR"
+	envCrashJournal = "SNAPSHOT_PACKSTORE_CRASH_JOURNAL"
+)
 
 func TestMain(m *testing.M) {
 	if dir := os.Getenv(envCrash); dir != "" {
@@ -411,13 +428,23 @@ func crashChunk(n int) []byte {
 	return []byte(fmt.Sprintf("crash-chunk-%08d-%s", n, strings.Repeat("z", n%500)))
 }
 
+// crashOptions are the chunk store options of a crash harness child and
+// of the parent that reopens after it, with the journal or without.
+func crashOptions(bs blob.BlobStore, kr *seal.Keyring, journal bool) packstore.Options {
+	mode := packstore.JournalOff
+	if journal {
+		mode = packstore.JournalOn
+	}
+	return packstore.Options{Blobs: bs, Keys: kr, Repo: repo, Journal: mode, JournalInterval: 3 * time.Millisecond}
+}
+
 func crashChild(dir string) {
 	bs, err := local.Open(dir, local.Options{})
 	if err != nil {
 		fmt.Printf("error open %v\n", err)
 		os.Exit(3)
 	}
-	s, err := packstore.Open(ctx, packstore.Options{Blobs: bs, Keys: keyring(&testing.T{}), Repo: repo})
+	s, err := packstore.Open(ctx, crashOptions(bs, keyring(&testing.T{}), os.Getenv(envCrashJournal) != ""))
 	if err != nil {
 		fmt.Printf("error open %v\n", err)
 		os.Exit(3)
@@ -447,7 +474,12 @@ func crashIterations() int {
 	return 20
 }
 
-func TestCrashDuringCommitLeavesOldOrNew(t *testing.T) {
+func TestCrashDuringCommitLeavesOldOrNew(t *testing.T) { crashCommits(t, false) }
+
+// crashCommits kills a child committing in a loop, over and over, and
+// checks after each kill that the reopened store is at the last commit
+// that returned or the one in flight, with its chunk.
+func crashCommits(t *testing.T, journal bool) {
 	dir := filepath.Join(t.TempDir(), "store")
 	if _, err := local.Create(dir, local.Options{}); err != nil {
 		t.Fatal(err)
@@ -457,6 +489,9 @@ func TestCrashDuringCommitLeavesOldOrNew(t *testing.T) {
 	for i := 0; i < crashIterations(); i++ {
 		cmd := exec.Command(os.Args[0], "-test.run=^$")
 		cmd.Env = append(os.Environ(), envCrash+"="+dir, "SNAPSHOT_PACKSTORE_CRASH_START="+strconv.Itoa(next))
+		if journal {
+			cmd.Env = append(cmd.Env, envCrashJournal+"=1")
+		}
 		out, err := cmd.StdoutPipe()
 		if err != nil {
 			t.Fatal(err)
@@ -511,7 +546,7 @@ func TestCrashDuringCommitLeavesOldOrNew(t *testing.T) {
 		if err != nil {
 			t.Fatalf("iteration %d: the store does not reopen: %v", i, err)
 		}
-		s, err := packstore.Open(ctx, packstore.Options{Blobs: bs, Keys: kr, Repo: repo})
+		s, err := packstore.Open(ctx, crashOptions(bs, kr, journal))
 		if err != nil {
 			t.Fatalf("iteration %d: the chunk store does not reopen after kill -9: %v", i, err)
 		}
@@ -546,3 +581,9 @@ func TestCrashDuringCommitLeavesOldOrNew(t *testing.T) {
 		t.Fatal("no commit completed; the harness exercised nothing")
 	}
 }
+
+// kill -9 mid-append and mid-publish (#34): a child committing through the
+// journal, publishing every 3ms, is killed over and over; the reopened
+// store, replaying the journal, is at the last commit that returned or the
+// one in flight, never torn, with its chunk.
+func TestCrashDuringJournaledCommitLeavesOldOrNew(t *testing.T) { crashCommits(t, true) }

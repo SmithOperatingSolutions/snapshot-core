@@ -112,10 +112,66 @@ run: ^TestValidateRefusesUnusableGeometry$
 
 id: cdc-new-validates
 file: core/cdc/cdc.go
-find: if err := g.Validate(); err != nil {\n\t\treturn nil, err\n\t}\n\treturn &Chunker
-replace: return &Chunker
+find: if err := g.Validate(); err != nil {\n\t\treturn nil, err\n\t}\n\trd := readSize
+replace: rd := readSize
 pkg: ./core/cdc
 run: ^TestValidateRefusesUnusableGeometry$
+
+id: cdc-read-buffer-sized-to-the-stream
+file: core/cdc/cdc.go
+find: rd = min(rd, max(l.Len(), 1))
+replace: rd = max(rd, l.Len())
+pkg: ./core/stream
+run: ^TestRegression_SC40_AShortStreamAllocatesWhatItNeeds$
+
+id: cdc-chunk-buffer-grows-toward-max
+file: core/cdc/cdc.go
+find: \t\trd: make([]byte, rd)}, nil
+replace: \t\tbuf: make([]byte, 0, g.Max), rd: make([]byte, rd)}, nil
+pkg: ./core/stream
+run: ^TestRegression_SC40_AShortStreamAllocatesWhatItNeeds$
+
+id: stream-short-streams-cut-serially
+file: core/stream/stream.go
+find: return ok && l.Len() < shortStream
+replace: return ok && l.Len() < 0
+pkg: ./core/stream
+run: ^TestRegression_SC40_AShortStreamAllocatesWhatItNeeds$
+
+id: stream-with-len-hints-the-length
+file: core/stream/stream.go
+find: func WithLen(r io.Reader, n int) io.Reader { return &hinted{r: r, left: n} }
+replace: func WithLen(r io.Reader, n int) io.Reader { return struct{ io.Reader }{&hinted{r: r, left: n}} }
+pkg: ./core/stream
+run: ^TestRegression_SC41_AHintedShortStreamWritesLikeABytesReader$
+
+id: cdc-undercounting-lener-read-in-full-blocks
+file: core/cdc/cdc.go
+find: if c.full >= 2 { // it yields more than it said it held (#41)
+replace: if c.full >= 1<<30 { // it yields more than it said it held (#41)
+pkg: ./core/cdc
+run: ^TestALenerThatUndercountsIsCutTheSameAndReadInFullBlocks$
+
+id: cdc-full-blocks-only-once-it-yields-more
+file: core/cdc/cdc.go
+find: if c.full >= 2 { // it yields more than it said it held (#41)
+replace: if c.full >= 1 { // it yields more than it said it held (#41)
+pkg: ./core/stream
+run: ^TestRegression_SC41_AHintedShortStreamWritesLikeABytesReader$
+
+id: stream-hint-never-stops-a-read
+file: core/stream/stream.go
+find: n, err := h.r.Read(p)
+replace: n, err := h.r.Read(p[:min(len(p), h.left)])
+pkg: ./core/stream
+run: ^TestRegression_SC41_AWrongHintStoresTheSameStream$
+
+id: stream-hint-reports-what-is-left
+file: core/stream/stream.go
+find: func (h *hinted) Len() int { return max(h.left, 0) }
+replace: func (h *hinted) Len() int { return 0 }
+pkg: ./core/stream
+run: ^TestRegression_SC41_AWrongHintStoresTheSameStream$
 
 id: wire-varint-minimal
 file: core/wire/wire.go
@@ -286,7 +342,7 @@ pkg: ./core/blob
 run: ^TestValidName$
 
 id: blob-nodelete-forbids
-file: core/blob/port.go
+file: core/blob/journal.go
 find: func (noDelete) Delete(context.Context, string) error { return ErrDeleteForbidden }
 replace: func (noDelete) unused() {}
 pkg: ./core/blob
@@ -740,6 +796,20 @@ replace: z := c.enc.EncodeAll(data, scratch[:0])\n\tif len(z) < len(data)+1<<20 
 pkg: ./core/pack
 run: ^TestCompressesOnlyWhenItHelps$
 
+id: pack-tiny-chunks-stored-raw
+file: core/pack/pack.go
+find: if len(data) < RawBelow {
+replace: if len(data) < 0 {
+pkg: ./core/pack
+run: ^TestAChunkUnderTheRawCutoffIsStoredRaw$
+
+id: pack-raw-cutoff-is-strict
+file: core/pack/pack.go
+find: if len(data) < RawBelow {
+replace: if len(data) <= RawBelow {
+pkg: ./core/pack
+run: ^TestAChunkUnderTheRawCutoffIsStoredRaw$
+
 id: pack-bytes-must-hash-to-name
 file: core/pack/pack.go
 find: if Name(b) != name {
@@ -959,8 +1029,8 @@ run: ^TestPublishedChunksAreDurableBeforeTheRoot$
 
 id: packstore-root-must-be-stored
 file: core/chunk/packstore/packstore.go
-find: if !stored {\n\t\ts.mu.Unlock()\n\t\treturn fmt.Errorf("%w: %s", chunk.ErrRootMissing, next.Short())
-replace: if next.IsZero() {\n\t\ts.mu.Unlock()\n\t\treturn fmt.Errorf("%w: %s", chunk.ErrRootMissing, next.Short())
+find: if !stored {\n\t\ts.mu.Unlock()\n\t\treturn nil, fmt.Errorf("%w: %s", chunk.ErrRootMissing, next.Short())
+replace: if next.IsZero() {\n\t\ts.mu.Unlock()\n\t\treturn nil, fmt.Errorf("%w: %s", chunk.ErrRootMissing, next.Short())
 pkg: ./core/chunk/packstore
 run: ^TestContractOverEveryBackend$/^mem$/^RootMustBeStored$
 
@@ -1528,8 +1598,8 @@ run: ^TestStoreErrorsSurfaceAtEveryPoint$
 
 id: prolly-flush-level-error-surfaces
 file: core/prolly/flush.go
-find: if edits, err = m.applyLevel(ctx, level, edits); err != nil {\n\t\t\treturn nil, err
-replace: if edits, err = m.applyLevel(ctx, level, edits); err != nil {\n\t\t\treturn m, nil
+find: if edits, err = m.applyLevel(ctx, level, edits, changed); err != nil {\n\t\t\treturn nil, err
+replace: if edits, err = m.applyLevel(ctx, level, edits, changed); err != nil {\n\t\t\treturn m, nil
 pkg: ./core/prolly
 run: ^TestStoreErrorsSurfaceAtEveryPoint$
 
@@ -1542,8 +1612,8 @@ run: ^TestStoreErrorsSurfaceAtEveryPoint$
 
 id: prolly-store-put-error-surfaces
 file: core/prolly/flush.go
-find: if _, err := m.s.Put(ctx, b); err != nil {
-replace: if _, err := m.s.Put(ctx, b); err != nil && false {
+find: if _, err := put(ctx, b); err != nil {
+replace: if _, err := put(ctx, b); err != nil && false {
 pkg: ./core/prolly
 run: ^TestStoreErrorsSurfaceAtEveryPoint$
 
@@ -2072,6 +2142,20 @@ replace: func (r *Repo) Chunks() chunk.ReadWriter { return r.chunks }
 pkg: ./core/repo
 run: ^TestHostsWriteObjectsThroughTheRepository$
 
+id: repo-chunks-flush-reaches-the-store
+file: core/repo/repo.go
+find: func (w readWriter) Flush(ctx context.Context) error { return w.s.Flush(ctx) }
+replace: func (w readWriter) Flush(ctx context.Context) error { return nil }
+pkg: ./core/repo
+run: ^TestAHostWritingThroughTheRepositoryGetsTheParallelPathAndFlush$
+
+id: repo-chunks-put-prepared-stores
+file: core/repo/repo.go
+find: 	return w.s.PutPrepared(ctx, p)
+replace: 	return p.Hash(), nil
+pkg: ./core/repo
+run: ^TestAHostWritingThroughTheRepositoryGetsTheParallelPathAndFlush$
+
 id: e2e-tree-applies-theirs
 file: model/mapobject/mapobject.go
 find: if err = s.apply(ed, ct); err == nil {
@@ -2128,7 +2212,6 @@ replace: b, err := r.s.Get(ctx, h)\n\tif err != nil && false {\n\t\treturn Commi
 pkg: ./core/vcs
 run: ^TestStoreErrorsSurfaceAndLeaveTheRefs$
 
-
 id: vcs-conflicts-surface-iteration-errors
 file: core/vcs/vcs.go
 find: k, v, ok, err := it.Next()\n\t\tif err != nil || !ok {\n\t\t\treturn out, err
@@ -2157,7 +2240,6 @@ replace: if baseHash == theirs && false { // the branch holds theirs already: no
 pkg: ./core/vcs
 run: ^TestMergingWhatIsAlreadyMergedChangesNothing$
 
-
 id: vcs-branch-names-a-commit
 file: core/vcs/vcs.go
 find: c, err := r.readCommit(ctx, at)\n\tif err != nil {\n\t\treturn err
@@ -2174,8 +2256,8 @@ run: ^TestRefsNameOnlyStoredObjects$
 
 id: vcs-commit-message-bounded
 file: core/vcs/vcs.go
-find: func (r *Repo) CommitWorkingSet(ctx context.Context, p auth.Principal, branch, message string) (Commit, error) {\n\tif err := r.branchCheck(ctx, p, auth.Commit, branch); err != nil {\n\t\treturn Commit{}, err\n\t}\n\tif len(message) > MaxMessageLen || !utf8.ValidString(message) {
-replace: func (r *Repo) CommitWorkingSet(ctx context.Context, p auth.Principal, branch, message string) (Commit, error) {\n\tif err := r.branchCheck(ctx, p, auth.Commit, branch); err != nil {\n\t\treturn Commit{}, err\n\t}\n\tif (len(message) > MaxMessageLen || !utf8.ValidString(message)) && false {
+find: func (r *Repo) commitWorkingSet(ctx context.Context, p auth.Principal, branch, message string, flushed []*object.Namespace) (Commit, error) {\n\tif err := r.branchCheck(ctx, p, auth.Commit, branch); err != nil {\n\t\treturn Commit{}, err\n\t}\n\tif len(message) > MaxMessageLen || !utf8.ValidString(message) {
+replace: func (r *Repo) commitWorkingSet(ctx context.Context, p auth.Principal, branch, message string, flushed []*object.Namespace) (Commit, error) {\n\tif err := r.branchCheck(ctx, p, auth.Commit, branch); err != nil {\n\t\treturn Commit{}, err\n\t}\n\tif (len(message) > MaxMessageLen || !utf8.ValidString(message)) && false {
 pkg: ./core/vcs
 run: ^TestMessagesAreBoundedUTF8$
 
@@ -2300,8 +2382,8 @@ run: ^TestEveryCallIsAuthorized$
 
 id: vcs-update-working-set-authorized
 file: core/vcs/vcs.go
-find: func (r *Repo) UpdateWorkingSet(ctx context.Context, p auth.Principal, branch string, prev, next WorkingSet) (WorkingSet, error) {\n\tif err := r.branchCheck(ctx, p, auth.Write, branch); err != nil {
-replace: func (r *Repo) UpdateWorkingSet(ctx context.Context, p auth.Principal, branch string, prev, next WorkingSet) (WorkingSet, error) {\n\tif err := r.branchCheck(ctx, p, auth.Write, branch); err != nil && false {
+find: func (r *Repo) updateWorkingSet(ctx context.Context, p auth.Principal, branch string, prev, next WorkingSet, flushed []*object.Namespace) (WorkingSet, error) {\n\tif err := r.branchCheck(ctx, p, auth.Write, branch); err != nil {
+replace: func (r *Repo) updateWorkingSet(ctx context.Context, p auth.Principal, branch string, prev, next WorkingSet, flushed []*object.Namespace) (WorkingSet, error) {\n\tif err := r.branchCheck(ctx, p, auth.Write, branch); err != nil && false {
 pkg: ./core/vcs
 run: ^TestEveryCallIsAuthorized$
 
@@ -3063,8 +3145,8 @@ run: ^TestWritesAreAuthorizedPerPath$
 
 id: vcs-commit-checks-paths
 file: core/vcs/vcs.go
-find: if err := r.checkPaths(ctx, p, branch, head.Namespace, ws.Staged); err != nil {
-replace: if err := r.checkPaths(ctx, p, branch, head.Namespace, ws.Staged); err != nil && false {
+find: if err := r.checkChanged(ctx, p, branch, head.Namespace, ws.Staged, flushed); err != nil {
+replace: if err := r.checkChanged(ctx, p, branch, head.Namespace, ws.Staged, flushed); err != nil && false {
 pkg: ./core/vcs
 run: ^TestWritesAreAuthorizedPerPath$
 
@@ -3336,8 +3418,8 @@ run: ^TestAPublishFailsOnAPackRecordedAsADeletedOrphan$
 
 id: packstore-a-lost-session-refuses-publishes
 file: core/chunk/packstore/packstore.go
-find: if s.lost != nil {\n\t\ts.mu.Unlock()\n\t\treturn s.lost
-replace: if s.lost != nil && false {\n\t\ts.mu.Unlock()\n\t\treturn s.lost
+find: if s.lost != nil {\n\t\ts.mu.Unlock()\n\t\treturn nil, s.lost
+replace: if s.lost != nil && false {\n\t\ts.mu.Unlock()\n\t\treturn nil, s.lost
 pkg: ./core/chunk/packstore
 run: ^TestAPublishFailsOnAPackRecordedAsADeletedOrphan$
 
@@ -4211,8 +4293,8 @@ run: ^TestAChunkPreparedByAnotherStoreIsRefused$
 
 id: finisher-publish-waits-for-the-finishers
 file: core/chunk/packstore/packstore.go
-find: // Every finisher has landed its pack or left it to retry here.\n\ts.finishers.Wait()
-replace: // Every finisher has landed its pack or left it to retry here.\n\t_ = s.finishers
+find: \t\ts.finishers.Wait()\n\t\tif s.afterWait != nil {\n\t\t\ts.afterWait()\n\t\t}\n\t\ts.mu.Lock()\n\t\tif s.running == 0 {
+replace: \t\tif s.afterWait != nil {\n\t\t\ts.afterWait()\n\t\t}\n\t\ts.mu.Lock()\n\t\tif true {
 pkg: ./core/chunk/packstore
 run: ^TestAPublishWaitsForItsUploads$
 
@@ -4232,8 +4314,8 @@ run: ^TestAChunkOfAPackBeingFinishedReads$
 
 id: finisher-finishes-beside-the-writer
 file: core/chunk/packstore/packstore.go
-find: go func() {\n\t\tdefer s.finishers.Done()\n\t\tdefer func() { <-s.slots }()\n\t\ts.finish(context.WithoutCancel(ctx), w)\n\t}()
-replace: func() {\n\t\tdefer s.finishers.Done()\n\t\tdefer func() { <-s.slots }()\n\t\ts.finish(context.WithoutCancel(ctx), w)\n\t}()
+find: go func() {\n\t\tdefer s.finishers.Done()
+replace: func() {\n\t\tdefer s.finishers.Done()
 pkg: ./core/chunk/packstore
 run: ^TestAnUploadDoesNotHoldUpTheWriter$
 
@@ -4407,8 +4489,8 @@ run: ^TestMutantsRunAtOnceOnWorkers$
 
 id: vcs-commit-bounds-the-message
 file: core/vcs/vcs.go
-find: func (r *Repo) Commit(ctx context.Context, p auth.Principal, branch string, prev WorkingSet, namespace hash.Hash, message string) (Commit, error) {\n\tif err := r.branchCheck(ctx, p, auth.Write, branch); err != nil {\n\t\treturn Commit{}, err\n\t}\n\tif err := r.check(ctx, p, auth.Commit, "branch:"+branch); err != nil { // it writes the working set and commits it\n\t\treturn Commit{}, err\n\t}\n\tif len(message) > MaxMessageLen || !utf8.ValidString(message) {
-replace: func (r *Repo) Commit(ctx context.Context, p auth.Principal, branch string, prev WorkingSet, namespace hash.Hash, message string) (Commit, error) {\n\tif err := r.branchCheck(ctx, p, auth.Write, branch); err != nil {\n\t\treturn Commit{}, err\n\t}\n\tif err := r.check(ctx, p, auth.Commit, "branch:"+branch); err != nil { // it writes the working set and commits it\n\t\treturn Commit{}, err\n\t}\n\tif (len(message) > MaxMessageLen || !utf8.ValidString(message)) && false {
+find: func (r *Repo) commit(ctx context.Context, p auth.Principal, branch string, prev WorkingSet, namespace hash.Hash, flushed []*object.Namespace, message string) (Commit, error) {\n\tif err := r.branchCheck(ctx, p, auth.Write, branch); err != nil {\n\t\treturn Commit{}, err\n\t}\n\tif err := r.check(ctx, p, auth.Commit, "branch:"+branch); err != nil { // it writes the working set and commits it\n\t\treturn Commit{}, err\n\t}\n\tif len(message) > MaxMessageLen || !utf8.ValidString(message) {
+replace: func (r *Repo) commit(ctx context.Context, p auth.Principal, branch string, prev WorkingSet, namespace hash.Hash, flushed []*object.Namespace, message string) (Commit, error) {\n\tif err := r.branchCheck(ctx, p, auth.Write, branch); err != nil {\n\t\treturn Commit{}, err\n\t}\n\tif err := r.check(ctx, p, auth.Commit, "branch:"+branch); err != nil { // it writes the working set and commits it\n\t\treturn Commit{}, err\n\t}\n\tif (len(message) > MaxMessageLen || !utf8.ValidString(message)) && false {
 pkg: ./core/vcs
 run: ^TestCommitRefusesWhatTheTwoStepsRefuse$
 
@@ -4704,8 +4786,8 @@ run: ^TestAResolverIsAskedAboutTheSameValueOnBothSides$
 # commit contention
 id: packstore-a-loser-learns-before-it-writes
 file: core/chunk/packstore/packstore.go
-find: } else if !ok {\n\t\treturn chunk.ErrRootConflict
-replace: } else if !ok && false {\n\t\treturn chunk.ErrRootConflict
+find: } else if !ok {\n\t\treturn nil, chunk.ErrRootConflict
+replace: } else if !ok && false {\n\t\treturn nil, chunk.ErrRootConflict
 pkg: ./core/chunk/packstore
 run: ^TestALoserLearnsBeforeItWrites$
 
@@ -5264,3 +5346,822 @@ find: return prolly.Walk(w.ctx, w.rd, conflictsMap(w.o.Config), ws.Merge.Conflic
 replace: return prolly.Walk(w.ctx, w.rd, w.o.Config, ws.Merge.Conflicts,
 pkg: ./core/vcs
 run: ^TestAConflictRecordIsReadUpToTheLargestMergeWrites$
+
+id: vcs-commit-checks-stored-working
+file: core/vcs/vcs.go
+find: froms := []hash.Hash{stored.Working, stored.Staged, head.Namespace}
+replace: froms := []hash.Hash{stored.Staged, head.Namespace}
+pkg: ./core/vcs
+run: ^TestCommitAsksForWhatEachStoredNamespaceChanges$
+
+id: vcs-commit-checks-stored-staged
+file: core/vcs/vcs.go
+find: froms := []hash.Hash{stored.Working, stored.Staged, head.Namespace}
+replace: froms := []hash.Hash{stored.Working, head.Namespace}
+pkg: ./core/vcs
+run: ^TestCommitAsksForWhatEachStoredNamespaceChanges$
+
+id: vcs-commit-checks-head
+file: core/vcs/vcs.go
+find: froms := []hash.Hash{stored.Working, stored.Staged, head.Namespace}
+replace: froms := []hash.Hash{stored.Working, stored.Staged}
+pkg: ./core/vcs
+run: ^TestCommitAsksForWhatEachStoredNamespaceChanges$
+
+id: vcs-commit-dedupes-only-equal-namespaces
+file: core/vcs/vcs.go
+find: if slices.Contains(froms[:i], from) {
+replace: if slices.Contains(froms[:i], from) || i > 0 {
+pkg: ./core/vcs
+run: ^TestCommitAsksForWhatEachStoredNamespaceChanges$
+
+id: prolly-flush-logs-a-changed-value
+file: core/prolly/flush.go
+find: if edits[0].del || !edits[0].e.val.equal(old[j].val) {
+replace: if edits[0].del || !edits[0].e.val.equal(old[j].val) || true {
+pkg: ./core/prolly
+run: ^TestAFlushKnowsWhatItChangedProperty$
+
+id: prolly-flush-logs-a-delete
+file: core/prolly/flush.go
+find: if edits[0].del || !edits[0].e.val.equal(old[j].val) {
+replace: if false && edits[0].del || !edits[0].e.val.equal(old[j].val) {
+pkg: ./core/prolly
+run: ^TestAFlushKnowsWhatItChangedProperty$
+
+id: prolly-flush-logs-an-add
+file: core/prolly/flush.go
+find: c.change(edits[0].key)\n\t\t\t\terr = c.add(edits[0].e)
+replace: err = c.add(edits[0].e)
+pkg: ./core/prolly
+run: ^TestAFlushKnowsWhatItChangedProperty$
+
+id: prolly-flush-logs-only-leaves
+file: core/prolly/flush.go
+find: 	if c.level == 0 {\n		c.changed = changed
+replace: 	if c.level >= 0 {\n		c.changed = changed
+pkg: ./core/prolly
+run: ^TestAFlushKnowsWhatItChangedProperty$
+
+id: prolly-flush-records-the-root-it-edited
+file: core/prolly/prolly.go
+find: m.flushed, m.base, m.changed = true, e.m.root, changed
+replace: m.flushed, m.base, m.changed = true, next.root, changed
+pkg: ./core/prolly
+run: ^TestAFlushKnowsWhatItChangedProperty$
+
+id: prolly-opened-map-claims-nothing
+file: core/prolly/prolly.go
+find: 	if !m.flushed {\n		return hash.Hash{}, nil, false
+replace: 	if false {\n		return hash.Hash{}, nil, false
+pkg: ./core/prolly
+run: ^TestAnOpenedMapDoesNotClaimChanges$
+
+id: vcs-flushed-list-only-against-its-base
+file: core/vcs/vcs.go
+find: if !ok || base != from {
+replace: if !ok || base != base {
+pkg: ./core/vcs
+run: ^TestCommitNamespaceAsksForEveryChangeTheFlushDidNotSee$
+
+id: vcs-flushed-list-asks-every-path
+file: core/vcs/vcs.go
+find: 	for _, changed := range paths {
+replace: 	for _, changed := range paths[:0] {
+pkg: ./core/vcs
+run: ^TestCommitNamespaceAsksWhatTheDiffFinds$
+
+id: vcs-commit-namespace-uses-the-flush
+file: core/vcs/vcs.go
+find: return r.commit(ctx, p, branch, prev, n.Root(), []*object.Namespace{n}, message)
+replace: return r.commit(ctx, p, branch, prev, n.Root(), nil, message)
+pkg: ./core/vcs
+run: ^TestCommitNamespaceReadsNoNamespaceNode$
+
+id: prolly-map-holds-its-root
+file: core/prolly/prolly.go
+find: if h == m.root && m.top != nil {
+replace: if false && h == m.root && m.top != nil {
+pkg: ./core/prolly
+run: ^TestTheRootIsReadOnceWhenTheMapIsMade$
+
+id: prolly-flushed-map-holds-its-root
+file: core/prolly/flush.go
+find: height: n.level, top: n}
+replace: height: n.level}
+pkg: ./core/prolly
+run: ^TestTheRootIsReadOnceWhenTheMapIsMade$
+
+id: vcs-checked-record-only-for-its-namespace
+file: core/vcs/vcs.go
+find: if n == nil || n.Root() != to {
+replace: if n == nil {
+pkg: ./core/vcs
+run: ^TestTheFlushedWorkingSetCallsAskForEveryChangeTheFlushDidNotSee$
+
+id: vcs-update-flushed-uses-the-record
+file: core/vcs/vcs.go
+find: return r.updateWorkingSet(ctx, p, branch, prev, next, flushed)
+replace: return r.updateWorkingSet(ctx, p, branch, prev, next, nil)
+pkg: ./core/vcs
+run: ^TestTheFlushedWorkingSetCallsReadNoNamespaceNode$
+
+id: vcs-commit-ws-flushed-uses-the-record
+file: core/vcs/vcs.go
+find: return r.commitWorkingSet(ctx, p, branch, message, flushed)
+replace: return r.commitWorkingSet(ctx, p, branch, message, nil)
+pkg: ./core/vcs
+run: ^TestTheFlushedWorkingSetCallsReadNoNamespaceNode$
+
+id: vcs-update-flushed-checks-its-base
+file: core/vcs/vcs.go
+find: if !ok || base != from {
+replace: if !ok || base != base {
+pkg: ./core/vcs
+run: ^TestTheFlushedWorkingSetCallsAskForEveryChangeTheFlushDidNotSee$
+
+id: vcs-flushed-calls-ask-every-path
+file: core/vcs/vcs.go
+find: 	for _, changed := range paths {
+replace: 	for _, changed := range paths[1:] {
+pkg: ./core/vcs
+run: ^TestTheFlushedWorkingSetCallsAskWhatTheDiffFinds$
+
+id: multivol-readonly-opens-no-journal
+file: core/blob/multivol/multivol.go
+find: vols, err := s.snapshot()\n\tif err != nil {\n\t\treturn nil, err\n\t}\n\treturn vols[0].st.OpenJournal(ctx)
+replace: vols, _ := s.snapshot()\n\treturn vols[0].st.OpenJournal(ctx)
+pkg: ./core/blob/multivol
+run: ^TestMissingSecondaryOpensNoJournal$
+
+id: blob-nodelete-keeps-journal
+file: core/blob/journal.go
+find: if j, ok := s.(Journaler); ok {
+replace: if j, ok := s.(Journaler); ok && false {
+pkg: ./core/blob
+run: ^TestNoDeleteKeepsTheJournal$
+
+id: mem-journal-one-writer
+file: core/blob/mem/mem.go
+find: if s.jopen || s.jholds > 0 {
+replace: if false {
+pkg: ./core/blob/mem
+run: ^TestJournalContract$
+
+id: mem-journal-hold-excludes-writer
+file: core/blob/mem/mem.go
+find: if s.jopen {\n\t\treturn 0, nil, blob.ErrJournalBusy
+replace: if false {\n\t\treturn 0, nil, blob.ErrJournalBusy
+pkg: ./core/blob/mem
+run: ^TestJournalContract$
+
+id: mem-journal-read-limit
+file: core/blob/mem/mem.go
+find: if int64(len(all)) > limit {
+replace: if false {
+pkg: ./core/blob/mem
+run: ^TestJournalContract$
+
+id: mem-journal-closed-refuses-append
+file: core/blob/mem/mem.go
+find: if j.closed {\n\t\treturn blob.ErrJournalClosed\n\t}\n\tif len(j.s.jsegs) == 0 {
+replace: if false {\n\t\treturn blob.ErrJournalClosed\n\t}\n\tif len(j.s.jsegs) == 0 {
+pkg: ./core/blob/mem
+run: ^TestJournalContract$
+
+id: local-journal-exclusive
+file: core/blob/local/local.go
+find: if err := fsutil.TryLock(lock, true); err != nil {
+replace: if err := fsutil.TryLock(lock, false); err != nil {
+pkg: ./core/blob/local
+run: ^TestJournalContract$
+
+id: local-journal-hold-shared
+file: core/blob/local/local.go
+find: if err := fsutil.TryLock(f, false); err != nil {
+replace: if err := fsutil.TryLock(f, true); err != nil {
+pkg: ./core/blob/local
+run: ^TestJournalContract$
+
+id: local-journal-read-limit
+file: core/blob/local/local.go
+find: if size > limit {
+replace: if false {
+pkg: ./core/blob/local
+run: ^TestJournalContract$
+
+id: local-journal-appends-at-the-end
+file: core/blob/local/local.go
+find: j.cur, err = os.OpenFile(s.segmentPath(j.seq), os.O_RDWR|os.O_APPEND, filePerm)
+replace: j.cur, err = os.OpenFile(s.segmentPath(j.seq), os.O_RDWR, filePerm)
+pkg: ./core/blob/local
+run: ^TestJournalContract$
+
+id: local-journal-reset-truncates
+file: core/blob/local/local.go
+find: if err := j.cur.Truncate(0); err != nil {
+replace: if err := j.cur.Sync(); err != nil {
+pkg: ./core/blob/local
+run: ^TestJournalContract$
+
+id: local-journal-is-not-an-object
+file: core/blob/local/local.go
+find: func (s *Store) journalPath() string { return filepath.Join(s.dir, journalName) }
+replace: func (s *Store) journalPath() string { return filepath.Join(s.dir, objectsDir, journalName+fileSuffix) }
+pkg: ./core/blob/local
+run: ^TestJournalContract$
+
+id: local-journal-closed-refuses-append
+file: core/blob/local/local.go
+find: if j.closed.Load() {\n\t\treturn blob.ErrJournalClosed\n\t}\n\tj.mu.Lock()\n\tdefer j.mu.Unlock()\n\t_, err := j.cur.Write(b)
+replace: if false {\n\t\treturn blob.ErrJournalClosed\n\t}\n\tj.mu.Lock()\n\tdefer j.mu.Unlock()\n\t_, err := j.cur.Write(b)
+pkg: ./core/blob/local
+run: ^TestJournalContract$
+
+id: seal-journal-tag
+file: core/seal/seal.go
+find: \tJournal:   "vdb/journal/v1",\n
+replace: 
+pkg: ./core/seal
+run: ^TestDomainTagsAreTheDocumentedOnes$
+
+id: packstore-journal-replayed-on-open
+file: core/chunk/packstore/journal.go
+find: if err := s.replay(ctx, j); err != nil {
+replace: if err := error(nil); err != nil {
+pkg: ./core/chunk/packstore
+run: ^TestCrashDuringJournaledCommitLeavesOldOrNew$
+
+id: packstore-journal-first-root-published
+file: core/chunk/packstore/journal.go
+find: if first {\n\t\treturn nil, s.publishJournal(ctx, next) // a repository's first root is published
+replace: if first && false {\n\t\treturn nil, s.publishJournal(ctx, next) // a repository's first root is published
+pkg: ./core/chunk/packstore
+run: ^TestTheFirstRootIsPublished$
+
+id: packstore-journaled-reports-the-journal
+file: core/chunk/packstore/packstore.go
+find: return s.journal != nil\n}
+replace: return true\n}
+pkg: ./core/chunk/packstore
+run: ^TestTheJournalOptionOnABackendWithoutOne$
+
+id: packstore-publish-waits-for-late-finisher
+file: core/chunk/packstore/packstore.go
+find: if s.running == 0 {
+replace: if true {
+pkg: ./core/chunk/packstore
+run: ^TestRegression_SC34_APublishWaitsForAFinisherStartedAfterItsWait$
+
+id: packstore-journal-refuses-a-moved-root
+file: core/chunk/packstore/journal.go
+find: if live && m.root != base && !beside {
+replace: if live && m.root != base && !beside && false {
+pkg: ./core/chunk/packstore
+run: ^TestARootMovedUnderAJournalIsRefused$
+
+id: packstore-journal-commit-checks-expected
+file: core/chunk/packstore/journal.go
+find: if cur != expected {\n\t\treturn nil, chunk.ErrRootConflict
+replace: if cur != expected && false {\n\t\treturn nil, chunk.ErrRootConflict
+pkg: ./core/chunk/packstore
+run: ^TestARootMovedUnderAJournalIsRefused$
+
+id: packstore-journal-commits-follow-the-journal
+file: core/chunk/packstore/journal.go
+find: \t\tcur = s.jroot\n
+replace: \t\tcur = s.man.root\n
+pkg: ./core/chunk/packstore
+run: ^TestManyJournaledCommitsReplay$
+
+id: packstore-journal-publishes-after-a-full-pack
+file: core/chunk/packstore/journal.go
+find: must := len(s.session) > 0 || len(s.unuploaded) > 0 ||
+replace: must := len(s.unuploaded) > 0 ||
+pkg: ./core/chunk/packstore
+run: ^TestACommitAfterAFullPackPublishes$
+
+id: packstore-journal-size-limit
+file: core/chunk/packstore/journal.go
+find: fits := s.jbytes+len(b) <= maxJournal
+replace: fits := true || s.jbytes+len(b) <= maxJournal
+pkg: ./core/chunk/packstore
+run: ^TestACommitTooLargeToJournalPublishes$
+
+id: packstore-journal-records-counted
+file: core/chunk/packstore/journal.go
+find: rec.counted = append([]hash.Hash(nil), s.jcounted...)
+replace: rec.counted = nil
+pkg: ./core/chunk/packstore
+run: ^TestAJournalChecksTheChunksItCountedOn$
+
+id: packstore-journal-replay-marks-counted
+file: core/chunk/packstore/journal.go
+find: \t\tfor _, h := range r.counted {\n\t\t\ts.deduped[h] = true\n\t\t}
+replace: \t\tfor range r.counted {\n\t\t}
+pkg: ./core/chunk/packstore
+run: ^TestAJournalChecksTheChunksItCountedOn$
+
+id: packstore-journal-replay-oldest-gcgen
+file: core/chunk/packstore/journal.go
+find: s.sessGen = recs[0].gcGen // the oldest
+replace: s.sessGen = s.man.gcGen // the oldest
+pkg: ./core/chunk/packstore
+run: ^TestAJournalChecksTheChunksItCountedOn$
+
+id: packstore-journal-commit-checks-survived
+file: core/chunk/packstore/journal.go
+find: if err := s.survived(m); err != nil {\n\t\treturn nil, err\n\t}\n\ts.finishers.Wait()
+replace: if err := error(nil); err != nil {\n\t\treturn nil, err\n\t}\n\ts.finishers.Wait()
+pkg: ./core/chunk/packstore
+run: ^TestAJournalChecksTheChunksItCountedOn$
+
+id: packstore-journal-published-not-replayed-twice
+file: core/chunk/packstore/journal.go
+find: case from < 0 && root == recs[len(recs)-1].next: // published
+replace: case false: // published
+pkg: ./core/chunk/packstore
+run: ^TestAPublishedJournalLeftUnresetIsNotReplayedTwice$
+
+id: packstore-journal-replay-refuses-a-moved-root
+file: core/chunk/packstore/journal.go
+find: case from < 0:
+replace: case false:
+pkg: ./core/chunk/packstore
+run: ^TestARootMovedUnderAJournalIsRefused$
+
+id: packstore-journal-replay-verifies-frames
+file: core/chunk/packstore/journal.go
+find: \t\t\tif err != nil {\n\t\t\t\treturn fmt.Errorf("%w: a journaled frame: %w", chunk.ErrCorrupt, err)
+replace: \t\t\tif err != nil && false {\n\t\t\t\treturn fmt.Errorf("%w: a journaled frame: %w", chunk.ErrCorrupt, err)
+pkg: ./core/chunk/packstore
+run: ^TestAReplayVerifiesItsFrames$
+
+id: packstore-journal-replay-root-held
+file: core/chunk/packstore/journal.go
+find: \tif !stored {\n\t\treturn fmt.Errorf("%w: the journal's last root
+replace: \tif false {\n\t\treturn fmt.Errorf("%w: the journal's last root
+pkg: ./core/chunk/packstore
+run: ^TestAReplayRefusesARootItDoesNotHold$
+
+id: packstore-journal-held-refuses-a-left-journal
+file: core/chunk/packstore/journal.go
+find: \tif size > 0 {\n\t\trelease()
+replace: \tif false {\n\t\trelease()
+pkg: ./core/chunk/packstore
+run: ^TestAWriterWithoutTheJournalRefusesAJournalLeftBehind$
+
+id: packstore-journal-held-refuses-a-writer
+file: core/chunk/packstore/journal.go
+find: \t\treturn nil, fmt.Errorf("packstore: a writer with the journal is open: %w", err)
+replace: \t\treturn func() {}, nil
+pkg: ./core/chunk/packstore
+run: ^TestAWriterWithoutTheJournalIsRefusedWhileOneIsOpen$
+
+id: packstore-journal-any-open-replays
+file: core/chunk/packstore/journal.go
+find: \t\tif size == 0 {\n\t\t\treturn nil\n\t\t}
+replace: \t\tif size >= 0 {\n\t\t\treturn nil\n\t\t}
+pkg: ./core/chunk/packstore
+run: ^TestAJournalLeftByADeadWriterIsReplayedByAnyOpen$
+
+id: packstore-journal-root-is-the-journaled
+file: core/chunk/packstore/packstore.go
+find: \tif !s.jroot.IsZero() {\n\t\treturn s.jroot, nil\n\t}
+replace: 
+pkg: ./core/chunk/packstore
+run: ^TestAJournaledCommitIsDurableBeforeItIsPublished$
+
+id: packstore-journal-publish-empties-it
+file: core/chunk/packstore/journal.go
+find: if bytes > 0 {
+replace: if bytes < 0 {
+pkg: ./core/chunk/packstore
+run: ^TestCloseLandsTheJournal$
+
+id: packstore-journal-publish-conflict-sticks
+file: core/chunk/packstore/journal.go
+find: \tif errors.Is(err, chunk.ErrRootConflict) {\n\t\treturn s.journalFailed(fmt.Errorf("%w: publishing it", ErrJournalConflict))
+replace: \tif false {\n\t\treturn s.journalFailed(fmt.Errorf("%w: publishing it", ErrJournalConflict))
+pkg: ./core/chunk/packstore
+run: ^TestAPublishOverAMovedRootIsRefused$
+
+id: packstore-journal-put-refuses-after-failure
+file: core/chunk/packstore/packstore.go
+find: \tif s.jerr != nil {\n\t\ts.mu.Unlock()\n\t\treturn hash.Hash{}, s.jerr\n\t}
+replace: 
+pkg: ./core/chunk/packstore
+run: ^TestARootMovedUnderAJournalIsRefused$
+
+id: packstore-journal-close-publishes
+file: core/chunk/packstore/journal.go
+find: if publish && !root.IsZero() && jerr == nil {
+replace: if publish && !root.IsZero() && jerr == nil && false {
+pkg: ./core/chunk/packstore
+run: ^TestCloseLandsTheJournal$
+
+id: packstore-journal-first-commit-wakes-the-publisher
+file: core/chunk/packstore/journal.go
+find: \t\t\t\ts.jbase = expected\n\t\t\t\tselect {\n\t\t\t\tcase s.jkick <- struct{}{}:
+replace: \t\t\t\ts.jbase = expected\n\t\t\t\tselect {\n\t\t\t\tcase <-make(chan struct{}):
+pkg: ./core/chunk/packstore
+run: ^TestTheBackgroundPublishLandsWithinTheInterval$
+
+id: packstore-journal-reset-failure-sticks
+file: core/chunk/packstore/journal.go
+find: return s.journalFailed(fmt.Errorf("packstore: the journal was published and its segments could not be dropped
+replace: return (fmt.Errorf("packstore: the journal was published and its segments could not be dropped
+pkg: ./core/chunk/packstore
+run: ^TestAPublishedJournalLeftUnresetIsNotReplayedTwice$
+
+id: packstore-journal-record-chain
+file: core/chunk/packstore/journal.go
+find: if len(records) > 0 && r.expected != records[len(records)-1].next {
+replace: if false {
+pkg: ./core/chunk/packstore
+run: ^TestAJournalRecordThatDoesNotFollowOnIsRefused$
+
+id: packstore-journal-torn-record-stops
+file: core/chunk/packstore/journal.go
+find: n > maxJournal-journalHeaderLen || int(n) > len(b)-used-journalHeaderLen {
+replace: n > maxJournal-journalHeaderLen {
+pkg: ./core/chunk/packstore
+run: ^TestATornJournalTailIsDiscarded$
+
+id: packstore-journal-header-limit
+file: core/chunk/packstore/journal.go
+find: n > maxJournal-journalHeaderLen || int(n)
+replace: n > maxJournal-journalHeaderLen+1 || int(n)
+pkg: ./core/chunk/packstore
+run: ^TestAJournalHeaderOverTheLimitIsNotARecord$
+
+id: packstore-journal-unauthentic-stops
+file: core/chunk/packstore/journal.go
+find: \t\tif err != nil {\n\t\t\tbreak // torn, or not this repository's
+replace: \t\tif err != nil {\n\t\t\treturn nil, 0, errJournalCorrupt // torn, or not this repository's
+pkg: ./core/chunk/packstore
+run: ^TestARecordThatDoesNotAuthenticateEndsTheJournal$
+
+id: packstore-journal-frames-limit
+file: core/chunk/packstore/journal.go
+find: frames > pack.MaxChunksPerPack {
+replace: frames > pack.MaxChunksPerPack+1 {
+pkg: ./core/chunk/packstore
+run: ^TestForgedJournalRecordsAreRefused$
+
+id: packstore-journal-frames-limit-at
+file: core/chunk/packstore/journal.go
+find: frames > pack.MaxChunksPerPack {
+replace: frames >= pack.MaxChunksPerPack {
+pkg: ./core/chunk/packstore
+run: ^TestJournalLimitsAreAcceptedAtTheLimit$
+
+id: packstore-journal-raw-limit
+file: core/chunk/packstore/journal.go
+find: raw > pack.MaxChunkSize || f.codec
+replace: raw > pack.MaxChunkSize+1 || f.codec
+pkg: ./core/chunk/packstore
+run: ^TestForgedJournalRecordsAreRefused$
+
+id: packstore-journal-codec-limit
+file: core/chunk/packstore/journal.go
+find: f.codec > pack.CodecZstd ||
+replace: f.codec > pack.CodecZstd+1 ||
+pkg: ./core/chunk/packstore
+run: ^TestForgedJournalRecordsAreRefused$
+
+id: packstore-journal-stored-limit
+file: core/chunk/packstore/journal.go
+find: stored > maxFrameStored {
+replace: stored > maxFrameStored+1 {
+pkg: ./core/chunk/packstore
+run: ^TestForgedJournalRecordsAreRefused$
+
+id: packstore-journal-stored-limit-at
+file: core/chunk/packstore/journal.go
+find: stored > maxFrameStored {
+replace: stored >= maxFrameStored {
+pkg: ./core/chunk/packstore
+run: ^TestJournalLimitsAreAcceptedAtTheLimit$
+
+id: packstore-journal-counted-limit
+file: core/chunk/packstore/journal.go
+find: if p.Err() != nil || counted > maxCounted {
+replace: if p.Err() != nil || counted > maxCounted+1 {
+pkg: ./core/chunk/packstore
+run: ^TestForgedJournalRecordsAreRefused$
+
+id: packstore-journal-counted-limit-at
+file: core/chunk/packstore/journal.go
+find: if p.Err() != nil || counted > maxCounted {
+replace: if p.Err() != nil || counted >= maxCounted {
+pkg: ./core/chunk/packstore
+run: ^TestJournalLimitsAreAcceptedAtTheLimit$
+
+id: packstore-journal-trailing-bytes
+file: core/chunk/packstore/journal.go
+find: \tif err := p.Done(); err != nil {\n\t\treturn jrecord{}, fmt.Errorf("%w: %w", errJournalCorrupt, err)
+replace: \tif err := p.Done(); err != nil && false {\n\t\treturn jrecord{}, fmt.Errorf("%w: %w", errJournalCorrupt, err)
+pkg: ./core/chunk/packstore
+run: ^TestForgedJournalRecordsAreRefused$
+
+id: packstore-journal-plain-magic
+file: core/chunk/packstore/journal.go
+find: string(magic) != journalPlainMagic || v != journalV1 ||
+replace: string(magic) == "" || v != journalV1 ||
+pkg: ./core/chunk/packstore
+run: ^TestForgedJournalRecordsAreRefused$
+
+id: repo-journal-option-reaches-the-chunk-layer
+file: core/repo/repo.go
+find: \t\tJournal: o.Journal, JournalInterval: o.JournalInterval}
+replace: \t\tJournalInterval: o.JournalInterval}
+pkg: ./core/repo
+run: ^TestARepositoryOpenedWithTheJournalCommitsThroughIt$
+
+id: repo-probe-opens-without-the-journal
+file: core/repo/repo.go
+find: \t\tpo.Journal = packstore.JournalOff\n
+replace: 
+pkg: ./core/repo
+run: ^TestARepositoryOpenedWithTheJournalCommitsThroughIt$
+
+id: packstore-journal-gc-open-replays
+file: core/chunk/packstore/journal.go
+find: \t\tif size == 0 {\n\t\t\treturn nil\n\t\t}
+replace: \t\tif size >= 0 {\n\t\t\treturn nil\n\t\t}
+pkg: ./core/gc
+run: ^TestGCSafetyPropertyWithTheJournal$
+
+id: packstore-carries-forward-from-a-repacked-pack
+file: core/chunk/packstore/packstore.go
+find: if ok && s.condemned[loc.Pack.Name] {\n\t\t\tcarry = append(carry, h)
+replace: if ok && s.condemned[loc.Pack.Name] && false {\n\t\t\tcarry = append(carry, h)
+pkg: ./core/chunk/packstore
+run: ^TestRegression_SC34_ACountedChunkOnlyARepackedPackHoldsSurvivesItsExpiry$
+
+id: local-journal-open-error-is-not-busy
+file: core/blob/local/local.go
+find: os.O_RDWR|os.O_CREATE|os.O_APPEND, filePerm)\n\tif err != nil {\n\t\treturn nil, err
+replace: os.O_RDWR|os.O_CREATE|os.O_APPEND, filePerm)\n\tif err != nil {\n\t\treturn nil, blob.ErrJournalBusy
+pkg: ./core/blob/local
+run: ^TestAJournalThatWillNotOpenIsItsError$
+
+id: local-journal-hold-error-is-not-busy
+file: core/blob/local/local.go
+find: os.O_RDONLY|os.O_CREATE, filePerm)\n\tif err != nil {\n\t\treturn 0, nil, err
+replace: os.O_RDONLY|os.O_CREATE, filePerm)\n\tif err != nil {\n\t\treturn 0, nil, blob.ErrJournalBusy
+pkg: ./core/blob/local
+run: ^TestAJournalThatWillNotOpenIsItsError$
+
+id: packstore-journal-publishes-after-the-interval
+file: core/chunk/packstore/journal.go
+find: t := time.NewTimer(s.o.JournalInterval)
+replace: t := time.NewTimer(0)
+pkg: ./core/chunk/packstore
+run: ^TestAnotherProcessSeesACommitWithinTheInterval$
+
+id: packstore-journal-publishes-within-the-interval
+file: core/chunk/packstore/journal.go
+find: t := time.NewTimer(s.o.JournalInterval)
+replace: t := time.NewTimer(10 * s.o.JournalInterval)
+pkg: ./core/chunk/packstore
+run: ^TestAnotherProcessSeesACommitWithinTheInterval$
+
+id: packstore-journal-default-follows-the-backend
+file: core/chunk/packstore/journal.go
+find: if s.o.Journal == JournalDefault && js.JournalByDefault() {
+replace: if s.o.Journal == JournalDefault && js.JournalByDefault() && false {
+pkg: ./core/repo
+run: ^TestTheJournalIsOnByDefaultOnDisk$
+
+id: local-journal-on-by-default
+file: core/blob/local/local.go
+find: func (s *Store) JournalByDefault() bool { return true }
+replace: func (s *Store) JournalByDefault() bool { return false }
+pkg: ./core/repo
+run: ^TestTheJournalIsOnByDefaultOnDisk$
+
+id: mem-journal-off-by-default
+file: core/blob/mem/mem.go
+find: func (s *Store) JournalByDefault() bool { return false }
+replace: func (s *Store) JournalByDefault() bool { return true }
+pkg: ./core/repo
+run: ^TestTheJournalIsOnByDefaultOnDisk$
+
+id: packstore-journal-busy-is-refused
+file: core/chunk/packstore/journal.go
+find: \t\tif errors.Is(err, blob.ErrJournalBusy) {\n\t\t\treturn fmt.Errorf("packstore: another writer
+replace: \t\tif errors.Is(err, blob.ErrJournalBusy) {\n\t\t\treturn nil\n\t\t}\n\t\tif false {\n\t\t\treturn fmt.Errorf("packstore: another writer
+pkg: ./core/chunk/packstore
+run: ^TestADefaultOpenFindingTheJournalHeldIsRefused$
+
+id: local-journal-sync-refuses-when-closed
+file: core/blob/local/local.go
+find: if j.closed.Load() {\n\t\treturn blob.ErrJournalClosed\n\t}\n\tj.mu.Lock()\n\tf := j.cur
+replace: if false {\n\t\treturn blob.ErrJournalClosed\n\t}\n\tj.mu.Lock()\n\tf := j.cur
+pkg: ./core/blob/local
+run: ^TestJournalContract$
+
+id: local-journal-write-writes
+file: core/blob/local/local.go
+find: _, err := j.cur.Write(b)\n\treturn err
+replace: return nil
+pkg: ./core/blob/local
+run: ^TestJournalContract$
+
+id: packstore-journal-commit-waits-for-its-sync
+file: core/chunk/packstore/journal.go
+find: for s.jsynced < ticket && s.jsyncErr == nil {
+replace: for false && s.jsynced < ticket && s.jsyncErr == nil {
+pkg: ./core/chunk/packstore
+run: ^TestCommitsThatQueueShareAnFsync$
+
+id: packstore-journal-waiters-share-a-sync
+file: core/chunk/packstore/journal.go
+find: \t\tif s.jsyncing {\n\t\t\ts.jcond.Wait()\n\t\t\tcontinue\n\t\t}\n
+replace: 
+pkg: ./core/chunk/packstore
+run: ^TestCommitsThatQueueShareAnFsync$
+
+id: packstore-cancelled-commit-writes-nothing
+file: core/chunk/packstore/packstore.go
+find: \tif err := ctx.Err(); err != nil {\n\t\treturn err // nothing written\n\t}\n
+replace: 
+pkg: ./core/chunk/packstore
+run: ^TestACancelledCommitLeavesNothing$
+
+id: packstore-journal-failed-sync-fails-commits
+file: core/chunk/packstore/journal.go
+find: \t\tif err != nil {\n\t\t\ts.jsyncErr = err\n\t\t} else if target > s.jsynced {
+replace: \t\tif err != nil {\n\t\t\ts.jsynced = target\n\t\t} else if target > s.jsynced {
+pkg: ./core/chunk/packstore
+run: ^TestAFailedSyncFailsItsCommits$
+
+id: repo-discard-needs-admin
+file: core/repo/repo.go
+find: \tif err := auth.Check(ctx, o.Authorizer, p, auth.Admin, "repo"); err != nil {\n\t\treturn packstore.Discarded{}, err
+replace: \tif err := auth.Check(ctx, o.Authorizer, p, auth.Admin, "repo"); err != nil && false {\n\t\treturn packstore.Discarded{}, err
+pkg: ./core/repo
+run: ^TestDiscardingAJournalNeedsAdmin$
+
+id: packstore-discard-replays-first
+file: core/chunk/packstore/journal.go
+find: \ts, err := Open(ctx, o)\n\tif err == nil {
+replace: \ts, err := Open(ctx, o)\n\tif err == nil && false {
+pkg: ./core/chunk/packstore
+run: ^TestAJournalThatCannotReplayIsDiscarded$
+
+id: packstore-discard-empties
+file: core/chunk/packstore/journal.go
+find: \treturn d, j.Reset(ctx)
+replace: \treturn d, nil
+pkg: ./core/chunk/packstore
+run: ^TestAJournalThatCannotReplayIsDiscarded$
+
+id: packstore-discard-reports
+file: core/chunk/packstore/journal.go
+find: \t\t\td.Frames += len(r.frames)
+replace: \t\t\td.Frames += len(r.frames) * 0
+pkg: ./core/chunk/packstore
+run: ^TestAJournalThatCannotReplayIsDiscarded$
+
+id: local-journal-rotates
+file: core/blob/local/local.go
+find: return j.newSegment(j.seq + 1)
+replace: return nil
+pkg: ./core/blob/local
+run: ^TestJournalContract$
+
+id: local-journal-drops
+file: core/blob/local/local.go
+find: return j.removeBefore(cur)
+replace: return j.removeBefore(cur - cur)
+pkg: ./core/blob/local
+run: ^TestJournalContract$
+
+id: mem-journal-rotates
+file: core/blob/mem/mem.go
+find: j.s.jsegs = append(j.s.jsegs, nil)
+replace: _ = j.s.jsegs
+pkg: ./core/blob/mem
+run: ^TestJournalContract$
+
+id: mem-journal-drops
+file: core/blob/mem/mem.go
+find: j.s.jsegs = j.s.jsegs[n-1:]
+replace: _ = n
+pkg: ./core/blob/mem
+run: ^TestJournalContract$
+
+id: packstore-journal-publish-does-not-hold-the-commit-lock
+file: core/chunk/packstore/journal.go
+find: \ts.publishing, s.pubRoot = true, root\n\ts.mu.Unlock()\n\ts.commitMu.Unlock()\n
+replace: \ts.publishing, s.pubRoot = true, root\n\ts.mu.Unlock()\n\tdefer s.commitMu.Unlock()\n
+pkg: ./core/chunk/packstore
+run: ^TestAPublishInFlightDoesNotStallACommit$
+
+id: packstore-journal-commit-beside-a-landed-publish
+file: core/chunk/packstore/journal.go
+find: beside := s.publishing && m.root == s.pubRoot
+replace: beside := false && m.root == s.pubRoot
+pkg: ./core/chunk/packstore
+run: ^TestACommitBesideALandedPublishIsNotAConflict$
+
+id: packstore-journal-taken-pack-is-journaled
+file: core/chunk/packstore/journal.go
+find: if s.jpending != nil && s.jpending != w {
+replace: if s.jpending != nil && s.jpending != w && false {
+pkg: ./core/chunk/packstore
+run: ^TestAChunkPutBeforeAPublishTookItsPackIsJournaled$
+
+id: packstore-journal-publish-forgets-only-what-it-saw
+file: core/chunk/packstore/packstore.go
+find: \t\t\tif counted == nil {\n\t\t\t\ts.deduped, s.sessGen = map[hash.Hash]bool{}, upd.gcGen
+replace: \t\t\tif true {\n\t\t\t\ts.deduped, s.sessGen = map[hash.Hash]bool{}, upd.gcGen
+pkg: ./core/chunk/packstore
+run: ^TestAChunkCountedBesideAPublishStaysCounted$
+
+id: packstore-journal-own-pack-does-not-force-a-publish
+file: core/chunk/packstore/journal.go
+find: \t\ts.running > 0 || len(s.jcounted) > maxCounted
+replace: \t\ts.running > 0 || len(s.inflight) > 0 || len(s.jcounted) > maxCounted
+pkg: ./core/chunk/packstore
+run: ^TestAPublishInFlightDoesNotStallACommit$
+
+id: packstore-journal-replay-skips-published-segments
+file: core/chunk/packstore/journal.go
+find: \t\tif r.expected == root {\n\t\t\tfrom = k\n\t\t\tbreak
+replace: \t\tif r.expected == root && k == 0 {\n\t\t\tfrom = k\n\t\t\tbreak
+pkg: ./core/chunk/packstore
+run: ^TestAReplayReadsEverySegment$
+
+id: packstore-journal-publish-drops-its-segments
+file: core/chunk/packstore/journal.go
+find: if derr := j.Drop(ctx); derr != nil {
+replace: if derr := error(nil); derr != nil {
+pkg: ./core/chunk/packstore
+run: ^TestAReplayReadsEverySegment$
+
+id: local-journal-segment-names-canonical
+file: core/blob/local/local.go
+find: if err != nil || n == 0 || strconv.FormatUint(n, 10) != rest {
+replace: if err != nil {
+pkg: ./core/blob/local
+run: ^TestOnlyCanonicalNamesAreJournalSegments$
+
+id: local-journal-read-refuses-an-unreadable-segment
+file: core/blob/local/local.go
+find: \t\tb, err := os.ReadFile(j.s.segmentPath(seg))\n\t\tif err != nil {\n\t\t\treturn nil, err
+replace: \t\tb, err := os.ReadFile(j.s.segmentPath(seg))\n\t\tif err != nil {\n\t\t\tcontinue
+pkg: ./core/blob/local
+run: ^TestAJournalTheFilesystemRefusesSaysSo$
+
+id: local-journal-drop-reports-a-failed-remove
+file: core/blob/local/local.go
+find: if err := os.Remove(j.s.segmentPath(seg)); err != nil && !errors.Is(err, fs.ErrNotExist) {
+replace: if err := os.Remove(j.s.segmentPath(seg)); err != nil && false {
+pkg: ./core/blob/local
+run: ^TestAJournalTheFilesystemRefusesSaysSo$
+
+id: local-journal-rotate-refuses-when-closed
+file: core/blob/local/local.go
+find: \tif j.closed.Load() {\n\t\treturn blob.ErrJournalClosed\n\t}\n\tj.mu.Lock()\n\tdefer j.mu.Unlock()\n\tif err := j.cur.Sync(); err != nil {
+replace: \tif false {\n\t\treturn blob.ErrJournalClosed\n\t}\n\tj.mu.Lock()\n\tdefer j.mu.Unlock()\n\tif err := j.cur.Sync(); err != nil {
+pkg: ./core/blob/local
+run: ^TestJournalContract$
+
+id: packstore-journal-sync-publish-conflict-sticks
+file: core/chunk/packstore/journal.go
+find: if errors.Is(err, chunk.ErrRootConflict) && live {
+replace: if errors.Is(err, chunk.ErrRootConflict) && live && false {
+pkg: ./core/chunk/packstore
+run: ^TestASyncPublishOverAMovedRootIsRefused$
+
+id: packstore-putraw-skips-compression
+file: core/chunk/packstore/packstore.go
+find: 	if !raw {\n		payload, codec = s.codec.Compress(data)
+replace: 	if true {\n		payload, codec = s.codec.Compress(data)
+pkg: ./core/chunk/packstore
+run: ^TestAChunkPutRawIsStoredRawAndAPutOneCompressed$
+
+id: packstore-put-still-compresses
+file: core/chunk/packstore/packstore.go
+find: p, err := s.prepare(data, false)
+replace: p, err := s.prepare(data, true)
+pkg: ./core/chunk/packstore
+run: ^TestAChunkPutRawIsStoredRawAndAPutOneCompressed$
+
+id: prolly-flush-uses-the-raw-hint
+file: core/prolly/flush.go
+find: 			put = rw.PutRaw
+replace: 			_ = rw
+pkg: ./core/prolly
+run: ^TestAFlushStoresItsNodesThroughTheRawHint$
+
+id: local-journal-must-be-a-regular-file
+file: core/blob/local/local.go
+find: \tif !info.Mode().IsRegular() {
+replace: \tif false {
+pkg: ./core/blob/local
+run: ^TestAJournalThatIsNotARegularFileIsRefused$

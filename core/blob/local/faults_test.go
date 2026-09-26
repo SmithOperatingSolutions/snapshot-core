@@ -395,3 +395,94 @@ func TestOpenReportsUnreadableMarkersAndDetectorFailures(t *testing.T) {
 		t.Fatalf("Open failed because the temp sweep could not read tmp/: %v", err)
 	}
 }
+
+// A journal the filesystem will not open (here a directory where the file
+// belongs) is that error, never ErrJournalBusy: a writer would wait for a
+// holder that does not exist, and a publish would refuse for one (#34).
+func TestAJournalThatWillNotOpenIsItsError(t *testing.T) {
+	s, _ := newStore(t)
+	if j, err := s.OpenJournal(ctx); err != nil {
+		t.Fatalf("positive control: OpenJournal: %v", err)
+	} else {
+		_ = j.Close()
+	}
+	s2, dir2 := newStore(t)
+	if err := os.Mkdir(filepath.Join(dir2, "journal"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s2.OpenJournal(ctx); err == nil || errors.Is(err, blob.ErrJournalBusy) {
+		t.Fatalf("OpenJournal where the journal is a directory = %v, want the filesystem's error", err)
+	}
+	if _, _, err := s2.HoldJournal(ctx); err == nil || errors.Is(err, blob.ErrJournalBusy) {
+		t.Fatalf("HoldJournal where the journal is a directory = %v, want the filesystem's error", err)
+	}
+}
+
+// Only journal.<n>, n a canonical number from 1, is a segment: a file
+// beside the journal with any other name is not read as one (#34).
+func TestOnlyCanonicalNamesAreJournalSegments(t *testing.T) {
+	s, dir := newStore(t)
+	for _, name := range []string{"journal.x", "journal.0", "journal.01", "journal.-1", "journal."} {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte("not a segment"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	j, err := s.OpenJournal(ctx)
+	if err != nil {
+		t.Fatalf("OpenJournal: %v", err)
+	}
+	defer j.Close()
+	if b, err := j.Read(ctx, 1<<20); err != nil || len(b) != 0 {
+		t.Fatalf("a journal beside stray files reads %q (%v), want nothing: a stray file was read as a segment", b, err)
+	}
+	if err := j.Append(ctx, []byte("record")); err != nil {
+		t.Fatal(err)
+	}
+	if b, err := j.Read(ctx, 1<<20); err != nil || string(b) != "record" {
+		t.Fatalf("positive control: after an append the journal reads %q (%v)", b, err)
+	}
+}
+
+// A journal whose segments the filesystem refuses reports that error: a
+// segment it cannot read fails Read rather than reading as empty, and one
+// it cannot remove fails Drop rather than leaving published records to be
+// replayed as if dropped (#34).
+func TestAJournalTheFilesystemRefusesSaysSo(t *testing.T) {
+	requireUnprivileged(t)
+	s, dir := newStore(t)
+	j, err := s.OpenJournal(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer j.Close()
+	if err := j.Append(ctx, []byte("first")); err != nil {
+		t.Fatal(err)
+	}
+	if err := j.Rotate(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if b, err := j.Read(ctx, 1<<20); err != nil || string(b) != "first" {
+		t.Fatalf("positive control: Read = %q, %v", b, err)
+	}
+	seg := filepath.Join(dir, "journal.1")
+	if err := os.Chmod(seg, 0); err != nil {
+		t.Fatal(err)
+	}
+	if b, err := j.Read(ctx, 1<<20); err == nil {
+		t.Fatalf("Read with a segment the filesystem refuses = %q, nil; want its error", b)
+	}
+	if err := os.Chmod(seg, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	deny(t, dir)
+	if err := j.Drop(ctx); err == nil {
+		t.Fatal("Drop in a directory the filesystem will not write = nil; want its error: the dropped segment is still there")
+	}
+	allow(t, dir)
+	if err := j.Drop(ctx); err != nil {
+		t.Fatalf("positive control: Drop once allowed: %v", err)
+	}
+	if b, err := j.Read(ctx, 1<<20); err != nil || len(b) != 0 {
+		t.Fatalf("after Drop the journal reads %q (%v), want nothing", b, err)
+	}
+}

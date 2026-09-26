@@ -58,6 +58,17 @@ func Body(n int) []byte {
 	return out
 }
 
+// Record is what the child's n-th journal Append adds: 12 KiB, so an
+// append spans several pages and a kill can land inside one.
+func Record(n int) []byte {
+	out := make([]byte, 0, 12<<10)
+	for i := 0; len(out) < 12<<10; i++ {
+		h := sha256.Sum256([]byte(fmt.Sprintf("crash-record-%d-%d", n, i)))
+		out = append(out, h[:]...)
+	}
+	return out
+}
+
 // ObjectName is the name of the child's n-th Put.
 func ObjectName(n int) string { return fmt.Sprintf("crash/obj-%08d", n) }
 
@@ -91,6 +102,25 @@ func child(open Opener) {
 			fmt.Printf("try %d\n", n)
 			if v, err = s.SwapRoot(ctx, v, Value(n)); err != nil {
 				fmt.Printf("error swap %v\n", err)
+				os.Exit(3)
+			}
+			fmt.Printf("done %d\n", n)
+		}
+	case "append":
+		js, ok := s.(blob.Journaler)
+		if !ok {
+			fmt.Printf("error the store keeps no journal\n")
+			os.Exit(3)
+		}
+		j, err := js.OpenJournal(ctx)
+		if err != nil {
+			fmt.Printf("error open journal %v\n", err)
+			os.Exit(3)
+		}
+		for n := start; ; n++ {
+			fmt.Printf("try %d\n", n)
+			if err := j.Append(ctx, Record(n)); err != nil {
+				fmt.Printf("error append %v\n", err)
 				os.Exit(3)
 			}
 			fmt.Printf("done %d\n", n)
@@ -161,7 +191,7 @@ func runChild(t *testing.T, mode, dir string, start int) progress {
 	// The window spans a few operations: a fsync'd Put takes milliseconds, a
 	// swap less, and the kill must land both between and inside them.
 	window := 20000
-	if mode == "put" {
+	if mode == "put" || mode == "append" {
 		window = 80000
 	}
 	time.Sleep(time.Duration(rand.IntN(window)) * time.Microsecond)
@@ -259,5 +289,59 @@ func Put(t *testing.T, dir string, open Opener) {
 	}
 	if completed == 0 {
 		t.Fatalf("no Put completed in %d iterations; the harness never exercised Put", iters)
+	}
+}
+
+// Append kills a child mid journal append repeatedly (#34). Every append
+// that returned must be in the journal whole and in order, and the one in
+// flight may have left a prefix of itself, nothing else. Each iteration
+// starts from an empty journal.
+func Append(t *testing.T, dir string, open Opener) {
+	ctx := context.Background()
+	next := 0
+	iters := Iterations()
+	completed := 0
+	for i := 0; i < iters; i++ {
+		p := runChild(t, "append", dir, next)
+		s, err := open(dir)
+		if err != nil {
+			t.Fatalf("iteration %d: the store does not reopen after kill -9: %v", i, err)
+		}
+		js, ok := s.(blob.Journaler)
+		if !ok {
+			t.Fatal("the store keeps no journal")
+		}
+		j, err := js.OpenJournal(ctx)
+		if err != nil {
+			t.Fatalf("iteration %d: the journal does not open after kill -9 (%v): a dead writer kept it", i, err)
+		}
+		got, err := j.Read(ctx, 1<<30)
+		if err != nil {
+			t.Fatalf("iteration %d: the journal does not read after kill -9: %v", i, err)
+		}
+		var want []byte
+		for n := next; n <= p.lastDone; n++ {
+			want = append(want, Record(n)...)
+		}
+		if len(got) < len(want) || !bytes.Equal(got[:len(want)], want) {
+			t.Fatalf("iteration %d: after kill -9 the journal holds %d bytes that do not begin with the %d of the %d appends "+
+				"acknowledged: a commit told it was durable is gone", i, len(got), len(want), p.lastDone-next+1)
+		}
+		completed += p.lastDone - next + 1
+		if tail := got[len(want):]; len(tail) > 0 {
+			if p.lastTry <= p.lastDone || len(tail) > len(Record(p.lastTry)) || !bytes.Equal(tail, Record(p.lastTry)[:len(tail)]) {
+				t.Fatalf("iteration %d: after kill -9 the journal ends in %d bytes that are not a prefix of the append in flight", i, len(tail))
+			}
+		}
+		if err := j.Reset(ctx); err != nil {
+			t.Fatal(err)
+		}
+		if err := j.Close(); err != nil {
+			t.Fatal(err)
+		}
+		next = max(p.lastTry, p.lastDone) + 1
+	}
+	if completed == 0 {
+		t.Fatalf("no append completed in %d iterations; the harness never exercised the journal", iters)
 	}
 }

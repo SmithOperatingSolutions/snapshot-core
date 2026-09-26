@@ -90,7 +90,11 @@ func Run(ctx context.Context, o Options) (Report, error) {
 	}
 	// The reader checks the work directory at Open, before anything needs
 	// it. The walk reads each chunk once: a cache would only hold memory.
-	po := packstore.Options{Blobs: o.Blobs, Keys: o.Keys, Repo: o.Repo, IndexDir: o.WorkDir, IndexInMemory: o.IndexInMemory, CacheBytes: -1}
+	// Without the journal: GC is a reader beside any writer, a journal
+	// writer included, and replays a journal a writer that stopped left
+	// (packstore, #34).
+	po := packstore.Options{Blobs: o.Blobs, Keys: o.Keys, Repo: o.Repo, IndexDir: o.WorkDir, IndexInMemory: o.IndexInMemory, CacheBytes: -1,
+		Journal: packstore.JournalOff}
 	rd, err := packstore.Open(ctx, po)
 	if err != nil {
 		return Report{}, err

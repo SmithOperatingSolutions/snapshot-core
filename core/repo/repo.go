@@ -21,6 +21,7 @@ import (
 	"github.com/SmithOperatingSolutions/snapshot-core/core/chunk"
 	"github.com/SmithOperatingSolutions/snapshot-core/core/chunk/packstore"
 	"github.com/SmithOperatingSolutions/snapshot-core/core/gc"
+	"github.com/SmithOperatingSolutions/snapshot-core/core/hash"
 	"github.com/SmithOperatingSolutions/snapshot-core/core/model"
 	"github.com/SmithOperatingSolutions/snapshot-core/core/pack"
 	"github.com/SmithOperatingSolutions/snapshot-core/core/prolly"
@@ -89,6 +90,12 @@ type Options struct {
 	Authorizer auth.Authorizer  // nil denies everything
 	Clock      func() time.Time // nil: time.Now
 	Geometry   Geometry         // Init only; the zero Geometry is DefaultGeometry
+	// Journal commits into the backend's journal where it keeps one
+	// (blob/local, blob/multivol, blob/mem), publishing in the background
+	// at most JournalInterval later (0: packstore.DefaultJournalInterval)
+	// and at Close (packstore.Options.Journal, #34).
+	Journal         packstore.JournalMode
+	JournalInterval time.Duration
 }
 
 func (o Options) check() error {
@@ -260,7 +267,8 @@ func Init(ctx context.Context, p auth.Principal, o Options) (*Repo, error) {
 func configName(id seal.RepoID) string { return configPrefix + hex.EncodeToString(id[:]) }
 
 func packOptions(o Options, c Config) packstore.Options {
-	return packstore.Options{Blobs: blob.NoDelete(o.Blobs), Keys: o.Keys, Repo: c.RepoID, PackSize: c.Geometry.PackSize}
+	return packstore.Options{Blobs: blob.NoDelete(o.Blobs), Keys: o.Keys, Repo: c.RepoID, PackSize: c.Geometry.PackSize,
+		Journal: o.Journal, JournalInterval: o.JournalInterval}
 }
 
 // configs reads the store's configs in name order: those that open under
@@ -307,7 +315,11 @@ func current(ctx context.Context, o Options) (Config, error) {
 		return Config{}, ErrNoRepo
 	}
 	for _, c := range ours {
-		chunks, err := packstore.Open(ctx, packOptions(o, c))
+		// A probe: it needs the manifest to authenticate, not the journal
+		// (a writer beside it may hold that, GC's probe included).
+		po := packOptions(o, c)
+		po.Journal = packstore.JournalOff
+		chunks, err := packstore.Open(ctx, po)
 		if errors.Is(err, packstore.ErrManifest) {
 			continue // the root is not this config's: another Init's, or a race it lost
 		}
@@ -370,10 +382,35 @@ func (r *Repo) Close() error { return r.chunks.Close() }
 // version graph. What is written becomes durable when the version graph
 // next changes a ref (a commit, a working-set update, a branch); a
 // repository closed before then drops it.
+//
+// It is also a chunk.Preparer and a chunk.Flusher (#40), the write path
+// the version graph's own store has: stream.Write (and so model/blob's
+// Write) finds them by type assertion and hashes and compresses a long
+// stream on every core, and flushes when the stream ends; a host that
+// stores chunks itself asserts them the same way.
 func (r *Repo) Chunks() chunk.ReadWriter { return readWriter{r.chunks} }
 
-// readWriter narrows a chunk store to reading and writing.
-type readWriter struct{ chunk.ReadWriter }
+// readWriter narrows a chunk store to reading, writing, preparing and
+// flushing: every method but the root's.
+type readWriter struct{ s *packstore.Store }
+
+var (
+	_ chunk.Preparer = readWriter{}
+	_ chunk.Flusher  = readWriter{}
+)
+
+func (w readWriter) Get(ctx context.Context, h hash.Hash) ([]byte, error) { return w.s.Get(ctx, h) }
+func (w readWriter) Has(ctx context.Context, hs []hash.Hash) (map[hash.Hash]bool, error) {
+	return w.s.Has(ctx, hs)
+}
+func (w readWriter) Put(ctx context.Context, data []byte) (hash.Hash, error) {
+	return w.s.Put(ctx, data)
+}
+func (w readWriter) Prepare(data []byte) (chunk.Prepared, error) { return w.s.Prepare(data) }
+func (w readWriter) PutPrepared(ctx context.Context, p chunk.Prepared) (hash.Hash, error) {
+	return w.s.PutPrepared(ctx, p)
+}
+func (w readWriter) Flush(ctx context.Context) error { return w.s.Flush(ctx) }
 
 // Prolly is the map geometry objects are written with.
 func (g Geometry) Prolly() prolly.Config {
@@ -400,4 +437,34 @@ func GC(ctx context.Context, p auth.Principal, o Options, grace time.Duration) (
 	}
 	return gc.Run(ctx, gc.Options{Blobs: o.Blobs, Keys: o.Keys, Repo: c.RepoID, Config: c.Geometry.Prolly(),
 		Registry: o.Registry, Grace: grace, Clock: o.Clock})
+}
+
+// DiscardJournal empties a journal no open can replay (packstore.DiscardJournal,
+// #34): the commits in it are lost and the published state stays. It needs
+// admin, and the raw store or the repository's own.
+func DiscardJournal(ctx context.Context, p auth.Principal, o Options) (packstore.Discarded, error) {
+	if err := o.check(); err != nil {
+		return packstore.Discarded{}, err
+	}
+	if err := auth.Check(ctx, o.Authorizer, p, auth.Admin, "repo"); err != nil {
+		return packstore.Discarded{}, err
+	}
+	ours, others, err := configs(ctx, o)
+	if err != nil {
+		return packstore.Discarded{}, err
+	}
+	if len(ours) == 0 {
+		if others != nil {
+			return packstore.Discarded{}, others
+		}
+		return packstore.Discarded{}, ErrNoRepo
+	}
+	for _, c := range ours {
+		d, err := packstore.DiscardJournal(ctx, packOptions(o, c))
+		if errors.Is(err, packstore.ErrManifest) {
+			continue // not this config's root
+		}
+		return d, err
+	}
+	return packstore.Discarded{}, fmt.Errorf("%w: no config of this key authenticates the root", ErrWrongKey)
 }

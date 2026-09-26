@@ -540,3 +540,28 @@ func (s *Store) SwapRoot(ctx context.Context, expected blob.Version, next []byte
 	}
 	return vols[0].st.SwapRoot(ctx, expected, next)
 }
+
+var _ blob.Journaler = (*Store)(nil)
+
+// OpenJournal implements blob.Journaler: the journal is the primary
+// volume's, beside the root. A read-only store (a volume missing) opens
+// none, since what it journaled could never be published.
+func (s *Store) OpenJournal(ctx context.Context) (blob.Journal, error) {
+	vols, err := s.snapshot()
+	if err != nil {
+		return nil, err
+	}
+	return vols[0].st.OpenJournal(ctx)
+}
+
+// HoldJournal implements blob.Journaler.
+func (s *Store) HoldJournal(ctx context.Context) (int64, func(), error) {
+	p, err := s.primaryStore()
+	if err != nil {
+		return 0, nil, err
+	}
+	return p.HoldJournal(ctx)
+}
+
+// JournalByDefault implements blob.Journaler: on, as on its volumes.
+func (s *Store) JournalByDefault() bool { return true }

@@ -5,6 +5,8 @@ import (
 	"crypto/sha256"
 	"errors"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -330,4 +332,119 @@ func FuzzReadInfo(f *testing.F) {
 	f.Fuzz(func(t *testing.T, b []byte) {
 		_, _ = pack.ReadInfo(pack.Name(b), b, kr, repo) // never panics
 	})
+}
+
+// D14: a chunk under RawBelow is stored raw even when zstd would shrink it,
+// and one at RawBelow is compressed; a pack holding both kinds of frame
+// reads back, as the v1 golden pack (raw and zstd frames) still does.
+func TestAChunkUnderTheRawCutoffIsStoredRaw(t *testing.T) {
+	kr, c := fixture(t)
+	text := func(n int) []byte { return []byte(strings.Repeat("compressible text ", n/18+1)[:n]) }
+	under, at := text(pack.RawBelow-1), text(pack.RawBelow)
+	cs := []chunk{
+		{hash.Sum(under), under},
+		{hash.Sum(at), at},
+		{hash.Sum([]byte(strings.Repeat("compressible text ", 2000))), []byte(strings.Repeat("compressible text ", 2000))},
+		{hash.Sum(randomish("mixed", 5000)), randomish("mixed", 5000)},
+	}
+	b := build(t, kr, c, cs)
+	u, a := entryFor(t, b.Info, cs[0].h), entryFor(t, b.Info, cs[1].h)
+	if a.Codec != pack.CodecZstd || a.StoredLen >= a.RawLen {
+		t.Fatalf("%d bytes of repeated text (at the cutoff) stored as codec %d, %d bytes: a chunk at the cutoff should still compress",
+			a.RawLen, a.Codec, a.StoredLen)
+	}
+	if u.Codec != pack.CodecRaw || u.StoredLen != u.RawLen+pack.FrameOverhead {
+		t.Errorf("%d bytes of repeated text (under the cutoff) stored as codec %d, %d bytes: a tiny chunk should be stored raw, not pay the zstd encoder",
+			u.RawLen, u.Codec, u.StoredLen)
+	}
+	// The packstore's Prepare compresses through Codec.Compress directly.
+	if _, codec := c.Compress(under); codec != pack.CodecRaw {
+		t.Errorf("Compress(%d bytes) chose codec %d: the prepare path would compress a tiny chunk", len(under), codec)
+	}
+	if _, codec := c.Compress(at); codec != pack.CodecZstd {
+		t.Errorf("Compress(%d bytes) chose codec %d: the prepare path would stop compressing at the cutoff", len(at), codec)
+	}
+
+	info, err := pack.ReadInfo(b.Name, b.Bytes, kr, repo)
+	if err != nil {
+		t.Fatalf("a pack mixing raw and zstd frames does not read: %v", err)
+	}
+	keys, err := pack.DeriveKeys(kr, repo, info.Salt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	kinds := map[uint8]int{}
+	for _, ch := range cs {
+		e := entryFor(t, info, ch.h)
+		kinds[e.Codec]++
+		got, err := pack.OpenFrame(keys, c, e, b.Bytes[e.Offset:e.Offset+e.StoredLen])
+		if err != nil || !bytes.Equal(got, ch.data) {
+			t.Fatalf("a %d-byte chunk in a mixed pack reads as %d bytes (%v)", len(ch.data), len(got), err)
+		}
+	}
+	if kinds[pack.CodecRaw] == 0 || kinds[pack.CodecZstd] == 0 {
+		t.Fatalf("the pack holds frames of codecs %v: the fixture must mix raw and zstd", kinds)
+	}
+
+	// The v1 golden pack, written before the cutoff, also holds both kinds.
+	g, err := os.ReadFile(filepath.Join("testdata", "pack_v1.bin"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	gi, err := pack.ReadInfo(pack.Name(g), g, goldenKeyring(t), goldenRepo)
+	if err != nil {
+		t.Fatalf("the v1 golden pack does not read: %v", err)
+	}
+	gk := map[uint8]int{}
+	for _, e := range gi.Entries {
+		gk[e.Codec]++
+	}
+	if gk[pack.CodecRaw] == 0 || gk[pack.CodecZstd] == 0 {
+		t.Fatalf("the v1 golden pack holds codecs %v: it no longer proves an old reader's two frame kinds", gk)
+	}
+}
+
+// A journal records what a commit added to the pending pack (#34): the
+// writer lists the frames added after a mark, in the order they were
+// added, each opening to its chunk under the pack's keys.
+func TestAWriterListsTheFramesAddedSinceAMark(t *testing.T) {
+	kr, c := fixture(t)
+	w, err := pack.NewWriter(kr, repo, c, 8<<20)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cs := chunks()
+	for _, ch := range cs[:3] {
+		if err := w.Add(ch.h, ch.data); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := w.Add(cs[0].h, cs[0].data); !errors.Is(err, pack.ErrDup) {
+		t.Fatalf("a duplicate Add = %v, want ErrDup", err)
+	}
+	for _, ch := range cs[3:] {
+		if err := w.Add(ch.h, ch.data); err != nil {
+			t.Fatal(err)
+		}
+	}
+	keys, err := pack.DeriveKeys(kr, repo, w.Salt())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, mark := range []int{0, 2, len(cs)} {
+		got := w.FramesSince(mark)
+		if len(got) != len(cs)-mark {
+			t.Fatalf("FramesSince(%d) lists %d frames, want %d: a journal would miss or repeat a commit's chunks", mark, len(got), len(cs)-mark)
+		}
+		for i, f := range got {
+			want := cs[mark+i]
+			if f.Hash != want.h {
+				t.Fatalf("FramesSince(%d)[%d] is %s, want %s: frames out of the order they were added", mark, i, f.Hash.Short(), want.h.Short())
+			}
+			data, err := pack.OpenFrame(keys, c, f.Entry, f.Sealed)
+			if err != nil || !bytes.Equal(data, want.data) {
+				t.Fatalf("FramesSince(%d)[%d] does not open to its chunk under the pack's keys (%v): a replay would read another chunk", mark, i, err)
+			}
+		}
+	}
 }

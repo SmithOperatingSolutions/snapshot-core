@@ -30,8 +30,10 @@ import (
 	"path/filepath"
 	"slices"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/SmithOperatingSolutions/snapshot-core/core/blob"
@@ -79,6 +81,7 @@ const (
 	tmpDir      = "tmp"
 	rootName    = "root"
 	lockName    = "root.lock"
+	journalName = "journal"
 	fileSuffix  = "~"
 	dirPerm     = fsutil.DirPerm
 	filePerm    = fsutil.FilePerm
@@ -542,3 +545,295 @@ func fsName(magic int64) string {
 		return fmt.Sprintf("unknown(%#x)", magic)
 	}
 }
+
+var _ blob.Journaler = (*Store)(nil)
+
+// The journal is the file journal at the store's top level, beside the
+// root and outside objects/, so no name reaches it and no listing shows
+// it; its writer holds an exclusive flock on it, and a writer publishing
+// without it a shared one (blob.Journaler). The records are in segments
+// beside it, journal.<n> (n from 1, in order), the last the current one.
+func (s *Store) journalPath() string { return filepath.Join(s.dir, journalName) }
+
+// segments lists the journal's segment numbers in order.
+func (s *Store) segments() ([]uint64, error) {
+	entries, err := os.ReadDir(s.dir)
+	if err != nil {
+		return nil, err
+	}
+	var out []uint64
+	for _, e := range entries {
+		rest, ok := strings.CutPrefix(e.Name(), journalName+".")
+		if !ok {
+			continue
+		}
+		n, err := strconv.ParseUint(rest, 10, 64)
+		if err != nil || n == 0 || strconv.FormatUint(n, 10) != rest {
+			continue
+		}
+		out = append(out, n)
+	}
+	slices.Sort(out)
+	return out, nil
+}
+
+func (s *Store) segmentPath(n uint64) string {
+	return filepath.Join(s.dir, journalName+"."+strconv.FormatUint(n, 10))
+}
+
+// OpenJournal implements blob.Journaler.
+func (s *Store) OpenJournal(ctx context.Context) (blob.Journal, error) {
+	lock, err := s.openJournalFile(os.O_RDWR | os.O_CREATE | os.O_APPEND)
+	if err != nil {
+		return nil, err
+	}
+	if err := fsutil.TryLock(lock, true); err != nil {
+		_ = lock.Close()
+		if errors.Is(err, fsutil.ErrLocked) {
+			return nil, blob.ErrJournalBusy
+		}
+		return nil, err
+	}
+	j := &journal{s: s, lock: lock}
+	segs, err := s.segments()
+	if err == nil && len(segs) == 0 {
+		err = j.newSegment(1)
+	} else if err == nil {
+		j.seq = segs[len(segs)-1]
+		j.cur, err = os.OpenFile(s.segmentPath(j.seq), os.O_RDWR|os.O_APPEND, filePerm)
+	}
+	if err != nil {
+		_ = lock.Close()
+		return nil, err
+	}
+	return j, nil
+}
+
+// errJournalNotRegular is a journal path that holds something other than
+// a regular file (a directory, a named pipe, a device).
+var errJournalNotRegular = errors.New("local: the journal is not a regular file")
+
+// openJournalFile opens the journal's lock file and refuses anything that
+// is not a regular file. Linux refuses a directory opened with O_CREATE
+// on its own and macOS does not, and a named pipe opens on either, so the
+// check is made here, after the open, on every platform (#34).
+func (s *Store) openJournalFile(flag int) (*os.File, error) {
+	f, err := os.OpenFile(s.journalPath(), flag, filePerm)
+	if err != nil {
+		return nil, err
+	}
+	info, err := f.Stat()
+	if err != nil {
+		_ = f.Close()
+		return nil, err
+	}
+	if !info.Mode().IsRegular() {
+		_ = f.Close()
+		return nil, fmt.Errorf("%w: %s is a %s", errJournalNotRegular, s.journalPath(), info.Mode().Type())
+	}
+	return f, nil
+}
+
+// HoldJournal implements blob.Journaler.
+func (s *Store) HoldJournal(ctx context.Context) (int64, func(), error) {
+	f, err := s.openJournalFile(os.O_RDONLY | os.O_CREATE)
+	if err != nil {
+		return 0, nil, err
+	}
+	if err := fsutil.TryLock(f, false); err != nil {
+		_ = f.Close()
+		if errors.Is(err, fsutil.ErrLocked) {
+			return 0, nil, blob.ErrJournalBusy
+		}
+		return 0, nil, err
+	}
+	size, err := s.journalSize()
+	if err != nil {
+		_ = f.Close()
+		return 0, nil, err
+	}
+	var once sync.Once
+	return size, func() { once.Do(func() { _ = f.Close() }) }, nil
+}
+
+// journalSize is the length of every segment.
+func (s *Store) journalSize() (int64, error) {
+	segs, err := s.segments()
+	if err != nil {
+		return 0, err
+	}
+	var n int64
+	for _, seg := range segs {
+		info, err := os.Stat(s.segmentPath(seg))
+		if err != nil {
+			return 0, err
+		}
+		n += info.Size()
+	}
+	return n, nil
+}
+
+// journal is an open journal: the lock file, and the current segment. A
+// Sync may run beside a Write (it fsyncs the segment it finds current).
+type journal struct {
+	s      *Store
+	lock   *os.File
+	mu     sync.Mutex // guards cur and seq
+	cur    *os.File
+	seq    uint64
+	closed atomic.Bool
+}
+
+// newSegment creates segment n, durably, and makes it current. Callers hold
+// mu (or own j alone).
+func (j *journal) newSegment(n uint64) error {
+	f, err := os.OpenFile(j.s.segmentPath(n), os.O_RDWR|os.O_CREATE|os.O_EXCL|os.O_APPEND, filePerm)
+	if err != nil {
+		return err
+	}
+	if err := fsutil.SyncDir(j.s.dir); err != nil {
+		_ = f.Close()
+		return err
+	}
+	if j.cur != nil {
+		_ = j.cur.Close()
+	}
+	j.cur, j.seq = f, n
+	return nil
+}
+
+func (j *journal) Read(ctx context.Context, limit int64) ([]byte, error) {
+	if j.closed.Load() {
+		return nil, blob.ErrJournalClosed
+	}
+	size, err := j.s.journalSize()
+	if err != nil {
+		return nil, err
+	}
+	if size > limit {
+		return nil, fmt.Errorf("%w: the journal holds %d bytes, over %d", blob.ErrTooLarge, size, limit)
+	}
+	segs, err := j.s.segments()
+	if err != nil {
+		return nil, err
+	}
+	out := make([]byte, 0, size)
+	for _, seg := range segs {
+		b, err := os.ReadFile(j.s.segmentPath(seg))
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, b...)
+	}
+	return out, nil
+}
+
+// Append writes b at the end (O_APPEND) and fsyncs.
+func (j *journal) Append(ctx context.Context, b []byte) error {
+	if j.closed.Load() {
+		return blob.ErrJournalClosed
+	}
+	if err := j.Write(ctx, b); err != nil {
+		return err
+	}
+	return j.Sync(ctx)
+}
+
+// Write implements blob.Journal: the bytes go to the current segment
+// (O_APPEND), not yet fsynced.
+func (j *journal) Write(ctx context.Context, b []byte) error {
+	if j.closed.Load() {
+		return blob.ErrJournalClosed
+	}
+	j.mu.Lock()
+	defer j.mu.Unlock()
+	_, err := j.cur.Write(b)
+	return err
+}
+
+// Sync implements blob.Journal: one fsync for everything written.
+func (j *journal) Sync(ctx context.Context) error {
+	if j.closed.Load() {
+		return blob.ErrJournalClosed
+	}
+	j.mu.Lock()
+	f := j.cur
+	j.mu.Unlock()
+	return f.Sync()
+}
+
+// Rotate implements blob.Journal: the current segment is fsynced, and the
+// next created.
+func (j *journal) Rotate(ctx context.Context) error {
+	if j.closed.Load() {
+		return blob.ErrJournalClosed
+	}
+	j.mu.Lock()
+	defer j.mu.Unlock()
+	if err := j.cur.Sync(); err != nil {
+		return err
+	}
+	return j.newSegment(j.seq + 1)
+}
+
+// Drop implements blob.Journal.
+func (j *journal) Drop(ctx context.Context) error {
+	if j.closed.Load() {
+		return blob.ErrJournalClosed
+	}
+	j.mu.Lock()
+	cur := j.seq
+	j.mu.Unlock()
+	return j.removeBefore(cur)
+}
+
+// removeBefore removes the segments before n and makes that durable.
+func (j *journal) removeBefore(n uint64) error {
+	segs, err := j.s.segments()
+	if err != nil {
+		return err
+	}
+	removed := false
+	for _, seg := range segs {
+		if seg < n {
+			if err := os.Remove(j.s.segmentPath(seg)); err != nil && !errors.Is(err, fs.ErrNotExist) {
+				return err
+			}
+			removed = true
+		}
+	}
+	if !removed {
+		return nil
+	}
+	return fsutil.SyncDir(j.s.dir)
+}
+
+// Reset empties the journal: the earlier segments go, the current one is
+// truncated.
+func (j *journal) Reset(ctx context.Context) error {
+	if j.closed.Load() {
+		return blob.ErrJournalClosed
+	}
+	j.mu.Lock()
+	defer j.mu.Unlock()
+	if err := j.removeBefore(j.seq); err != nil {
+		return err
+	}
+	if err := j.cur.Truncate(0); err != nil {
+		return err
+	}
+	return j.cur.Sync()
+}
+
+// Close closes the files, which drops the lock.
+func (j *journal) Close() error {
+	if j.closed.Swap(true) {
+		return nil
+	}
+	j.mu.Lock()
+	defer j.mu.Unlock()
+	return errors.Join(j.cur.Close(), j.lock.Close())
+}
+
+// JournalByDefault implements blob.Journaler: on, one fsync a commit (#34).
+func (s *Store) JournalByDefault() bool { return true }

@@ -5,6 +5,7 @@ package mem
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"io"
 	"sort"
 	"strings"
@@ -25,7 +26,10 @@ type Store struct {
 	objects map[string]object
 	root    []byte
 	version blob.Version
-	mirror  []byte // the root's copy a split store keeps here
+	mirror  []byte   // the root's copy a split store keeps here
+	jsegs   [][]byte // blob.Journaler: the journal's segments, the current one last
+	jopen   bool     // a writer has the journal open
+	jholds  int      // HoldJournal calls not yet released
 }
 
 // New returns an empty store.
@@ -156,4 +160,139 @@ func (s *Store) ReadMirror(ctx context.Context) ([]byte, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return bytes.Clone(s.mirror), nil
+}
+
+var _ blob.Journaler = (*Store)(nil)
+
+// OpenJournal implements blob.Journaler. The journal is the store's memory,
+// kept across every handle.
+func (s *Store) OpenJournal(ctx context.Context) (blob.Journal, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.jopen || s.jholds > 0 {
+		return nil, blob.ErrJournalBusy
+	}
+	s.jopen = true
+	return &journal{s: s}, nil
+}
+
+// HoldJournal implements blob.Journaler.
+func (s *Store) HoldJournal(ctx context.Context) (int64, func(), error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.jopen {
+		return 0, nil, blob.ErrJournalBusy
+	}
+	s.jholds++
+	var once sync.Once
+	return int64(len(s.journalLocked())), func() {
+		once.Do(func() {
+			s.mu.Lock()
+			s.jholds--
+			s.mu.Unlock()
+		})
+	}, nil
+}
+
+// journal is the open journal of a memory store.
+type journal struct {
+	s      *Store
+	closed bool
+}
+
+func (j *journal) Read(ctx context.Context, limit int64) ([]byte, error) {
+	j.s.mu.Lock()
+	defer j.s.mu.Unlock()
+	if j.closed {
+		return nil, blob.ErrJournalClosed
+	}
+	all := j.s.journalLocked()
+	if int64(len(all)) > limit {
+		return nil, fmt.Errorf("%w: the journal holds %d bytes, over %d", blob.ErrTooLarge, len(all), limit)
+	}
+	return all, nil
+}
+
+func (j *journal) Append(ctx context.Context, b []byte) error {
+	j.s.mu.Lock()
+	defer j.s.mu.Unlock()
+	if j.closed {
+		return blob.ErrJournalClosed
+	}
+	if len(j.s.jsegs) == 0 {
+		j.s.jsegs = [][]byte{nil}
+	}
+	last := len(j.s.jsegs) - 1
+	j.s.jsegs[last] = append(j.s.jsegs[last], b...)
+	return nil
+}
+
+func (j *journal) Reset(ctx context.Context) error {
+	j.s.mu.Lock()
+	defer j.s.mu.Unlock()
+	if j.closed {
+		return blob.ErrJournalClosed
+	}
+	j.s.jsegs = nil
+	return nil
+}
+
+func (j *journal) Close() error {
+	j.s.mu.Lock()
+	defer j.s.mu.Unlock()
+	if !j.closed {
+		j.closed = true
+		j.s.jopen = false
+	}
+	return nil
+}
+
+// JournalByDefault implements blob.Journaler: off in memory, where a
+// commit is CPU and the journal measured worse with many writers (#34).
+func (s *Store) JournalByDefault() bool { return false }
+
+// Write implements blob.Journal: memory is as durable as it gets.
+func (j *journal) Write(ctx context.Context, b []byte) error { return j.Append(ctx, b) }
+
+// Sync implements blob.Journal.
+func (j *journal) Sync(ctx context.Context) error {
+	j.s.mu.Lock()
+	defer j.s.mu.Unlock()
+	if j.closed {
+		return blob.ErrJournalClosed
+	}
+	return nil
+}
+
+// Rotate implements blob.Journal.
+func (j *journal) Rotate(ctx context.Context) error {
+	j.s.mu.Lock()
+	defer j.s.mu.Unlock()
+	if j.closed {
+		return blob.ErrJournalClosed
+	}
+	j.s.jsegs = append(j.s.jsegs, nil)
+	return nil
+}
+
+// Drop implements blob.Journal.
+func (j *journal) Drop(ctx context.Context) error {
+	j.s.mu.Lock()
+	defer j.s.mu.Unlock()
+	if j.closed {
+		return blob.ErrJournalClosed
+	}
+	if n := len(j.s.jsegs); n > 1 {
+		j.s.jsegs = j.s.jsegs[n-1:]
+	}
+	return nil
+}
+
+// journalLocked is the journal's segments, in order, as one. Callers hold mu.
+func (s *Store) journalLocked() []byte {
+	var out []byte
+	for _, seg := range s.jsegs {
+		out = append(out, seg...)
+	}
+	return out
 }

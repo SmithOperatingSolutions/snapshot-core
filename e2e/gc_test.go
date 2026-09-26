@@ -67,6 +67,14 @@ func TestAFoldersHistoryComesThroughGC(t *testing.T) {
 		t.Fatalf("fixture: the scratch file's root chunk reads as %d bytes, %v", len(got), err)
 	}
 
+	// Commits on disk are journaled (#34): closing the repository publishes
+	// them, as the background publish would within its interval.
+	if err := h.r.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if h.r, err = repo.Open(ctx, h.o); err != nil {
+		t.Fatal(err)
+	}
 	if rep, err := repo.GC(ctx, me, h.o, time.Hour); err != nil || rep.Condemned == 0 || len(rep.Deleted) != 0 {
 		t.Fatalf("the first GC condemned %d, deleted %d (%v); want some condemned, nothing deleted", rep.Condemned, len(rep.Deleted), err)
 	}

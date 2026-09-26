@@ -52,6 +52,10 @@ run = "go test -count=1 -run Crash -timeout 30m -tags crash ./core/..."
 description = "Scale guards behind -tags slow (1 GiB streams, 1M-entry maps)"
 run = "go run ./tools/ci -only slow"
 
+[tasks."bench:commit"]
+description = "What a commit costs on blob/local and blob/mem: one writer, 4/16/64 writers, a 256 MiB write then a commit (tools/commitbench; take the measurement lock on a shared machine)"
+run = "go run ./tools/commitbench"
+
 [tasks.fuzz]
 description = "Every fuzz target for FUZZTIME each (default 30s; weekly CI 10m), FUZZPARALLEL workers (half the cores, at most 4) under FUZZMEMLIMIT (2GiB)"
 run = "go run ./tools/ci -only fuzz"

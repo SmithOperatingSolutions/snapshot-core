@@ -14,6 +14,7 @@ import (
 	"github.com/SmithOperatingSolutions/snapshot-core/core/blob"
 	"github.com/SmithOperatingSolutions/snapshot-core/core/blob/contract"
 	"github.com/SmithOperatingSolutions/snapshot-core/core/blob/internal/crashtest"
+	jcontract "github.com/SmithOperatingSolutions/snapshot-core/core/blob/journal/contract"
 	"github.com/SmithOperatingSolutions/snapshot-core/core/blob/local"
 )
 
@@ -228,7 +229,7 @@ func TestObjectNamesNeverReachOutsideObjects(t *testing.T) {
 		top = append(top, e.Name())
 	}
 	for _, n := range top {
-		if !slices.Contains([]string{".snapshot-core", "objects", "tmp", "root", "root.lock"}, n) {
+		if !slices.Contains([]string{".snapshot-core", "objects", "tmp", "root", "root.lock", "journal"}, n) {
 			t.Errorf("unexpected entry %q at the store's top level", n)
 		}
 	}
@@ -247,4 +248,25 @@ func TestCrashDuringSwapRootLeavesOldOrNew(t *testing.T) {
 func TestCrashDuringPutLeavesNothingPartial(t *testing.T) {
 	_, dir := newStore(t)
 	crashtest.Put(t, dir, openStore)
+}
+
+// The journal's contract (#34), with the store opened again from disk.
+func TestJournalContract(t *testing.T) {
+	jcontract.Run(t, func(t *testing.T) (blob.Journaler, func(*testing.T) blob.Journaler) {
+		s, dir := newStore(t)
+		return s, func(t *testing.T) blob.Journaler {
+			re, err := local.Open(dir, local.Options{})
+			if err != nil {
+				t.Fatalf("Open: %v", err)
+			}
+			return re
+		}
+	})
+}
+
+// kill -9 mid-append, over and over: every append that returned is in the
+// journal whole, and what the one in flight left is a prefix of it.
+func TestCrashDuringJournalAppendKeepsWhatReturned(t *testing.T) {
+	_, dir := newStore(t)
+	crashtest.Append(t, dir, openStore)
 }

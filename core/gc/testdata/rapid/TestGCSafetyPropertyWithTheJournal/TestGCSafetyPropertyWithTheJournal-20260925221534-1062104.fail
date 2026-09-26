@@ -1,0 +1,162 @@
+# 2026/09/25 22:15:34.405405 [TestGCSafetyPropertyWithTheJournal] [rapid] draw steps: 14
+# 2026/09/25 22:15:34.405410 [TestGCSafetyPropertyWithTheJournal] [rapid] draw branch: "main"
+# 2026/09/25 22:15:34.405411 [TestGCSafetyPropertyWithTheJournal] [rapid] draw op: 0
+# 2026/09/25 22:15:34.405413 [TestGCSafetyPropertyWithTheJournal] [rapid] draw path: "p0"
+# 2026/09/25 22:15:34.405414 [TestGCSafetyPropertyWithTheJournal] [rapid] draw content: "c0"
+# 2026/09/25 22:15:34.405596 [TestGCSafetyPropertyWithTheJournal] [rapid] draw branch: "main"
+# 2026/09/25 22:15:34.405597 [TestGCSafetyPropertyWithTheJournal] [rapid] draw op: 0
+# 2026/09/25 22:15:34.405598 [TestGCSafetyPropertyWithTheJournal] [rapid] draw path: "p0"
+# 2026/09/25 22:15:34.405599 [TestGCSafetyPropertyWithTheJournal] [rapid] draw content: "c0"
+# 2026/09/25 22:15:34.405747 [TestGCSafetyPropertyWithTheJournal] [rapid] draw branch: "main"
+# 2026/09/25 22:15:34.405748 [TestGCSafetyPropertyWithTheJournal] [rapid] draw op: 0
+# 2026/09/25 22:15:34.405748 [TestGCSafetyPropertyWithTheJournal] [rapid] draw path: "p0"
+# 2026/09/25 22:15:34.405749 [TestGCSafetyPropertyWithTheJournal] [rapid] draw content: "c0"
+# 2026/09/25 22:15:34.405870 [TestGCSafetyPropertyWithTheJournal] [rapid] draw branch: "main"
+# 2026/09/25 22:15:34.405871 [TestGCSafetyPropertyWithTheJournal] [rapid] draw op: 0
+# 2026/09/25 22:15:34.405872 [TestGCSafetyPropertyWithTheJournal] [rapid] draw path: "p0"
+# 2026/09/25 22:15:34.405872 [TestGCSafetyPropertyWithTheJournal] [rapid] draw content: "c0"
+# 2026/09/25 22:15:34.405922 [TestGCSafetyPropertyWithTheJournal] [rapid] draw branch: "main"
+# 2026/09/25 22:15:34.405924 [TestGCSafetyPropertyWithTheJournal] [rapid] draw op: 14
+# 2026/09/25 22:15:34.407694 [TestGCSafetyPropertyWithTheJournal] [rapid] draw branch: "main"
+# 2026/09/25 22:15:34.407695 [TestGCSafetyPropertyWithTheJournal] [rapid] draw op: 0
+# 2026/09/25 22:15:34.407696 [TestGCSafetyPropertyWithTheJournal] [rapid] draw path: "p0"
+# 2026/09/25 22:15:34.407697 [TestGCSafetyPropertyWithTheJournal] [rapid] draw content: "c0"
+# 2026/09/25 22:15:34.407840 [TestGCSafetyPropertyWithTheJournal] [rapid] draw branch: "main"
+# 2026/09/25 22:15:34.407841 [TestGCSafetyPropertyWithTheJournal] [rapid] draw op: 5
+# 2026/09/25 22:15:34.407939 [TestGCSafetyPropertyWithTheJournal] [rapid] draw branch: "main"
+# 2026/09/25 22:15:34.407940 [TestGCSafetyPropertyWithTheJournal] [rapid] draw op: 0
+# 2026/09/25 22:15:34.407940 [TestGCSafetyPropertyWithTheJournal] [rapid] draw path: "p0"
+# 2026/09/25 22:15:34.407941 [TestGCSafetyPropertyWithTheJournal] [rapid] draw content: "c0"
+# 2026/09/25 22:15:34.408088 [TestGCSafetyPropertyWithTheJournal] [rapid] draw branch: "main"
+# 2026/09/25 22:15:34.408089 [TestGCSafetyPropertyWithTheJournal] [rapid] draw op: 10
+# 2026/09/25 22:15:34.408090 [TestGCSafetyPropertyWithTheJournal] [rapid] draw wait: 0
+# 2026/09/25 22:15:34.413165 [TestGCSafetyPropertyWithTheJournal] [rapid] draw branch: "main"
+# 2026/09/25 22:15:34.413168 [TestGCSafetyPropertyWithTheJournal] [rapid] draw op: 0
+# 2026/09/25 22:15:34.413169 [TestGCSafetyPropertyWithTheJournal] [rapid] draw path: "p0"
+# 2026/09/25 22:15:34.413171 [TestGCSafetyPropertyWithTheJournal] [rapid] draw content: "c0"
+# 2026/09/25 22:15:34.413278 [TestGCSafetyPropertyWithTheJournal] [rapid] draw branch: "main"
+# 2026/09/25 22:15:34.413278 [TestGCSafetyPropertyWithTheJournal] [rapid] draw op: 0
+# 2026/09/25 22:15:34.413279 [TestGCSafetyPropertyWithTheJournal] [rapid] draw path: "p0"
+# 2026/09/25 22:15:34.413280 [TestGCSafetyPropertyWithTheJournal] [rapid] draw content: "c0"
+# 2026/09/25 22:15:34.413325 [TestGCSafetyPropertyWithTheJournal] [rapid] draw branch: "main"
+# 2026/09/25 22:15:34.413331 [TestGCSafetyPropertyWithTheJournal] [rapid] draw op: 0
+# 2026/09/25 22:15:34.413332 [TestGCSafetyPropertyWithTheJournal] [rapid] draw path: "p0"
+# 2026/09/25 22:15:34.413332 [TestGCSafetyPropertyWithTheJournal] [rapid] draw content: "c0"
+# 2026/09/25 22:15:34.413382 [TestGCSafetyPropertyWithTheJournal] [rapid] draw branch: "main"
+# 2026/09/25 22:15:34.413383 [TestGCSafetyPropertyWithTheJournal] [rapid] draw op: 4
+# 2026/09/25 22:15:34.413431 [TestGCSafetyPropertyWithTheJournal] [rapid] draw branch: "main"
+# 2026/09/25 22:15:34.413431 [TestGCSafetyPropertyWithTheJournal] [rapid] draw op: 15
+# 2026/09/25 22:15:34.418827 [TestGCSafetyPropertyWithTheJournal] after GC branch b1's working set: chunk: not found
+# 
+v0.4.8#8932128476046899836
+0x0
+0x9867f1f40f739
+0x9
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0x9867f1f40f739
+0xe
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0x6b74f03291620
+0x5
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0x9867f1f40f739
+0xa
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0x6b74f03291620
+0x4
+0x0
+0x0
+0x0
+0x9867f1f40f739
+0xf

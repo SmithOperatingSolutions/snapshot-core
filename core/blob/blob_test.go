@@ -82,3 +82,32 @@ func TestNoDeleteForbidsOnlyDelete(t *testing.T) {
 		t.Fatalf("SwapRoot through NoDelete: %v", err)
 	}
 }
+
+// A repository runs on NoDelete(store): the store's journal must stay
+// reachable through it, or a journaled store would silently commit by
+// publishing (#34).
+func TestNoDeleteKeepsTheJournal(t *testing.T) {
+	ctx := context.Background()
+	s := blob.NoDelete(mem.New())
+	j, ok := s.(blob.Journaler)
+	if !ok {
+		t.Fatal("NoDelete(a store with a journal) is no Journaler: the repository could not reach its journal")
+	}
+	jn, err := j.OpenJournal(ctx)
+	if err != nil {
+		t.Fatalf("OpenJournal through NoDelete: %v", err)
+	}
+	if err := jn.Append(ctx, []byte("through")); err != nil {
+		t.Fatalf("Append through NoDelete: %v", err)
+	}
+	_ = jn.Close()
+	if err := s.Delete(ctx, "x"); !errors.Is(err, blob.ErrDeleteForbidden) {
+		t.Fatalf("Delete through NoDelete of a Journaler = %v, want ErrDeleteForbidden: the repository could delete packs", err)
+	}
+	if _, ok := blob.NoDelete(noJournal{mem.New()}).(blob.Journaler); ok {
+		t.Fatal("NoDelete of a store without a journal claims one")
+	}
+}
+
+// noJournal hides a store's journal.
+type noJournal struct{ blob.BlobStore }

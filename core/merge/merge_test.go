@@ -257,8 +257,9 @@ func TestEveryRuleOfTheTable(t *testing.T) {
 // theirs' root with zero work".
 func TestFastForwardDoesNoWork(t *testing.T) {
 	f := newFixture(t)
-	base := f.ns(map[string]object.Ref{"a": f.obj(7, "a")})
-	theirs := f.ns(map[string]object.Ref{"a": f.obj(7, "b"), "c": f.obj(7, "c")})
+	base := f.ns(f.deep(map[string]object.Ref{"a": f.obj(7, "a")}))
+	theirs := f.ns(f.deep(map[string]object.Ref{"a": f.obj(7, "b"), "c": f.obj(7, "c")}))
+	f.seesADiff(base, theirs)
 	f.s.gets.Store(0)
 	r, err := merge.Merge(ctx, f.reg, base, base, theirs, f.s, merge.Options{})
 	if err != nil || rootOf(r) != theirs.Root() || len(r.Conflicts) != 0 {
@@ -269,6 +270,41 @@ func TestFastForwardDoesNoWork(t *testing.T) {
 	}
 	if r, err := merge.Merge(ctx, f.reg, base, theirs, base, f.s, merge.Options{}); err != nil || rootOf(r) != theirs.Root() {
 		t.Fatalf("merging an unchanged theirs gave %v, %v; want ours", rootOf(r), err)
+	}
+}
+
+// deep adds a thousand paths to entries, the same on every side: a
+// namespace of more than one node, whose diff reads nodes even though a
+// map holds its root (#43). In a one-node namespace every merge reads
+// nothing, and a test that counts reads cannot tell a diff from none.
+func (f *fixture) deep(entries map[string]object.Ref) map[string]object.Ref {
+	filler := f.obj(7, "filler")
+	for i := range 1000 {
+		entries[fmt.Sprintf("filler/%04d", i)] = filler
+	}
+	return entries
+}
+
+// seesADiff fails the test unless diffing from with to reads a node: the
+// fixture's positive control, that a read count can see a diff.
+func (f *fixture) seesADiff(from, to *object.Namespace) {
+	f.t.Helper()
+	f.s.gets.Store(0)
+	d, err := object.Diff(ctx, from, to)
+	if err != nil {
+		f.t.Fatal(err)
+	}
+	for {
+		_, ok, err := d.Next()
+		if err != nil {
+			f.t.Fatal(err)
+		}
+		if !ok {
+			break
+		}
+	}
+	if f.s.gets.Load() == 0 {
+		f.t.Fatal("fixture: a diff of the two namespaces read no node, so a count of reads cannot see one")
 	}
 }
 

@@ -189,3 +189,31 @@ func checkInsert(t *testing.T, size int64) {
 		}
 	}
 }
+
+// undercounting says it holds lenSaid bytes whatever it holds, and counts
+// the reads it serves: a host's size hint that is too small (#41).
+type undercounting struct {
+	io.Reader
+	lenSaid, reads int
+}
+
+func (u *undercounting) Read(p []byte) (int, error) { u.reads++; return u.Reader.Read(p) }
+func (u *undercounting) Len() int                   { return u.lenSaid }
+
+// #41: a reader that says it holds less than it yields (a wrong size hint)
+// is cut where the geometry says, and read in blocks of the full read size
+// once it has yielded more than it said: a 1-byte hint on a 1 MiB stream
+// costs a few reads more than a truthful reader, not a read per byte.
+func TestALenerThatUndercountsIsCutTheSameAndReadInFullBlocks(t *testing.T) {
+	const size = 1 << 20
+	g := cdc.DefaultGeometry()
+	want := chunkHashes(t, newStream("undercount", size), g)
+	u := &undercounting{Reader: newStream("undercount", size), lenSaid: 1}
+	got := chunkHashes(t, u, g)
+	if len(got) != len(want) || changedChunks(want, got) != 0 {
+		t.Fatalf("a stream that said it held 1 byte was cut into %d chunks, %d of them not the %d a reader without a length is cut into", len(got), changedChunks(want, got), len(want))
+	}
+	if limit := size/(64<<10) + 8; u.reads > limit {
+		t.Fatalf("a 1 MiB stream that said it held 1 byte took %d reads, want at most %d: a wrong size hint makes the write read in tiny pieces", u.reads, limit)
+	}
+}

@@ -84,6 +84,15 @@ type Map struct {
 	root   hash.Hash
 	count  uint64
 	height int
+	// top is the root node, decoded and checked when the map was made:
+	// the map is immutable, so every operation starts from it rather than
+	// reading the root again.
+	top *node
+	// flushed is set on a map a flush made: the root it edited and the
+	// keys it changed, in key order.
+	flushed bool
+	base    hash.Hash
+	changed [][]byte
 }
 
 // Empty returns the empty map, storing its one node.
@@ -96,7 +105,7 @@ func Empty(ctx context.Context, s chunk.ReadWriter, c Config) (*Map, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &Map{s: s, cfg: c, rule: rule, root: h}, nil
+	return &Map{s: s, cfg: c, rule: rule, root: h, top: &node{}}, nil
 }
 
 // Open returns the map whose root node is root.
@@ -113,7 +122,7 @@ func Open(ctx context.Context, s chunk.ReadWriter, c Config, root hash.Hash) (*M
 	if n.level > 0 && len(n.entries) < 2 {
 		return nil, corrupt("the root has one child")
 	}
-	m.count, m.height = n.total(), n.level
+	m.count, m.height, m.top = n.total(), n.level, n
 	return m, nil
 }
 
@@ -127,6 +136,9 @@ func (m *Map) Count() uint64 { return m.count }
 func (m *Map) Height() int { return m.height }
 
 func (m *Map) read(ctx context.Context, h hash.Hash) (*node, error) {
+	if h == m.root && m.top != nil {
+		return m.top, nil
+	}
 	b, err := m.s.Get(ctx, h)
 	if err != nil {
 		return nil, err
@@ -313,10 +325,30 @@ func (e *Editor) Flush(ctx context.Context) (*Map, error) {
 		}
 		edits = append(edits, ed)
 	}
-	m, err := e.m.apply(ctx, edits)
+	var changed [][]byte
+	next, err := e.m.apply(ctx, edits, &changed)
 	if err != nil {
 		return nil, err
 	}
-	e.m, e.edits = m, map[string]*[]byte{}
-	return m, nil
+	// apply may hand back e.m itself (nothing changed), which others hold:
+	// the record of this flush goes on a copy.
+	m := *next
+	m.flushed, m.base, m.changed = true, e.m.root, changed
+	e.m, e.edits = &m, map[string]*[]byte{}
+	return &m, nil
+}
+
+// Changes reports what the flush that made m changed: the root of the map
+// it edited and the keys whose values differ between the two, in key
+// order: what Diff of the two reports. ok is false for a map no flush made
+// (Open, Empty), for which a caller must diff.
+func (m *Map) Changes() (base hash.Hash, keys [][]byte, ok bool) {
+	if !m.flushed {
+		return hash.Hash{}, nil, false
+	}
+	keys = make([][]byte, len(m.changed))
+	for i, k := range m.changed {
+		keys[i] = bytes.Clone(k)
+	}
+	return m.base, keys, true
 }

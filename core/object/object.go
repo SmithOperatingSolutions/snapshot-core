@@ -302,3 +302,18 @@ func WalkRef(ctx context.Context, rd chunk.Reader, reg *model.Registry, ref Ref,
 	}
 	return w.Walk(ctx, ref.Root, rd, visit)
 }
+
+// Changes reports what the flush that made n changed: the root of the
+// namespace it edited and the paths that differ between the two, in path
+// order. ok is false for a namespace no flush made.
+func (n *Namespace) Changes() (base hash.Hash, paths []string, ok bool) {
+	base, keys, ok := n.m.Changes()
+	if !ok {
+		return hash.Hash{}, nil, false
+	}
+	paths = make([]string, len(keys))
+	for i, k := range keys {
+		paths[i] = string(k)
+	}
+	return base, paths, true
+}

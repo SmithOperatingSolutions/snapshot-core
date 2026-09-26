@@ -7,6 +7,8 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	mrand "math/rand/v2"
+	"path/filepath"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -15,6 +17,7 @@ import (
 
 	"github.com/SmithOperatingSolutions/snapshot-core/core/auth"
 	"github.com/SmithOperatingSolutions/snapshot-core/core/blob"
+	"github.com/SmithOperatingSolutions/snapshot-core/core/blob/local"
 	"github.com/SmithOperatingSolutions/snapshot-core/core/blob/mem"
 	"github.com/SmithOperatingSolutions/snapshot-core/core/boundary"
 	"github.com/SmithOperatingSolutions/snapshot-core/core/cdc"
@@ -428,6 +431,83 @@ func TestHostsWriteObjectsThroughTheRepository(t *testing.T) {
 	}
 	if s := g.Stream(); s.CDC != o.Geometry.CDC || s.Nodes != o.Geometry.Nodes {
 		t.Fatalf("Stream() = %+v", s)
+	}
+}
+
+// #40: a host writing through the repository gets the write path the
+// version graph's own store offers, not a narrower one: the chunk store it
+// is handed prepares chunks apart from storing them (chunk.Preparer, so
+// stream.Write hashes and compresses on every core) and can be told a
+// stream is over (chunk.Flusher, so the pack holding a big write's last
+// chunks uploads beside the host's next work, not inside its next commit).
+// It still cannot swap the root.
+func TestAHostWritingThroughTheRepositoryGetsTheParallelPathAndFlush(t *testing.T) {
+	blobs := mem.New()
+	o := options(t, blobs, keyring(t))
+	o.Geometry = repo.Geometry{CDC: cdc.Geometry{Min: 4 << 10, Max: 256 << 10, Mask: 0x3FFF},
+		Nodes: boundary.Geometry{Min: 256, Target: 2048, Max: 8192}, InlineLimit: 1000, PackSize: 1 << 20}
+	r := initRepo(t, o)
+	defer r.Close()
+	c := r.Chunks()
+	if _, swaps := c.(interface {
+		CompareAndSetRoot(context.Context, hash.Hash, hash.Hash) error
+	}); swaps {
+		t.Fatal("the chunk store a host is handed can swap the root")
+	}
+	p, ok := c.(chunk.Preparer)
+	if !ok {
+		t.Fatal("the chunk store a host is handed is not a chunk.Preparer: every stream a host writes through the repository is hashed and compressed on one goroutine")
+	}
+	data := []byte("a chunk prepared on a host's goroutine")
+	prep, err := p.Prepare(data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	h, err := p.PutPrepared(ctx, prep)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if h != hash.Sum(data) || prep.Hash() != h || prep.Len() != len(data) {
+		t.Fatalf("a prepared chunk stored under %s (prepared %s, %d bytes), want %s, %d bytes", h.Short(), prep.Hash().Short(), prep.Len(), hash.Sum(data).Short(), len(data))
+	}
+	if got, err := c.Get(ctx, h); err != nil || !bytes.Equal(got, data) {
+		t.Fatalf("the prepared chunk reads back %q, %v", got, err)
+	}
+
+	f, ok := c.(chunk.Flusher)
+	if !ok {
+		t.Fatal("the chunk store a host is handed is not a chunk.Flusher: the pack holding a host's last chunks uploads only inside its next commit")
+	}
+	packs := func() int {
+		infos, err := blobs.List(ctx, "packs/", "", blob.MaxListPage)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return len(infos)
+	}
+	before := packs()
+	// A quarter of a pack, incompressible: over the eighth Flush uploads,
+	// under the size that sends a pack on its own.
+	src := mrand.NewChaCha8([32]byte{40})
+	for range 4 {
+		b := make([]byte, 64<<10)
+		_, _ = src.Read(b)
+		if _, err := c.Put(ctx, b); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if n := packs(); n != before {
+		t.Fatalf("a quarter of a pack uploaded %d packs before any flush: the fixture does not hold the pack back", n-before)
+	}
+	if err := f.Flush(ctx); err != nil {
+		t.Fatal(err)
+	}
+	deadline := time.Now().Add(5 * time.Second)
+	for packs() == before {
+		if time.Now().After(deadline) {
+			t.Fatal("five seconds after a host flushed a quarter of a pack, no pack was uploaded: it waits for the next commit")
+		}
+		time.Sleep(5 * time.Millisecond)
 	}
 }
 
@@ -1023,5 +1103,148 @@ func TestOpenTakesTheConfigThatAuthenticatesTheRoot(t *testing.T) {
 	}
 	if _, err := repo.GC(ctx, alice, o, time.Hour); err != nil {
 		t.Fatalf("GC among the other configs: %v", err)
+	}
+}
+
+// Options.Journal (#34): a repository opened with it commits into the
+// backend's journal. Its own reads see the commit at once, another open
+// sees the published head until the journal is published (at Close here),
+// and GC runs beside it, as beside any writer.
+func TestARepositoryOpenedWithTheJournalCommitsThroughIt(t *testing.T) {
+	o := options(t, mem.New(), keyring(t))
+	r := initRepo(t, o)
+	before, err := r.Head(ctx, alice, vcs.MainBranch)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := r.Close(); err != nil {
+		t.Fatal(err)
+	}
+	oj := o
+	oj.Journal, oj.JournalInterval = packstore.JournalOn, time.Hour
+	rj, err := repo.Open(ctx, oj)
+	if err != nil {
+		t.Fatalf("Open with the journal: %v", err)
+	}
+	ws, err := rj.WorkingSet(ctx, alice, vcs.MainBranch)
+	if err != nil {
+		t.Fatal(err)
+	}
+	c, err := rj.Commit(ctx, alice, vcs.MainBranch, ws, ws.Working, "journaled")
+	if err != nil {
+		t.Fatalf("Commit: %v", err)
+	}
+	if head, err := rj.Head(ctx, alice, vcs.MainBranch); err != nil || head.Hash != c.Hash {
+		t.Fatalf("the committing repository's head is %v (%v), want the commit it just made", head.Hash.Short(), err)
+	}
+	other, err := repo.Open(ctx, o)
+	if err != nil {
+		t.Fatalf("a second open beside the journal writer: %v", err)
+	}
+	if head, err := other.Head(ctx, alice, vcs.MainBranch); err != nil || head.Hash != before.Hash {
+		t.Fatalf("another open sees head %s (%v), want the published %s until the journal is published: the commit did not journal",
+			head.Hash.Short(), err, before.Hash.Short())
+	}
+	_ = other.Close()
+	if _, err := repo.GC(ctx, alice, oj, time.Hour); err != nil { // the host's own options, journal and all
+		t.Fatalf("GC beside a repository holding the journal: %v", err)
+	}
+	if err := rj.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	after, err := repo.Open(ctx, o)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer after.Close()
+	if head, err := after.Head(ctx, alice, vcs.MainBranch); err != nil || head.Hash != c.Hash {
+		t.Fatalf("after Close another open sees head %s (%v), want the journaled commit %s", head.Hash.Short(), err, c.Hash.Short())
+	}
+}
+
+// The owner's decision on #34: the journal is on by default on the disk
+// backends (blob/local, blob/multivol), and off on blob/mem, where it
+// measured worse with many writers; JournalOff turns it off.
+func TestTheJournalIsOnByDefaultOnDisk(t *testing.T) {
+	commitAndLook := func(t *testing.T, bs blob.BlobStore, mode packstore.JournalMode) (journaled bool) {
+		t.Helper()
+		o := options(t, bs, keyring(t))
+		r := initRepo(t, o)
+		_ = r.Close()
+		o.Journal, o.JournalInterval = mode, time.Hour
+		rw, err := repo.Open(ctx, o)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer rw.Close()
+		ws, err := rw.WorkingSet(ctx, alice, vcs.MainBranch)
+		if err != nil {
+			t.Fatal(err)
+		}
+		c, err := rw.Commit(ctx, alice, vcs.MainBranch, ws, ws.Working, "default")
+		if err != nil {
+			t.Fatal(err)
+		}
+		o.Journal = packstore.JournalOff
+		other, err := repo.Open(ctx, o)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer other.Close()
+		head, err := other.Head(ctx, alice, vcs.MainBranch)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return head.Hash != c.Hash
+	}
+	disk := func(t *testing.T) blob.BlobStore {
+		bs, err := local.Create(filepath.Join(t.TempDir(), "store"), local.Options{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return bs
+	}
+	if !commitAndLook(t, disk(t), packstore.JournalDefault) {
+		t.Error("with default options on blob/local a commit published at once: the journal is not on by default on disk")
+	}
+	if commitAndLook(t, disk(t), packstore.JournalOff) {
+		t.Error("with JournalOff on blob/local a commit was journaled: the journal cannot be turned off")
+	}
+	if commitAndLook(t, mem.New(), packstore.JournalDefault) {
+		t.Error("with default options on blob/mem a commit was journaled: mem's default is off")
+	}
+}
+
+// Discarding a journal needs admin (#34), and goes through to the chunk
+// layer: a journal no open can replay is reported and emptied.
+func TestDiscardingAJournalNeedsAdmin(t *testing.T) {
+	bs := mem.New()
+	o := options(t, bs, keyring(t))
+	r := initRepo(t, o)
+	_ = r.Close()
+	denied := o
+	denied.Authorizer = auth.DenyAll{}
+	if _, err := repo.DiscardJournal(ctx, alice, denied); !errors.Is(err, auth.ErrDenied) {
+		t.Fatalf("DiscardJournal without admin = %v, want ErrDenied", err)
+	}
+	oj := o
+	oj.Journal, oj.JournalInterval = packstore.JournalOn, time.Hour
+	rj, err := repo.Open(ctx, oj)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ws, err := rj.WorkingSet(ctx, alice, vcs.MainBranch)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := rj.Commit(ctx, alice, vcs.MainBranch, ws, ws.Working, "journaled"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := repo.DiscardJournal(ctx, alice, o); !errors.Is(err, blob.ErrJournalBusy) {
+		t.Fatalf("DiscardJournal while the repository holds the journal = %v, want ErrJournalBusy", err)
+	}
+	_ = rj.Close()
+	if d, err := repo.DiscardJournal(ctx, alice, o); err != nil || d.Records != 0 {
+		t.Fatalf("DiscardJournal of an empty journal = %+v, %v; want nothing discarded", d, err)
 	}
 }

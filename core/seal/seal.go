@@ -48,6 +48,7 @@ const (
 	Index            // "vdb/index/v1": index objects (chunk -> pack location)
 	Refs             // "vdb/refs/v1": the root object (the manifest)
 	Config           // "vdb/config/v1": the repo config
+	Journal          // "vdb/journal/v1": a record of the commit journal (packstore)
 )
 
 var tags = [...]string{
@@ -56,6 +57,7 @@ var tags = [...]string{
 	Index:     "vdb/index/v1",
 	Refs:      "vdb/refs/v1",
 	Config:    "vdb/config/v1",
+	Journal:   "vdb/journal/v1",
 }
 
 // Tag returns the domain's tag, or "" for an invalid domain.

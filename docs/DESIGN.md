@@ -24,6 +24,12 @@ exact commit the spec's package map was reviewed at. That is the pin.
 | D10 | The chunker (2026-09-23, #10) | `core/cdc` rolls disknexus's Buzhash and cut rules over each read buffer, byte for byte disknexus's boundaries; disknexus stays the oracle, imported in `core/dnx` and held to by `core/dnx/compat`'s goldens and a differential test. `cdc.Parallel` marks where the masks hit on many goroutines and places the cuts on one, since the hash at a byte depends on the 48 bytes before it alone: the same boundaries at 2.4 GB/s on sixteen threads | disknexus reads a byte at a time and bounds a write at about 200 MB/s on one core; ours cuts the same 8,531 chunks of 256 MiB at 750 MB/s serially. The spec's rule 3 allows a package of our own beside it |
 | D11 | The S3 tier's server (2026-09-24) | SeaweedFS (`chrislusf/seaweedfs`, pinned by digest in `tools/ci`), started in Docker by the `s3` step with its credentials from the environment. It honors If-None-Match and If-Match, so the probe and the root swap run as on S3; it lists a directory's children right after the directory rather than in byte order, which the contract is told (`contract.AnyTotalOrder`: one total order kept across pages, prefixes and `after`) and no caller in the core depends on (GC's orphan scan and the repo's config listing page with `after` and read sets; multivol merges only its own local volumes) | MinIO ended its public distribution (quay.io, Docker Hub and dl.min.io all gone on 2026-09-24); a fork of MinIO built from source remains the fallback |
 | D9 | Where the Engine Spec lives | Its L4 (tables) is implemented in a separate, consuming repository. Its L0–L3 rules apply here as below | Owner decision |
+| D12 | Small objects' write path (2026-09-25, #40) | A stream whose reader says it holds under 256 KiB (`cdc.Lener`) is cut and stored on the caller's goroutine, and `cdc.New` sizes its buffers to the stream; a reader that does not say its length takes the path it took before. `repo.Chunks()` is also a `chunk.Preparer` and `chunk.Flusher` | A 100-byte object's write was about 200 µs of CPU: 24% zeroing the serial chunker's 512 KiB and 64 KiB buffers, which the parallel path built and never used, then the parallel path's 34 goroutines and two 64 KiB blocks for one chunk; now about 7 µs, 30 times the batch rate (`tools/commitbench -only batch`). On that harness the serial path wrote 16 KiB objects 2.6× as fast, 64 KiB 2.0×, 128 KiB 1.6×, 512 KiB 1.3×, 2 MiB even; the bar sits at the prolly inline limit. The size decides only how much a read asks for, never where a cut falls |
+| D13 | A size hint for a reader without a length (2026-09-25, #41) | `stream.WithLen(r, n)` wraps a reader in a `cdc.Lener` reporting the hint less what has been read, so D12's rule applies to it unchanged; `cdc.Chunker` switches to full-size reads after two reads in a row fill a buffer smaller than that | The smallest additive change: one function, no field in `stream.Config` (which is repo geometry, shared by every write) and no option parameter on `stream.Write`; it also sizes the read buffer, which a path flag alone would not (a 64 KiB block per small object). Pre-reading a block to decide was refused: it moves which chunk a failing reader's error lands on relative to `cdc.Parallel`. A wrong hint chooses the path, never a cut: a hint too large takes the parallel path, one too small the serial path, read in 64 KiB blocks from its second read on (`TestRegression_SC41_AWrongHintStoresTheSameStream`, `TestALenerThatUndercountsIsCutTheSameAndReadInFullBlocks`) |
+| D14 | Tiny chunks stored raw (2026-09-26, #42) | `pack.Codec.Compress` returns a chunk under 256 B (`pack.RawBelow`) as a raw frame without trying zstd; 256 B and up are compressed when that is shorter, as before. No format change: raw frames have been in the pack format since v1 and readers of every version read both kinds (`TestAChunkUnderTheRawCutoffIsStoredRaw` reads a pack mixing them and checks the v1 golden holds both; `TestAV1PackStillReads`). New packs differ in bytes from what v0.2.0 wrote for the same input | zstd on a tiny chunk paid the encoder's setup and match-table cache misses (about 2.4 µs of a 7 µs small-object write after #40) to save at most a few dozen bytes. Measured (i7-1360P): Compress costs 0.85–1.1 µs hot on 100–256 B of random data, 3.8–4.0 µs on record-like text, which zstd shrinks from 100 to 87 B and 256 to 127 B; at 1 KiB text shrinks to 261 B and at 4 KiB to 717 B, so a 1 KiB or 4 KiB cutoff would store compressible small data 3.6× to 5.7× larger. `tools/commitbench -only batch` (10,000 100-byte objects, mem): 148–184k to 203–233k writes/s, pack bytes unchanged (2,038,5xx–2,039,9xx, about 204 B per object); single-writer commits (mem) 1,704–1,768 to 1,883–1,891/s. A 4 KiB cutoff measured 2,329/s single-writer and +5% batch pack bytes; 16 KiB 2,410/s and +13%: left to the owner (a per-caller hint for metadata nodes would need core/prolly and packstore's Put) |
+| D15 | What a commit per object costs (2026-09-25, #43) | A flush records what it changed (`prolly.Map.Changes`, `object.Namespace.Changes`): the root it edited and the keys whose values differ, logged by the level-0 merge that already compares each edit with the entry it replaces. `vcs.CommitNamespace` commits a flushed namespace and asks for write on that list against each stored namespace the flush edited, diffing any other; `UpdateWorkingSetFlushed` and `CommitWorkingSetFlushed` take the flushed namespaces the same way, beside the calls they extend (a variadic tail, so the frozen signatures stay and a record that does not fit is ignored, never trusted); `Commit` diffs each distinct stored namespace once; a map holds the root node it was made from | Profiled on `tools/commitbench -only single -backends mem`: 38% of a commit's CPU was `checkPaths` (three identical diffs after a clean commit), 37% the namespace flush (73% of that `packstore.Put`, most of it zstd), 10% the publish, and reads (every one a SHA-256 and a decode) were 45% across all of it. The list is the diff: the new tree is the canonical tree of the old entries with the edits applied (§7), so the keys whose values differ are exactly what Diff reports (`TestAFlushKnowsWhatItChangedProperty`), and it stands for a diff only against the root the flush edited (`TestCommitNamespaceAsksForEveryChangeTheFlushDidNotSee`). 571 to 423 µs a commit, 1,752 to 2,363 commits a second |
+| D16 | Journaled commits (2026-09-25, #34) | On by default on disk (`blob/local`, `blob/multivol`; the owner's decision), off on `blob/mem` (it measured worse with 16 and 64 writers); `Journal` in `packstore.Options` and `repo.Options` is `JournalDefault`, `JournalOn` or `JournalOff`, so a host can turn it off: a commit appends to the backend's journal (`blob.Journaler`, optional beside the frozen port: `blob/local`, `blob/multivol`, `blob/mem`) and a background publish lands it; other processes see only published state (§6) | On this disk a publish is three fsync latencies deep (two fsync'ed puts at once, then the root swap: 33 ms) and fsync is 97% of it; one append and one fsync is 5.3 ms. S3 keeps publishing: an object store has no append, and a journal on local disk in front of it would make the repository's durability that disk's |
+| D17 | A tree's nodes stored raw (2026-09-26, #42, the owner's option 3) | `chunk.RawWriter` (`PutRaw`), optional beside the frozen port as `chunk.Preparer` is: the chunk is the one `Put` stores, as a raw frame without trying zstd. `packstore.Store` implements it; `core/prolly`'s flush stores every node through it where the store has it, and through `Put` otherwise. User data keeps D14's rule (under 256 B raw, else compressed when shorter). No format change: raw frames have been in the pack format since v1 (`TestAChunkPutRawIsStoredRawAndAPutOneCompressed`, `TestAFlushStoresItsNodesThroughTheRawHint`) | A global 4 KiB cutoff measured +23% single-object commits/s on mem but stored compressible 1–4 KiB user data 3.6× to 5.7× larger; the hint is per caller, so only nodes (hashes and short keys) skip zstd. A wrapper that embeds `chunk.Store` hides the hint (its nodes are compressed, as before); `repo.Open` hands vcs the store itself. Stream index nodes (`core/stream`) still go through `Put`: they appear only in streams of many chunks. The owner's decision (2026-09-26): kept on every node, accepting +12.7% pack bytes on a namespace of tiny objects (a batch of 10,000 100-byte objects) for +63% single-writer commits/s; in ordinary data the tree is a small share of the bytes. Variants measured and not taken: internal nodes only (+20% commits/s, +0.1% bytes), nodes under 1 KiB (no gain) |
 
 ## 2. How the Engine Spec's L0–L3 land here
 
@@ -77,6 +83,7 @@ so tests that drive the core through real models live in `e2e`.
 | `config/<repo id>` | no | `vdb/config/v1` | repo id, key id, CDC and prolly geometry, pack limits; one per `Init` that started, and the root's manifest names the one that counts |
 | `packs/<sha256 of pack bytes>` | no | `vdb/chunk/v1` (frames), `vdb/pack-index/v1` (trailer) | many chunks, each compressed then sealed, plus an in-pack index |
 | `index/<sha256 of object bytes>` | no | `vdb/index/v1` | chunk hash → pack and offset, for the packs of one or more commits |
+| *(the journal)* | appended, then emptied | `vdb/journal/v1`, a key per record | commits a writer journaled and has not yet published (#34, §6); not an object: no name reaches it, no listing shows it, GC never deletes it |
 
 Keys never live in the BlobStore ("keys never stored beside data"): the host
 holds the master key through a KMS wrapper or a passphrase key file it stores
@@ -143,10 +150,11 @@ associated data is `tag 0 context`. The key id is
 | --- | --- |
 | Key file (139 B) | `"SCKF"` · version u16 · Argon2 time u32 · memory u32 · threads u8 · salt [32] · key id [32] · AES-GCM(KEK, master) [60]; AAD `"vdb/keyfile/v1" 0 header[0:79]`. Costs are validated before any derivation: 2–10 passes, 19 MiB–1 GiB, 1–64 lanes (#13: a file inside a 4 GiB, 64-pass ceiling hung the process) |
 | KMS envelope | `"SCKW"` · version u16 · key id [32] · wrapped (len-prefixed, ≤ 8 KiB) |
-| Pack | header `"SCPK"` · version u16 · flags u16 · salt [32]; frames `seal(Chunk, ctx = chunk hash, zstd-or-raw)`; index `seal(PackIndex, ctx = header, "SCPI" · version · count · entries sorted by hash: hash [32] · offset · stored · raw · codec)`; trailer index-offset u64 · index-length u32 · `"SCPE"` |
+| Pack | header `"SCPK"` · version u16 · flags u16 · salt [32]; frames `seal(Chunk, ctx = chunk hash, zstd-or-raw)`, a raw frame's stored length its raw length + 28, a zstd frame's less (since D14 a chunk under 256 B is written raw without trying zstd; readers of every version read both kinds); index `seal(PackIndex, ctx = header, "SCPI" · version · count · entries sorted by hash: hash [32] · offset · stored · raw · codec)`; trailer index-offset u64 · index-length u32 · `"SCPE"` |
 | Index object | `"SCIX"` · version u16 · salt [32] · `seal(Index, ctx = header, "SCIP" · version · packs: pack hash [32] · salt [32] · size · entries …)`, packs and entries strictly sorted |
 | Manifest (the root value) | `"SCMF"` · version u16 · salt [32] · `seal(Refs, ctx = header, "SCMP" · version · seq u64 · gcGen u64 · root [32] · count · index-object hashes [32] strictly sorted · count · condemned (kind u8: 1 pack, 2 index object, 3 orphan pack deleted, 4 orphan index object deleted, 5 pack repacked · hash [32] · at i64 unix ns))` |
-| local store | `.snapshot-core` marker (`"SCLS"` · version · store id [16]) · `objects/<segment>~` · `tmp/` · `root` (`"SCRF"` · version · value · SHA-256) · `root.lock` |
+| local store | `.snapshot-core` marker (`"SCLS"` · version · store id [16]) · `objects/<segment>~` · `tmp/` · `root` (`"SCRF"` · version · value · SHA-256) · `root.lock` · `journal` (records, appended with O_APPEND and an fsync; a writer holds an exclusive flock on it, a writer publishing without it a shared one around each publish) |
+| Journal record (#34) | `"SCJR"` · version u16 · length u32 · salt [32] · `seal(Journal, ctx = those 42 bytes, "SCJP" · version u16 · expected [32] · next [32] · gcGen u64 · pack salt [32] · frames (≤ 65,536: hash [32] · raw (≤ 1 MiB) · codec u8 (0, 1) · stored (≤ 1 MiB + 28) · frame) · counted (≤ 65,536: hash [32]))`, at most 16 MiB a record and a journal. Records chain (each `expected` is the last `next`); a record cut short or not authenticating ends the journal there, one that authenticates and does not decode or does not chain is refused |
 | multivol map | `"SCMV"` · version u16 · count u16 · (volume id [16] · path) … · SHA-256 |
 | S3 keys | `<prefix>objects/<name>!` (the `!` keeps any key from being both an object and a path prefix, which MinIO hides from listings; it sorts below every name byte) · `<prefix>root` = 16-byte nonce ‖ value · `<prefix>mirror` = the root's copy, replaced in place · `<prefix>probe/…` |
 | Disk cache entry | `"SCCE"` · object name · SHA-256 of content · content |
@@ -156,7 +164,21 @@ index objects `index/<SHA-256 of the object bytes>`; readers verify both.
 
 Every sealed format has a v1 golden file written once and checked in, which
 the current code must keep opening byte for byte: `core/pack/testdata/pack_v1.bin`,
-`core/dedup/testdata/index_v1.bin`, `core/chunk/packstore/testdata/manifest_v1.bin`.
+`core/dedup/testdata/index_v1.bin`, `core/chunk/packstore/testdata/manifest_v1.bin`,
+`core/chunk/packstore/testdata/journal_v1.bin`.
+
+**The journal and v0.2.0.** The journal changes no existing format. A
+repository v0.2.0 wrote opens unchanged (it has no journal; `blob/local`
+creates an empty `journal` file beside the root the first time a store
+holds it). A repository with an empty journal is v0.2.0's to read and
+write: it reads the marker, `objects/` and the root, and nothing else at
+the top level. A non-empty journal holds commits that were acknowledged
+and not yet published: v0.2.0 reads the published state without them,
+and a v0.2.0 writer that swaps the root under them makes them
+unpublishable (the next journal open reports `ErrJournalConflict` and
+keeps the journal); so do not run v0.2.0, writer or GC, on a repository
+whose journal holds commits (open it with this version first, which
+replays it).
 Each also has forgery tests (sealed under the right key, so only the decoder
 can refuse them) and a fuzz target.
 
@@ -192,7 +214,26 @@ can refuse them) and a fuzz target.
   `cdc.Parallel` reads and marks the stream on its own goroutines and the
   caller's places the cuts and stores in stream order, so the stream is
   the same at any worker count; at most about 2×Workers chunks and a few
-  blocks are in flight. A pending pack's buffer starts at about what the
+  blocks are in flight. A stream that says it is shorter than 256 KiB
+  (`cdc.Lener`: a `bytes.Reader`, `strings.Reader` or `bytes.Buffer`)
+  takes the serial path instead, and the serial chunker's buffers are
+  sized to the stream, its chunk buffer growing toward Max and a Lener
+  read in a buffer no larger than it holds (#40, D12): a 100-byte object
+  wrote in about 200 µs, most of it zeroing 576 KiB of buffers and
+  starting 34 goroutines and two 64 KiB blocks for one chunk, and writes
+  in about 7 µs (`TestSlowSmallObjectsWriteInMicroseconds`,
+  `TestRegression_SC40_AShortStreamAllocatesWhatItNeeds`). A reader
+  that does not say its length (a network stream, a pipe) takes the
+  same path when its host hints the length with `stream.WithLen(r, n)`
+  (#41, D13): the wrapper is a Lener, the hint picks the path and the
+  first read's size and never a cut, and a reader that yields more than
+  its hint is read in full blocks once two reads have filled the small
+  buffer (`TestRegression_SC41_AHintedShortStreamWritesLikeABytesReader`). A host
+  reaches both halves and `Flush` through `repo.Chunks()`: its
+  `chunk.ReadWriter` is also a `chunk.Preparer` and a `chunk.Flusher`
+  (every method of the store but the root's), so `stream.Write` and
+  `model/blob`'s `Write` find them by type assertion as on the store
+  itself, and a host storing chunks itself asserts them the same way. A pending pack's buffer starts at about what the
   last pending pack held (at least 64 KiB) and doubles as it fills, up to the
   pack's size: the packs a large write cuts full start the next at the pack's
   size, so each frame is copied once, and a small publish allocates for a
@@ -274,6 +315,135 @@ can refuse them) and a fuzz target.
   publish) is the manifest it holds. What the root read itself costs is the
   backend's: memory clones the root value, `blob/local` reads the root file,
   S3 is one GET, `multivol` reads its primary's, `split` its root store's.
+
+- **A publish waits for every finisher**, one a put on another goroutine
+  started after the publish's own wait included (the store counts its
+  finishers under its lock). Found building #34: the pack that put filled
+  held the new root's chunks, and the publish swapped the root before
+  any index object listed that pack or its upload had landed
+  (`TestRegression_SC34_APublishWaitsForAFinisherStartedAfterItsWait`).
+- **The commit journal** (#34, D16). With `Options.Journal` on a backend
+  that keeps one (`blob.Journaler`: `blob/local`, `blob/multivol` through
+  its primary volume, `blob/mem`), a commit is one append and one fsync:
+  - *Commit.* `CompareAndSetRoot` reads the backend's root (GC may have
+    moved the manifest, and `survived` runs as at a publish), checks
+    `expected` against the newest journaled root, and appends one record
+    (§5): the frames the pending pack gained since the last record, as
+    the pack holds them, the chunks puts counted on, and the two roots.
+    Every chunk the new root reaches is then durable, in the journal
+    until its pack is: DESIGN's rule holds with the journal as the chunks'
+    durable home. A commit publishes instead, journal and all, when it is
+    the repository's first root (a journal is only ever replayed over a
+    manifest that authenticated under its key), when a pack went to the
+    backend since the last publish (only an index object can name it, the
+    bulk write's case), while a finisher is at work, and when the record
+    would take the journal past 16 MiB.
+  - *Readers.* The committing store's `Root` is the newest journaled root,
+    and its `Get` and `Has` serve journaled chunks from the pending pack
+    before the packs. Other processes read the backend's root, which names
+    published state only: they see a commit once the background publish
+    lands it. The bound is `JournalInterval` (1 s by default) after the
+    first commit the journal took, plus one publish (33 ms here); `Close`
+    publishes what is left. The interval stays 1 s, the owner's decision
+    (2026-09-26): at 100 ms one writer made 110.2 commits/s with p99
+    49.4 ms, against 144.2/s and 10.0 ms at 1 s, each publish then taking
+    the commit lock ten times as often. A reader never replays a journal it does not
+    hold.
+  - *Publish.* The publisher wakes on the first commit after a publish and
+    publishes an interval later: the ordinary publish, with the journal's
+    last root over the root the journal builds on, holding the commit lock
+    (commits wait for it, 30–40 ms on disk), then empties the journal. A
+    publish that fails for a reason it can retry is retried an interval
+    later. One writer holds the journal (`ErrJournalBusy` to a second), and
+    a writer publishing without it holds it shared around each publish, so
+    it refuses (`ErrJournalBusy`) while a journal writer is open or a
+    journal waits to be replayed. A root that moves under a non-empty
+    journal can only be a writer that does not honor it (v0.2.0, or two
+    processes on `blob/local`, which is one process's store):
+    `ErrJournalConflict`, sticky, writes refused and nothing published
+    over it; with nothing journaled a moved root is an ordinary conflict. A
+    failed append or reset is sticky the same way.
+  - *Replay.* Every open replays a journal left by a writer that stopped,
+    with the option or without (GC's reader included): records after the
+    last complete one that authenticates are discarded; a journal whose
+    last root the backend already names was published before it was
+    emptied, and is emptied; one built on a root the backend is not at is
+    `ErrJournalConflict`, kept. Otherwise every frame is opened and
+    verified (`ErrCorrupt` if one does not open) and put again, the
+    counted chunks are marked as found at the oldest record's GC
+    generation (so the publish's `survived` checks them: `ErrSessionLost`
+    if GC expired one, and nothing published), the last root is checked
+    stored, and the replay publishes it and empties the journal. Chunks
+    that only intermediate roots reached (a history that came back to the
+    root it started from) are not published: no root reaches them.
+  - *Rotation.* A background publish takes the commit lock only to
+    rotate the journal (sync the segment, start the next), then publishes
+    beside the commits; the 16 MiB limit is per journal, every segment
+    counted, since the replay reads the whole journal into memory
+    (`TestAPublishInFlightDoesNotStallACommit`, `TestAReplayReadsEverySegment`).
+    Local, journal on, same session, 1-minute load under 2: 1 writer 134.0
+    to 151.2/s (p99 10.3 to 9.7 ms); 4 writers 354.4 to 361.5/s (p99 43.2
+    to 20.2 ms); 16 writers 592.6 to 594.1/s (p99 215 to 203 ms); 64
+    writers 216.8 to 211.3/s (p99 2.58 to 2.61 s, within noise). The gain
+    is in the tail: a commit no longer waits out a publish.
+  - *Discard.* A journal no open can replay (the root moved under it, GC
+    deleted what it counted on, or it does not verify) makes every open
+    fail until an admin calls `repo.DiscardJournal` (`packstore.DiscardJournal`):
+    it opens the store without the journal first, which replays a journal
+    that can be (nothing discarded: `Replayed`), and otherwise reports the
+    commits, frames and roots it holds and empties it; the published state
+    stays (`TestAJournalThatCannotReplayIsDiscarded`,
+    `TestDiscardingAJournalNeedsAdmin`).
+  - *Crash.* The chunk-layer crash harness runs again with the child
+    committing through the journal and publishing every 3 ms, so kills
+    land mid-append and mid-publish: old root or new, never torn, the
+    chunk readable (`TestCrashDuringJournaledCommitLeavesOldOrNew`); the
+    blob harness kills mid-append (`crashtest.Append`). The property
+    `TestAReplayedJournalEqualsThePublishedState` drives random commits,
+    publishes and crashes: a journaled commit never moves the backend's
+    root, and after every crash the store and another process stand at
+    the last acknowledged root with every committed chunk readable.
+  - *Default and grouping.* `JournalDefault` follows
+    `blob.Journaler.JournalByDefault` (true on disk); a store that asks for
+    the journal, by default or `JournalOn`, and finds another writer holding
+    it is refused with an error that says so (the owner's decision); one
+    that asks for `JournalOff` opens beside it, reading the published state
+    (`TestADefaultOpenFindingTheJournalHeldIsRefused`). A commit writes its record under the commit lock
+    (`Journal.Write`, not durable), releases the lock, and waits for a
+    sync that covers it (`Journal.Sync`, one fsync): one waiter syncs
+    everything written by then, and every commit written while that sync
+    is in flight shares the next, so N queued commits take one more fsync,
+    not N (`TestCommitsThatQueueShareAnFsync`: 16 commits behind a held
+    sync take 2; a crash keeping only what was synced reopens at the last
+    commit). A failed sync fails its waiters and sticks; a cancelled commit
+    writes nothing. The visibility bound is pinned by
+    `TestAnotherProcessSeesACommitWithinTheInterval`. Grouping, local,
+    journal on, same session (1-minute load under 2): 1 writer 145.6 to
+    145.2/s; 4 writers 147.6 to 340.2/s (p99 343 to 45 ms); 16 writers
+    142.7 to 592.0/s (p99 985 to 216 ms); 64 writers 92.1 to 216.0/s (p99
+    4.6 to 2.6 s).
+  - *Where it pays.* Measured with `tools/commitbench` on an i7-1360P, ext4 (fsync
+    5.4 ms), each run alone under the measurement lock, journal off and
+    on in the same session (before = v0.2.0):
+
+    | run | before | journal off | journal on |
+    | --- | --- | --- | --- |
+    | local, one writer | 29.5/s, p50 32.8 ms, p99 53.9 | 29.1/s, 33.1, 57.5 | **144.2/s, 6.6, 10.0** (100 ms interval: 110.2/s, p99 49.4) |
+    | local, 4 writers | 29.1/s, p99 3.2 s | 30.1/s, p99 2.5 s | 147.5/s, p99 326 ms |
+    | local, 16 writers | 28.7/s, p99 10.8 s | 29.9/s, p99 10.1 s | 144.6/s, p99 1.08 s |
+    | local, 64 writers | 27.0/s, p99 22.5 s | 26.7/s, p99 22.4 s | 90.3/s, p99 4.3 s |
+    | local, 256 MiB then commit | 102 ms | 98 ms | 79 ms |
+    | mem, one writer | 1130/s, p50 850 µs | 1127/s | 1714/s, 520 µs |
+    | mem, 4 / 16 / 64 writers | 1176 / 1412 / 1334/s | 1205 / 1422 / 1133/s | 1232 / 762 / 321/s |
+
+    A journaled commit on disk is the append's fsync (5.3 ms) and 1.3 ms of
+    host work, where a publish was three fsync latencies (33 ms). Writers
+    on separate branches still serialize on the store's commit lock and
+    lose swaps to each other; in memory, where a commit is CPU, many
+    writers do worse with the journal (the retries rebuild their refs
+    edits while each publish holds the lock), so `blob/mem` is measured,
+    not recommended, with it. A batch of 10,000 objects committed once:
+    commit 56 ms off, 25 ms on, on disk.
 
 *(The prolly tree, the version graph and merge are §7–8; GC is §9.)*
 
@@ -391,6 +561,14 @@ stream ref  root [32] · size · depth
   entries match (same key, same child), the child is skipped without being
   read, at the highest level where they match (Dolt's `skipCommon`); two maps
   with equal roots read nothing.
+- A map holds the root node it was made from (decoded and checked by
+  `Open`, built by `Empty` and a flush) and never reads it again: `Get`
+  reads one node per level below it (#43).
+- A flush records what it changed: the root it edited and the keys whose
+  values differ, in key order (`Changes`), exactly what `Diff` of the two
+  maps reports. A put of the stored value, a delete of an absent key and a
+  new key put and deleted in one batch are not among them. A map no flush
+  made (`Open`, `Empty`) has no record.
 - Bounds the tests hold the code to: one edit reads at most 3·(height+1)
   nodes to flush; a same-length value edit writes exactly height+1; a flush
   that changes nothing writes nothing (a re-chunked node identical to the
@@ -559,7 +737,15 @@ working set  0x05 · working [32] · staged [32] · merging u8 (0 or 1) ·
   `CommitWorkingSet` diffs the head against what is staged, so committing
   someone else's staged change needs the committer's own permission;
   `Commit` diffs all three, the stored working and staged namespaces and
-  the head, against the namespace it commits;
+  the head, against the namespace it commits (each distinct one once:
+  after a clean commit they are one namespace); `CommitNamespace` is
+  `Commit` of a namespace an editor flushed, and against each of the
+  three that the flush edited it asks by the flush's record instead of
+  diffing, the same questions without reading a namespace node (#43,
+  D15); `UpdateWorkingSetFlushed` and `CommitWorkingSetFlushed` do the
+  same for an update (its working and staged namespaces) and a commit of
+  what is staged (against the head), and diff whatever a record does not
+  cover: a namespace it did not make, or one flushed from elsewhere;
   `Merge` diffs the working namespace against the result;
   `ResolveConflict` asks for its path. Reads stay per branch: a host holding
   the chunk store can read what it can open, so a per-path read rule belongs
@@ -692,6 +878,22 @@ writer either swaps against a manifest that carries the record or loses to
 it and reads it next; the existence check covers deletions older than a
 record lasts, and an ordinary publish, whose uploads are fresh, checks
 nothing.
+
+**The journal** (#34). Journaled commits are reachable state that no
+manifest names yet, and GC reads no journal: a live journal writer is a
+writer like any other, its unpublished commits within the grace window
+because the journal publishes within its interval, and checked at each
+commit and at the replay like any writer's (the counted chunks, above). A
+journal a writer left when it stopped is replayed by GC's own open (a
+packstore opened without the journal replays what it finds) before GC
+reads the manifest and marks, so GC never marks from a root that does not
+reach what journaled commits counted on. `TestGCSafetyPropertyWithTheJournal`
+runs the GC property with the writer committing through the journal,
+killed with commits journaled and reopened, with and without two
+collections a grace window apart in between; without that replay the
+reopened writer's own replay finds a counted chunk expired. v0.2.0's GC
+does not replay: do not run it on a repository whose journal holds
+commits.
 
 **A lost session.** Either way, what the store told its callers was stored
 is partly gone, and it cannot know which roots in flight reach it: a chunk

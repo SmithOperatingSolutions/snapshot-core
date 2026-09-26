@@ -23,7 +23,7 @@ var (
 	fast = seal.Argon2Params{Time: 2, Memory: 19 * 1024, Threads: 1}
 )
 
-var domains = []seal.Domain{seal.Chunk, seal.PackIndex, seal.Index, seal.Refs, seal.Config}
+var domains = []seal.Domain{seal.Chunk, seal.PackIndex, seal.Index, seal.Refs, seal.Config, seal.Journal}
 
 func mustKeyring(t *testing.T) *seal.Keyring {
 	t.Helper()
@@ -55,7 +55,7 @@ func mustKey(t *testing.T, kr *seal.Keyring, d seal.Domain, repo seal.RepoID, sa
 func TestDomainTagsAreTheDocumentedOnes(t *testing.T) {
 	want := map[seal.Domain]string{
 		seal.Chunk: "vdb/chunk/v1", seal.PackIndex: "vdb/pack-index/v1", seal.Index: "vdb/index/v1",
-		seal.Refs: "vdb/refs/v1", seal.Config: "vdb/config/v1",
+		seal.Refs: "vdb/refs/v1", seal.Config: "vdb/config/v1", seal.Journal: "vdb/journal/v1",
 	}
 	for d, tag := range want {
 		if d.Tag() != tag {
@@ -173,7 +173,7 @@ func TestMasterKeyIsNeverTheAEADKey(t *testing.T) {
 
 func TestInvalidDomainsAreRefused(t *testing.T) {
 	kr := mustKeyring(t)
-	for _, d := range []seal.Domain{0, 6, 200} {
+	for _, d := range []seal.Domain{0, seal.Journal + 1, 200} {
 		if _, err := kr.Key(d, repoA, seal.Salt{}); !errors.Is(err, seal.ErrDomain) {
 			t.Errorf("Key(domain %d) = %v, want ErrDomain: a value sealed in no context can be replayed into any", d, err)
 		}
