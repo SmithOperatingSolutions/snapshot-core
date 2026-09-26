@@ -6165,3 +6165,10 @@ find: \tif !info.Mode().IsRegular() {
 replace: \tif false {
 pkg: ./core/blob/local
 run: ^TestAJournalThatIsNotARegularFileIsRefused$
+
+id: repo-chunks-forwards-put-raw
+file: core/repo/repo.go
+find: \treturn w.s.PutRaw(ctx, data)
+replace: \treturn w.s.Put(ctx, data)
+pkg: ./core/repo
+run: ^TestRegression_SC45_ChunksForwardsPutRaw$
