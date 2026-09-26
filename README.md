@@ -11,7 +11,7 @@ consumers build on its frozen data-model port.
 C0 to C4, are done: backends and encrypted packs, content-defined chunking and
 prolly trees, commits and merges over typed objects, and garbage collection.
 Every checklist item and the test that proves it: [`docs/PROGRESS.md`](docs/PROGRESS.md).
-The current release is `v0.3.0` ([Versioning and stability](#versioning-and-stability)).
+The current release is `v0.3.1` ([Versioning and stability](#versioning-and-stability)).
 Remaining work is tracked in the [issues](https://github.com/SmithOperatingSolutions/snapshot-core/issues).
 
 ## Using it
@@ -168,6 +168,12 @@ deliberately, in its own pull request.
 - `tools/ci`'s fuzz step runs half the cores' workers, at most four, each
   under `GOMEMLIMIT`: `-fuzzparallel`/`FUZZPARALLEL` and
   `-fuzzmemlimit`/`FUZZMEMLIMIT` (#22).
+
+**v0.3.1.** A fix: `repo.Chunks()` is also a `chunk.RawWriter`, so a
+host's tree nodes take the raw path the core's own trees got in v0.3.0
+(#45); before, every node a host's model stored went through the zstd
+encoder. The chunk port's doc now says a wrapper must forward every
+optional interface.
 
 **v0.3.0.** What changes for a host or a model (a minor version: a new
 on-disk structure, the commit journal; no existing format changes):

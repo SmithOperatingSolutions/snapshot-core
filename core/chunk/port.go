@@ -5,6 +5,13 @@
 // chunk/memstore (tests) and chunk/packstore (packs on any BlobStore). Every
 // implementation must pass chunk/contract.
 //
+// Beside the port, optional interfaces a store may offer (Preparer,
+// Flusher, RawWriter): callers find them by type assertion, so a wrapper
+// around a store that does not forward them silently takes the slow path
+// for everything behind it (#45). A wrapper that narrows a store must
+// implement every optional interface the store does, and a new optional
+// interface is added to every wrapper the core ships (repo.Chunks()).
+//
 // Port version 1.
 package chunk
 
