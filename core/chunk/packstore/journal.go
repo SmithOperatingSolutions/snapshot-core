@@ -293,15 +293,28 @@ func (s *Store) replay(ctx context.Context, j blob.Journal) error {
 	if err != nil {
 		return err
 	}
+	if len(recs) == 0 { // a first record cut short
+		return j.Reset(ctx)
+	}
+	// The replay starts at the first record built on the backend's root:
+	// the records before it were published (a segment published and not
+	// dropped before a crash). Starting at any record built on it ends at
+	// the same last root.
+	from := -1
+	for k, r := range recs {
+		if r.expected == root {
+			from = k
+			break
+		}
+	}
 	switch {
-	case len(recs) == 0: // a first record cut short
+	case from < 0 && root == recs[len(recs)-1].next: // published, and not emptied before a crash
 		return j.Reset(ctx)
-	case root == recs[len(recs)-1].next: // published, and not emptied before a crash
-		return j.Reset(ctx)
-	case root != recs[0].expected:
-		return fmt.Errorf("%w: the backend's root %s is neither the one the journal builds on (%s) nor its last (%s)",
+	case from < 0:
+		return fmt.Errorf("%w: the backend's root %s is neither one the journal builds on (%s first) nor its last (%s)",
 			ErrJournalConflict, root.Short(), recs[0].expected.Short(), recs[len(recs)-1].next.Short())
 	}
+	recs = recs[from:]
 	for _, r := range recs {
 		keys, err := pack.DeriveKeys(s.o.Keys, s.o.Repo, r.salt)
 		if err != nil {
@@ -382,12 +395,16 @@ func (s *Store) journalCommit(ctx context.Context, expected, next hash.Hash) (fu
 		}
 	}
 	s.mu.Lock()
-	m, first, n, cur, base := s.man, s.ver == blob.NoVersion, s.jrecords, s.man.root, s.jbase
-	if n > 0 {
+	m, first, live, cur, base := s.man, s.ver == blob.NoVersion, !s.jroot.IsZero(), s.man.root, s.jbase
+	if live {
 		cur = s.jroot
 	}
+	// While a background publish is in flight the backend's root is the
+	// one the journal builds on until its swap lands, the one it publishes
+	// after.
+	beside := s.publishing && m.root == s.pubRoot
 	s.mu.Unlock()
-	if n > 0 && m.root != base {
+	if live && m.root != base && !beside {
 		return nil, s.journalFailed(fmt.Errorf("%w: the backend's root is %s, the journal builds on %s", ErrJournalConflict, m.root.Short(), base.Short()))
 	}
 	if cur != expected {
@@ -410,12 +427,26 @@ func (s *Store) journalCommit(ctx context.Context, expected, next hash.Hash) (fu
 		return nil, err
 	}
 	// A pack that went to the backend since the last publish holds chunks
-	// no record carries, and only an index object can name it: publish.
-	must := len(s.session) > 0 || len(s.unuploaded) > 0 || len(s.sessionIdx) > 0 ||
-		len(s.finishing) > 0 || len(s.inflight) > 0 || len(s.jcounted) > maxCounted
+	// no record carries, and only an index object can name it: publish. A
+	// background publish's own pack and index objects are its business.
+	must := len(s.session) > 0 || len(s.unuploaded) > 0 || (len(s.sessionIdx) > 0 && !s.publishing) ||
+		s.running > 0 || len(s.jcounted) > maxCounted
 	w, mark := s.pending, 0
-	rec := jrecord{expected: expected, next: next, gcGen: s.sessGen}
+	var recs []jrecord
 	if !must {
+		// The pending pack a commit wrote into may have been taken by a
+		// background publish since: its frames after the mark go in a
+		// record of their own, sealed for that pack, at the same root.
+		if s.jpending != nil && s.jpending != w {
+			if old := s.jpending.FramesSince(s.jmark); len(old) > 0 {
+				r := jrecord{expected: expected, next: expected, gcGen: s.sessGen, salt: s.jpending.Salt()}
+				for _, f := range old {
+					r.frames = append(r.frames, jframe{h: f.Hash, raw: f.RawLen, codec: f.Codec, sealed: f.Sealed})
+				}
+				recs = append(recs, r)
+			}
+		}
+		rec := jrecord{expected: expected, next: next, gcGen: s.sessGen}
 		rec.counted = append([]hash.Hash(nil), s.jcounted...)
 		if w != nil {
 			from := 0
@@ -427,11 +458,23 @@ func (s *Store) journalCommit(ctx context.Context, expected, next hash.Hash) (fu
 			}
 			rec.salt, mark = w.Salt(), w.Count()
 		}
+		recs = append(recs, rec)
 	}
 	s.mu.Unlock()
 	if !must {
-		b, err := rec.seal(s.o.Keys, s.o.Repo)
-		if err == nil && s.jbytes+len(b) <= maxJournal {
+		var b []byte
+		var err error
+		for i := range recs {
+			var sealed []byte
+			if sealed, err = recs[i].seal(s.o.Keys, s.o.Repo); err != nil {
+				break
+			}
+			b = append(b, sealed...)
+		}
+		s.mu.Lock()
+		fits := s.jbytes+len(b) <= maxJournal
+		s.mu.Unlock()
+		if err == nil && fits {
 			if err := s.journal.Write(ctx, b); err != nil {
 				return nil, s.journalFailed(fmt.Errorf("packstore: writing to the journal (open the repository again to replay what it holds): %w", err))
 			}
@@ -440,16 +483,16 @@ func (s *Store) journalCommit(ctx context.Context, expected, next hash.Hash) (fu
 			ticket := s.jwritten
 			s.jsm.Unlock()
 			s.mu.Lock()
-			s.jcounted = s.jcounted[len(rec.counted):]
+			s.jcounted = s.jcounted[len(recs[len(recs)-1].counted):]
 			s.jpending, s.jmark = w, mark
-			if s.jrecords == 0 {
-				s.jbase = m.root
+			if s.jroot.IsZero() { // nothing unpublished: this commit starts the journal over the root it replaced
+				s.jbase = expected
 				select {
 				case s.jkick <- struct{}{}:
 				default:
 				}
 			}
-			s.jrecords++
+			s.jrecords += len(recs)
 			s.jbytes += len(b)
 			s.jroot = next
 			s.mu.Unlock()
@@ -466,14 +509,16 @@ func (s *Store) journalCommit(ctx context.Context, expected, next hash.Hash) (fu
 // started over: a root that moved since is ErrJournalConflict. Callers
 // hold commitMu.
 func (s *Store) publishJournal(ctx context.Context, next hash.Hash) error {
+	s.pubMu.Lock() // a background publish in flight lands first
+	defer s.pubMu.Unlock()
 	s.mu.Lock()
-	n, bytes, expected := s.jrecords, s.jbytes, s.man.root
-	if n > 0 {
+	live, bytes, expected := !s.jroot.IsZero(), s.jbytes, s.man.root
+	if live {
 		expected = s.jbase
 	}
 	s.mu.Unlock()
 	err := s.publish(ctx, expected, next)
-	if errors.Is(err, chunk.ErrRootConflict) && n > 0 {
+	if errors.Is(err, chunk.ErrRootConflict) && live {
 		return s.journalFailed(fmt.Errorf("%w: publishing it", ErrJournalConflict))
 	}
 	if err != nil {
@@ -574,19 +619,65 @@ func (s *Store) publisher() {
 // retry is retried an interval later; one it cannot is the store's.
 func (s *Store) publishNow(ctx context.Context) error {
 	s.commitMu.Lock()
-	defer s.commitMu.Unlock()
 	s.mu.Lock()
-	n, jerr, root, open := s.jrecords, s.jerr, s.jroot, s.journal != nil && !s.closed
+	jerr, root, base, open := s.jerr, s.jroot, s.jbase, s.journal != nil && !s.closed
 	s.mu.Unlock()
-	if jerr != nil {
+	if jerr != nil || !open || root.IsZero() {
+		s.commitMu.Unlock()
 		return jerr
 	}
-	if !open || n == 0 {
+	// Rotate under the commit lock: the commits up to root are in the
+	// segments before the new one, durable (Rotate syncs), and every
+	// commit after goes into the new segment while this publish runs.
+	s.pubMu.Lock()
+	defer s.pubMu.Unlock()
+	s.mu.Lock()
+	records, bytes := s.jrecords, s.jbytes
+	counted := make(map[hash.Hash]bool, len(s.deduped))
+	for h := range s.deduped {
+		counted[h] = true
+	}
+	j := s.journal
+	s.mu.Unlock()
+	if err := j.Rotate(ctx); err != nil {
+		s.commitMu.Unlock()
+		s.commitMu.Lock()
+		defer s.commitMu.Unlock()
+		return s.journalFailed(fmt.Errorf("packstore: rotating the journal (open the repository again to replay what it holds): %w", err))
+	}
+	s.jsm.Lock()
+	s.jsynced = s.jwritten
+	s.jcond.Broadcast()
+	s.jsm.Unlock()
+	s.mu.Lock()
+	s.publishing, s.pubRoot = true, root
+	s.mu.Unlock()
+	s.commitMu.Unlock()
+
+	err := s.publishCounted(ctx, base, root, counted)
+	s.mu.Lock()
+	s.publishing = false
+	if err == nil {
+		s.jrecords -= records
+		s.jbytes -= bytes
+		if s.jrecords == 0 && s.jroot == root {
+			s.jroot, s.jbase = hash.Hash{}, hash.Hash{}
+		} else {
+			s.jbase = root
+		}
+	}
+	s.mu.Unlock()
+	if err == nil {
+		if derr := j.Drop(ctx); derr != nil {
+			return s.journalFailed(fmt.Errorf("packstore: the journal was published and its segments could not be dropped (open the repository again): %w", derr))
+		}
 		return nil
 	}
-	err := s.publishJournal(ctx, root)
+	if errors.Is(err, chunk.ErrRootConflict) {
+		return s.journalFailed(fmt.Errorf("%w: publishing it", ErrJournalConflict))
+	}
 	s.mu.Lock()
-	retry := err != nil && s.jerr == nil && s.lost == nil
+	retry := s.jerr == nil && s.lost == nil
 	s.mu.Unlock()
 	if retry {
 		select {
@@ -613,14 +704,14 @@ func (s *Store) closeJournal(publish bool) error {
 	defer s.commitMu.Unlock()
 	var err error
 	s.mu.Lock()
-	n, root, jerr := s.jrecords, s.jroot, s.jerr
+	root, jerr := s.jroot, s.jerr
 	s.mu.Unlock()
-	if publish && n > 0 && jerr == nil {
+	if publish && !root.IsZero() && jerr == nil {
 		err = s.publishJournal(context.Background(), root)
 	}
 	s.mu.Lock()
 	s.journal = nil
-	s.jrecords = 0
+	s.jrecords, s.jroot = 0, hash.Hash{}
 	s.mu.Unlock()
 	return errors.Join(err, j.Close())
 }

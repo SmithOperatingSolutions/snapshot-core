@@ -354,6 +354,13 @@ type failingReset struct {
 	armed *bool
 }
 
+func (f failingReset) Drop(ctx context.Context) error {
+	if *f.armed {
+		return errors.New("disk gone")
+	}
+	return f.Journal.Drop(ctx)
+}
+
 func (f failingReset) Reset(ctx context.Context) error {
 	if *f.armed {
 		return errors.New("disk gone")

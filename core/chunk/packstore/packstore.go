@@ -169,6 +169,13 @@ type Store struct {
 	jsynced  uint64
 	jsyncing bool  // a sync is in flight
 	jsyncErr error // a sync failed: nothing written since is known durable
+
+	// Segment rotation (#34): a background publish rotates the journal
+	// under commitMu, then publishes under pubMu alone, while commits go
+	// on into the new segment. publishing and pubRoot are under mu.
+	pubMu      sync.Mutex
+	publishing bool
+	pubRoot    hash.Hash
 }
 
 // maxInFlight bounds the packs finishing or uploading at once (#10): a
@@ -1047,7 +1054,7 @@ func (s *Store) Root(ctx context.Context) (hash.Hash, error) {
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if s.jrecords > 0 {
+	if !s.jroot.IsZero() {
 		return s.jroot, nil
 	}
 	return s.man.root, nil
@@ -1123,11 +1130,18 @@ func (s *Store) compareAndSetRoot(ctx context.Context, expected, next hash.Hash)
 // objects that list it, and swaps the manifest to name next, if the root
 // is still expected. Callers hold commitMu.
 func (s *Store) publish(ctx context.Context, expected, next hash.Hash) error {
+	return s.publishCounted(ctx, expected, next, nil)
+}
+
+// publishCounted is publish. On success it forgets the chunks puts counted
+// on: all of them, or with counted only those (a background publish, while
+// commits beside it count on more for the journal's next segment).
+func (s *Store) publishCounted(ctx context.Context, expected, next hash.Hash, counted map[hash.Hash]bool) error {
 	for attempt := 0; ; attempt++ {
 		if err := s.carryForward(ctx); err != nil {
 			return err
 		}
-		err := s.publishOnce(ctx, expected, next)
+		err := s.publishOnce(ctx, expected, next, counted)
 		if !errors.Is(err, errCarry) || attempt == MaxSwapAttempts-1 {
 			return err
 		}
@@ -1135,7 +1149,7 @@ func (s *Store) publish(ctx context.Context, expected, next hash.Hash) error {
 }
 
 // publishOnce is publish, once the counted chunks are carried forward.
-func (s *Store) publishOnce(ctx context.Context, expected, next hash.Hash) error {
+func (s *Store) publishOnce(ctx context.Context, expected, next hash.Hash, counted map[hash.Hash]bool) error {
 	// Every finisher has landed its pack or left it to retry here, and a
 	// put that filled the pending pack after the wait (another goroutine's)
 	// is waited for too: that pack may hold chunks next reaches.
@@ -1248,8 +1262,17 @@ func (s *Store) publishOnce(ctx context.Context, expected, next hash.Hash) error
 			}
 			s.sessionIdx = s.sessionIdx[len(pending):]
 			s.forgetReplacedLocked()
-			s.deduped, s.sessGen = map[hash.Hash]bool{}, upd.gcGen
-			s.jcounted = nil
+			if counted == nil {
+				s.deduped, s.sessGen = map[hash.Hash]bool{}, upd.gcGen
+				s.jcounted = nil
+			} else {
+				for h := range counted {
+					delete(s.deduped, h)
+				}
+				if len(s.deduped) == 0 {
+					s.sessGen = upd.gcGen
+				}
+			}
 			s.mu.Unlock()
 			return nil
 		}
