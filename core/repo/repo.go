@@ -383,20 +383,24 @@ func (r *Repo) Close() error { return r.chunks.Close() }
 // next changes a ref (a commit, a working-set update, a branch); a
 // repository closed before then drops it.
 //
-// It is also a chunk.Preparer and a chunk.Flusher (#40), the write path
-// the version graph's own store has: stream.Write (and so model/blob's
-// Write) finds them by type assertion and hashes and compresses a long
-// stream on every core, and flushes when the stream ends; a host that
-// stores chunks itself asserts them the same way.
+// It is also every optional interface the store has beside the port, and
+// must stay so (#45): a chunk.Preparer and a chunk.Flusher (#40), the
+// write path the version graph's own store has, which stream.Write (and
+// so model/blob's Write) finds by type assertion to hash and compress a
+// long stream on every core and flush when the stream ends; and a
+// chunk.RawWriter (D17), through which a host's prolly maps store their
+// nodes without the zstd encoder. A host that stores chunks itself asserts
+// them the same way, and a host's own wrapper must forward them too.
 func (r *Repo) Chunks() chunk.ReadWriter { return readWriter{r.chunks} }
 
-// readWriter narrows a chunk store to reading, writing, preparing and
-// flushing: every method but the root's.
+// readWriter narrows a chunk store to reading, writing, preparing,
+// flushing and raw writes: every method but the root's.
 type readWriter struct{ s *packstore.Store }
 
 var (
-	_ chunk.Preparer = readWriter{}
-	_ chunk.Flusher  = readWriter{}
+	_ chunk.Preparer  = readWriter{}
+	_ chunk.Flusher   = readWriter{}
+	_ chunk.RawWriter = readWriter{}
 )
 
 func (w readWriter) Get(ctx context.Context, h hash.Hash) ([]byte, error) { return w.s.Get(ctx, h) }
@@ -411,6 +415,9 @@ func (w readWriter) PutPrepared(ctx context.Context, p chunk.Prepared) (hash.Has
 	return w.s.PutPrepared(ctx, p)
 }
 func (w readWriter) Flush(ctx context.Context) error { return w.s.Flush(ctx) }
+func (w readWriter) PutRaw(ctx context.Context, data []byte) (hash.Hash, error) {
+	return w.s.PutRaw(ctx, data)
+}
 
 // Prolly is the map geometry objects are written with.
 func (g Geometry) Prolly() prolly.Config {
