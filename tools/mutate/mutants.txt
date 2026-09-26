@@ -6102,3 +6102,31 @@ find: if derr := j.Drop(ctx); derr != nil {
 replace: if derr := error(nil); derr != nil {
 pkg: ./core/chunk/packstore
 run: ^TestAReplayReadsEverySegment$
+
+id: local-journal-segment-names-canonical
+file: core/blob/local/local.go
+find: if err != nil || n == 0 || strconv.FormatUint(n, 10) != rest {
+replace: if err != nil {
+pkg: ./core/blob/local
+run: ^TestOnlyCanonicalNamesAreJournalSegments$
+
+id: local-journal-read-refuses-an-unreadable-segment
+file: core/blob/local/local.go
+find: \t\tb, err := os.ReadFile(j.s.segmentPath(seg))\n\t\tif err != nil {\n\t\t\treturn nil, err
+replace: \t\tb, err := os.ReadFile(j.s.segmentPath(seg))\n\t\tif err != nil {\n\t\t\tcontinue
+pkg: ./core/blob/local
+run: ^TestAJournalTheFilesystemRefusesSaysSo$
+
+id: local-journal-drop-reports-a-failed-remove
+file: core/blob/local/local.go
+find: if err := os.Remove(j.s.segmentPath(seg)); err != nil && !errors.Is(err, fs.ErrNotExist) {
+replace: if err := os.Remove(j.s.segmentPath(seg)); err != nil && false {
+pkg: ./core/blob/local
+run: ^TestAJournalTheFilesystemRefusesSaysSo$
+
+id: local-journal-rotate-refuses-when-closed
+file: core/blob/local/local.go
+find: \tif j.closed.Load() {\n\t\treturn blob.ErrJournalClosed\n\t}\n\tj.mu.Lock()\n\tdefer j.mu.Unlock()\n\tif err := j.cur.Sync(); err != nil {
+replace: \tif false {\n\t\treturn blob.ErrJournalClosed\n\t}\n\tj.mu.Lock()\n\tdefer j.mu.Unlock()\n\tif err := j.cur.Sync(); err != nil {
+pkg: ./core/blob/local
+run: ^TestJournalContract$

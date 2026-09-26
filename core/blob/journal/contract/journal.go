@@ -230,6 +230,12 @@ func journalClosed(t *testing.T, newStore Factory) {
 	if _, err := j.Read(ctx, 10); !errors.Is(err, blob.ErrJournalClosed) {
 		t.Fatalf("Read after Close = %v, want ErrJournalClosed", err)
 	}
+	if err := j.Rotate(ctx); !errors.Is(err, blob.ErrJournalClosed) {
+		t.Fatalf("Rotate after Close = %v, want ErrJournalClosed", err)
+	}
+	if err := j.Drop(ctx); !errors.Is(err, blob.ErrJournalClosed) {
+		t.Fatalf("Drop after Close = %v, want ErrJournalClosed", err)
+	}
 }
 
 func journalNotAnObject(t *testing.T, newStore Factory) {
