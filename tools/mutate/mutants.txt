@@ -796,6 +796,20 @@ replace: z := c.enc.EncodeAll(data, scratch[:0])\n\tif len(z) < len(data)+1<<20 
 pkg: ./core/pack
 run: ^TestCompressesOnlyWhenItHelps$
 
+id: pack-tiny-chunks-stored-raw
+file: core/pack/pack.go
+find: if len(data) < RawBelow {
+replace: if len(data) < 0 {
+pkg: ./core/pack
+run: ^TestAChunkUnderTheRawCutoffIsStoredRaw$
+
+id: pack-raw-cutoff-is-strict
+file: core/pack/pack.go
+find: if len(data) < RawBelow {
+replace: if len(data) <= RawBelow {
+pkg: ./core/pack
+run: ^TestAChunkUnderTheRawCutoffIsStoredRaw$
+
 id: pack-bytes-must-hash-to-name
 file: core/pack/pack.go
 find: if Name(b) != name {
